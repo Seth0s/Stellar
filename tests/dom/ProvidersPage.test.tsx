@@ -37,7 +37,19 @@ const CLINE_APP: ProvidersPageRow = {
   skipped: false,
 };
 
-const CLINE_FILE: ProvidersPageRow = { ...CLINE_APP, label: "Cline do usuário", source: "file" };
+/**
+ * Uma CÓPIA INTEIRA da declaração do cline em `providers.json` — o caso "sua por
+ * inteiro (sem correção do app)". `source` continua "app": a ORIGEM de uma linha
+ * é a LISTA que declara o id (index.ts:4320-4324), e "cline" é declarado pelo
+ * app — o que o usuário fez foi escrever POR CIMA (`appOverride`). Um fixture com
+ * `source: "file"` E id de app descreveria um estado que a projeção real nunca
+ * produz.
+ */
+const CLINE_WHOLE_OVERRIDE: ProvidersPageRow = {
+  ...CLINE_APP,
+  label: "Cline do usuário",
+  appOverride: "whole",
+};
 
 const MYCLI_FILE: ProvidersPageRow = {
   id: "mycli",
@@ -257,7 +269,7 @@ describe("ProvidersPage", () => {
   });
 
   it("reset tira a entrada do usuário e o padrão declarado volta a valer", async () => {
-    readProvidersConfig.mockImplementation(async () => view([CLINE_FILE]));
+    readProvidersConfig.mockImplementation(async () => view([CLINE_WHOLE_OVERRIDE]));
     removeProvider.mockResolvedValue({ ok: true, view: view([CLINE_APP]) });
 
     render(<ProvidersPage />);
@@ -347,6 +359,62 @@ describe("ProvidersPage", () => {
         )?.textContent,
       ).toBe("do app"),
     );
+  });
+
+  /**
+   * O RÓTULO É O SIGNIFICADO (task 4c41368f, itens 3 e 5). A MESMA ação — tirar
+   * a entrada do usuário de `providers` — diz coisas diferentes nas duas linhas.
+   * Numa SOBRESCRITA o padrão do app VOLTA ("Voltar ao padrão do app"): a língua
+   * do badge da edf3b047 ("sem correção do app" volta a receber correção). Numa
+   * linha SÓ DO USUÁRIO não há padrão por trás, então a ação REMOVE ("Remover
+   * provider") — reusar o texto de reset prometeria um default que não existe.
+   * Quem decide é `appOverride`, o MESMO campo que decide o badge e a dica.
+   */
+  it("o rótulo da ação diz o significado de cada linha: volta ao padrão vs remover", async () => {
+    const appOverridden: ProvidersPageRow = {
+      ...CLINE_APP,
+      id: "commandcode",
+      label: "Command Code",
+      appOverride: "partial",
+    };
+    const userOnly: ProvidersPageRow = { ...MYCLI_FILE };
+    readProvidersConfig.mockImplementation(async () =>
+      view([{ ...CLINE_APP }, appOverridden, userOnly]),
+    );
+
+    render(<ProvidersPage />);
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-role="providers-row"]').length).toBe(3),
+    );
+
+    const resetOf = (id: string) =>
+      document.querySelector(`[data-provider-id="${id}"] [data-role="providers-reset"]`) as
+        | HTMLButtonElement
+        | null;
+
+    // SOBRESCRITA: o app volta — vocabulário de "padrão do app".
+    expect(resetOf("commandcode")?.textContent).toBe("Voltar ao padrão do app");
+    expect(resetOf("commandcode")?.getAttribute("title")).toBe("Voltar ao padrão do app");
+
+    // SÓ DO USUÁRIO: não há padrão do app — a ação é REMOVER.
+    expect(resetOf("mycli")?.textContent).toBe("Remover provider");
+    expect(resetOf("mycli")?.getAttribute("title")).toBe("Remover provider");
+
+    // O CONFIRM fala a língua do caso aberto, e as DICAS seguem as de sempre.
+    fireEvent.click(resetOf("commandcode")!);
+    expect(screen.getByRole("button", { name: "Voltar ao padrão" })).toBeTruthy();
+    expect(
+      document.querySelector('[data-provider-id="commandcode"] .providers-reset-hint')?.textContent,
+    ).toContain("correção do app de novo");
+
+    // Troca a linha aberta: o botão da outra linha segue na tela, e o confirm
+    // da sobrescrita sai junto — nunca dois abertos.
+    fireEvent.click(resetOf("mycli")!);
+    expect(screen.getByRole("button", { name: "Remover" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Voltar ao padrão" })).toBeNull();
+    expect(
+      document.querySelector('[data-provider-id="mycli"] .providers-reset-hint')?.textContent,
+    ).toContain("deixa de existir");
   });
 
   it("id que colide com um nativo não é editável — a declaração é inerte", async () => {

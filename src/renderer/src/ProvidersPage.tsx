@@ -422,8 +422,17 @@ export function ProvidersPage() {
                           { id: row.id },
                         )}
                       </span>
+                      {/* O CONFIRM fala a língua do caso DESTA linha (task
+                          4c41368f, itens 3 e 5): numa sobrescrita o padrão do
+                          app VOLTA ("Voltar ao padrão"); numa linha só do
+                          usuário a ação REMOVE a entrada dele — não há padrão
+                          do app para voltar. */}
                       <button type="button" className="danger" onClick={() => void reset(row)} disabled={busy}>
-                        {t("settings.providers.resetConfirm")}
+                        {t(
+                          row.appOverride !== "none"
+                            ? "settings.providers.resetConfirm"
+                            : "settings.providers.removeConfirm",
+                        )}
                       </button>
                       <button type="button" className="ghost" onClick={() => setConfirmReset(null)}>
                         {t("common.cancel")}
@@ -456,16 +465,32 @@ export function ProvidersPage() {
                           linhas do app que o usuário NÃO tocou — e aí o botão
                           continua ausente, porque não há entrada para remover
                           (o handler responderia "no entry for provider"). */}
+                      {/* O RÓTULO diz o SIGNIFICADO de cada linha (task
+                          4c41368f, itens 3 e 5). Numa SOBRESCRITA o padrão do
+                          app VOLTA — o MESMO vocabulário do badge da edf3b047
+                          ("sem correção do app" volta a receber correção). Numa
+                          linha SÓ DO USUÁRIO não há padrão por trás: a ação
+                          REMOVE a entrada dele, e chamar isso de "voltar ao
+                          padrão do app" seria falso. Quem decide é `appOverride`,
+                          o mesmo campo que decide o badge. */}
                       {(row.source === "file" || row.appOverride !== "none") && (
                         <button
                           type="button"
                           className="ghost"
                           data-role="providers-reset"
-                          title={t("settings.providers.reset")}
+                          title={t(
+                            row.appOverride !== "none"
+                              ? "settings.providers.reset"
+                              : "settings.providers.remove",
+                          )}
                           onClick={() => setConfirmReset(row.id)}
                           disabled={busy}
                         >
-                          {t("settings.providers.reset")}
+                          {t(
+                            row.appOverride !== "none"
+                              ? "settings.providers.reset"
+                              : "settings.providers.remove",
+                          )}
                         </button>
                       )}
                     </>
