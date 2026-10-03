@@ -226,6 +226,13 @@ export type GateRunEvidence = {
    * digitou. Ausente em linha antiga — e isso é normal.
    */
   diff?: DiffCaptureEvidence;
+  /**
+   * O RÓTULO DA JANELA no nível do RUN (task c73fcd79): diz que este snapshot
+   * foi capturado na ÁRVORE COMPARTILHADA e — quando há mudança fora do
+   * território declarado — que o resultado PODE ser de outro card. Mesmo dado
+   * do `diff`, no lugar onde a conclusão é tirada. Ausente em linha antiga.
+   */
+  window?: GateRunWindowLabel;
 };
 
 /** Spawn SEM shell no host: o comando de um gate só vira argv de
@@ -504,6 +511,9 @@ export type DiffCaptureEvidence = {
   filesTruncated: boolean;
   total: number;
   outsideTerritory: number;
+  /** `true` quando a task DECLAROU território. Sem ele não há rótulo
+   * dentro/fora a dar — e o nível do RUN precisa do mesmo dado (c73fcd79). */
+  territoryDeclared: boolean;
   /**
    * O QUE O APP NÃO SABE, dentro do dado e não em nota de rodapé. A árvore é
    * COMPARTILHADA (cinco cards escrevem no mesmo checkout): o app observa
@@ -565,6 +575,79 @@ export function describeDiffAuthorship(total: number, outside: number, territory
 }
 
 /**
+ * O RÓTULO DA JANELA, no NÍVEL DO RUN (task c73fcd79).
+ *
+ * O diff já era rotulado (7096e8af), mas o rótulo morava DENTRO de `diff`.
+ * Quem lê `ok:false` / `tsc exit 2` lê o VEREDITO, não a lista de arquivos — e
+ * foi assim que dois reviewers de hoje leram o vermelho do vizinho como se
+ * fosse da entrega (o erro era de um `message-bus.ts` de outro card, editado em
+ * voo na MESMA árvore). O dado não mudou: o MESMO `inTerritory`/`outside`
+ * capturado subiu para o nível em que a conclusão é tirada, e diz o que a
+ * leitura sozinha não diz — a janela é COMPARTILHADA, e o vermelho PODE não ser
+ * desta task.
+ *
+ * O que isto NÃO é (e é o que `task-contract-decision.ts` proíbe): não é
+ * autoria (o app observa MUDANÇA, nunca diz quem tocou); não julga a saída do
+ * gate (o veredito continua sendo o exit code — nenhum parse); não olha o FS
+ * de novo nem intercepta índice. É observação PÓS-HOC do dado JÁ capturado,
+ * com o rótulo no lugar onde a conclusão se forma.
+ */
+export type GateRunWindowLabel = {
+  /** `true` quando a task declarou território — sem isso não há dentro/fora. */
+  territoryDeclared: boolean;
+  total: number;
+  outsideTerritory: number;
+  /** `true` quando a janela traz mudança que a task NÃO declarou: o snapshot
+   * não pode ser lido como "só o meu trabalho estava aqui". */
+  mayIncludeOtherTasksWork: boolean;
+  note: string;
+};
+
+/** A frase do run. NUNCA afirma autoria; no caso LIMPO não liga alarme (um
+ * rótulo que grita sempre vira ruído e ninguém lê). */
+export function describeWindowProvenance(input: {
+  ok: boolean;
+  total: number;
+  outsideTerritory: number;
+  territoryDeclared: boolean;
+  gitRoot: string | null;
+}): string {
+  if (!input.gitRoot) return "o cwd desta task não é um repositório git — não há janela a rotular.";
+  const onde = input.territoryDeclared
+    ? `${input.outsideTerritory} de ${input.total} mudança(s) FORA do território declarado desta task`
+    : "a task não declarou território, então não há como dizer quais destas mudanças são dela";
+  const base =
+    `Snapshot da ÁRVORE COMPARTILHADA: ${input.total} arquivo(s) mudaram nesta janela, ${onde}. ` +
+    `O app observa MUDANÇA, nunca AUTORIA.`;
+  // Caso LIMPO: nada a acrescentar — e o silêncio aqui é deliberado.
+  if (input.ok || input.outsideTerritory === 0) return base;
+  return (
+    `${base} O gate saiu VERMELHO e havia mudança FORA do território declarado desta task: ` +
+    `o vermelho PODE vir de outro card, que escreve no MESMO checkout — o app não pode dizer QUEM o ` +
+    `causou. Não leia este snapshot como "o erro é desta entrega" sem reconferir a árvore.`
+  );
+}
+
+/** Deriva o rótulo do run a partir do diff JÁ capturado (nenhuma observação
+ * nova). `mayIncludeOtherTasksWork` olha a janela, não o veredito: um snapshot
+ * com trabalho alheio é misto mesmo quando passa. */
+export function labelGateWindow(diff: DiffCaptureEvidence, ok: boolean): GateRunWindowLabel {
+  return {
+    territoryDeclared: diff.territoryDeclared,
+    total: diff.total,
+    outsideTerritory: diff.outsideTerritory,
+    mayIncludeOtherTasksWork: diff.total > 0 && (!diff.territoryDeclared || diff.outsideTerritory > 0),
+    note: describeWindowProvenance({
+      ok,
+      total: diff.total,
+      outsideTerritory: diff.outsideTerritory,
+      territoryDeclared: diff.territoryDeclared,
+      gitRoot: diff.gitRoot,
+    }),
+  };
+}
+
+/**
  * Extrai `gateRun.diff` de um `result_json` de task (task 7096e8af) — o seam
  * ON-DEMAND que faltava entre a captura (que já está no HEAD) e a Fila.
  *
@@ -610,6 +693,7 @@ export async function captureDiff(opts: {
       filesTruncated: false,
       total: 0,
       outsideTerritory: 0,
+      territoryDeclared: false,
       note: "o cwd desta task não é um repositório git — não há diff a observar.",
     };
   }
@@ -643,6 +727,7 @@ export async function captureDiff(opts: {
     filesTruncated: status.truncated,
     total: files.length,
     outsideTerritory: outside,
+    territoryDeclared,
     note: describeDiffAuthorship(files.length, outside, territoryDeclared),
   };
 }
@@ -706,15 +791,18 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     // observação do app sobre o que mudou nesta janela, ao lado do contrato
     // declarado (ver `DiffCaptureEvidence` para o que isto não é).
     const diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
+    const ok = commands.length > 0 && commands.every((c) => c.exitCode === 0);
     return {
       taskId: input.taskId,
       requestedCwd,
       gitRoot,
       startedAt,
       finishedAt: Date.now(),
-      ok: commands.length > 0 && commands.every((c) => c.exitCode === 0),
+      ok,
       commands,
       diff,
+      // O rótulo do veredito, ao lado do veredito (c73fcd79).
+      window: labelGateWindow(diff, ok),
     };
   });
 }
