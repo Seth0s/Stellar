@@ -20,8 +20,14 @@ describe("message-bus: entrega programática FIFO por card", () => {
     const writes: string[] = [];
     const readySince = Date.now() - 1_000;
     let lastActivity = readySince;
+    let reads = 0;
     const callbacks = {
-      listCards: () => [{ id: "target", kind: "terminal", provider: "codex", cwd: "", label: null, displayName: "Codex" }],
+      // `claude` de propósito: o codex não declara `submitStartedPattern`, então
+      // não HÁ evidência positiva de turno para ele — e desde e256d946 `sent`
+      // exige essa evidência. O sujeito deste teste é a ORDEM da FIFO, não o
+      // provider; usar um provider com vocabulário mantém o teste fiel sem
+      // depender do fallback fraco que era o defeito.
+      listCards: () => [{ id: "target", kind: "terminal", provider: "claude", cwd: "", label: null, displayName: "Claude" }],
       writeToCard: () => undefined,
       writeToCardWithOrigin: (_id: string, text: string) => {
         writes.push(text);
@@ -38,7 +44,8 @@ describe("message-bus: entrega programática FIFO por card", () => {
         hasPendingHumanInput: false,
         inputLineLastAtMs: null,
       }),
-      onReadCardRequest: (requestId: string) => bus?.resolveReadCard(requestId, { ok: true, text: "" }),
+      onReadCardRequest: (requestId: string) =>
+        bus?.resolveReadCard(requestId, { ok: true, text: "Working ".repeat(++reads) }),
       nextReportSeqSeed: () => 0,
     } as unknown as Parameters<typeof createMessageBus>[1];
 

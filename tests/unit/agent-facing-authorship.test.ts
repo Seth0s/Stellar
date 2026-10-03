@@ -101,6 +101,7 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
   function makeDeliveryBus(overrides: Record<string, (...args: never[]) => unknown> = {}) {
     dir = mkdtempSync(join(tmpdir(), "stellar-authorship-"));
     const written: Array<[string, string]> = [];
+    let reads = 0;
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
       callbacksWithOverrides({
@@ -118,8 +119,13 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
         writeToCard: (...args: unknown[]) => written.push(args as [string, string]),
         isCardAlive: () => true,
         getCardWriteReadiness: () => null,
-        onReadCardRequest: ((requestId: string) =>
-          bus?.resolveReadCard(requestId, { ok: true, text: "" })) as never,
+        // Cada leitura acrescenta um "Working": a confirmação vê a contagem
+        // SUBIR vs o baseline — evidência POSITIVA de turno, que `sent` exige
+        // desde e256d946. Com a tela vazia constante, a entrega agora dá
+        // `unknown` e o laço LIMPA o composer, e essa limpeza (`\u0015\u0015`)
+        // entrava em `bodies` no lugar do segundo corpo.
+        onReadCardRequest: (requestId: string) =>
+          bus?.resolveReadCard(requestId, { ok: true, text: "Working ".repeat(++reads) }),
         describeCardLabel: ((id: string) =>
           id === "child-1" ? "aviso-de-report" : id === "spawner-1" ? "MASTER" : id) as never,
         listAllConnectors: (() => [

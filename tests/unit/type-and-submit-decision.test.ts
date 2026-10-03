@@ -273,7 +273,10 @@ describe("decideSubmitCheck", () => {
     ).toBe("unsent");
   });
 
-  it("aviso curto sumiu do tail + atividade => sent", () => {
+  it("aviso curto sumiu do tail SEM evidência positiva => unknown (era `sent`, o falso positivo e256d946)", () => {
+    // Mesma classe do defeito nomeado: "agulha ausente + atividade" NÃO é
+    // evidência de submit — também é o estado de um Enter engolido com o
+    // composer limpo por repintura. Sem `submitStartedPattern`, `unknown`.
     expect(
       decideSubmitCheck({
         screenText: "banner\n> ",
@@ -281,7 +284,7 @@ describe("decideSubmitCheck", () => {
         sentNeedle: "ok",
         hasNewActivitySinceWrite: true,
       }),
-    ).toBe("sent");
+    ).toBe("unknown");
   });
 });
 
@@ -567,10 +570,12 @@ describe("shouldPressEnterOnAttempt", () => {
       hasNewActivitySinceWrite: true,
       submitStartedPattern: CURSOR_PATTERN,
     });
-    // Como o chip está fora do tail, ele não dispara o fallback de "unsent".
-    // E como o needle sumiu da tela e há nova atividade, ele passa a devolver "sent" (ou unknown se falso).
-    // Neste caso, como a atividade é true e needleVisible é false, devolve "sent".
-    expect(decision).toBe("sent");
+    // Como o chip está fora do tail, ele não dispara o fallback de "unsent" —
+    // o ponto da investigação continua: o laço NÃO retenta Enter.
+    // O que mudou (e256d946): sem evidência POSITIVA de submit — não há spinner
+    // novo do Cursor nesta tela — o veredito é `unknown`, não `sent`. Os dois
+    // fatos fracos (needle ausente + atividade) são SUSPEITA, não conclusão.
+    expect(decision).toBe("unknown");
   });
 
   it("investigação caso Cursor real: histórico tem chip e Cursor está rodando tool (agora Running faz parte do vocabulário) => sent", () => {

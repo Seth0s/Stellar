@@ -25,6 +25,7 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
     const writes: string[] = [];
     const readySince = Date.now() - 1_000;
     let lastActivity = readySince;
+    let reads = 0;
     const callbacks = {
       listCards: () => [{ id: "target", kind: "terminal", provider: "claude", cwd: "", label: null, displayName: "Claude" }],
       writeToCard: () => undefined,
@@ -44,12 +45,13 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
         inputLineLastAtMs: null,
         bracketedPasteMode,
       }),
-      onReadCardRequest: (requestId: string) =>
-        bus?.resolveReadCard(requestId, {
-          ok: true,
-          // Needle gone + activity → "sent" on first confirm (no Extra Enter).
-          text: "Working",
-        }),
+      onReadCardRequest: (requestId: string) => {
+        // Cada leitura acrescenta um "Working": a confirmação vê a contagem
+        // SUBIR vs o baseline pré-escrita — a evidência POSITIVA de que o turno
+        // começou, que `sent` exige desde e256d946. (A tela constante de antes
+        // só "confirmava" pelo fallback fraco, que era o defeito.)
+        bus?.resolveReadCard(requestId, { ok: true, text: "Working ".repeat(++reads) });
+      },
       nextReportSeqSeed: () => 0,
     } as unknown as Parameters<typeof createMessageBus>[1];
 

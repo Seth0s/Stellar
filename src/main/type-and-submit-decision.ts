@@ -324,8 +324,11 @@ export interface SubmitCheckInput {
    */
   sentNeedle: string;
   /** Has the card emitted any NEW pty output since BEFORE we wrote the
-   * text? Boot-silence signal only — NOT used to distinguish echo from
-   * a real response (see module doc). */
+   * text? Used by the SHELL rule (`decideShellSubmitCheck`) as the "the
+   * command ran" tiebreaker. The TUI rule stopped reading it in task
+   * e256d946: an agent submit needs POSITIVE evidence (a `submitStarted`
+   * match or a park), and "there was activity" is NOT evidence — it is also
+   * true when Enter was swallowed and a repaint redrew the composer. */
   hasNewActivitySinceWrite: boolean;
   /**
    * Padrão de vocabulário específico do provider que indica o início de um turno.
@@ -709,8 +712,26 @@ export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
     return "unsent";
   }
 
-  if (!input.hasNewActivitySinceWrite) return "unknown";
-  return "sent";
+  // POLARIDADE (task e256d946) — `sent` EXIGE evidência POSITIVA de submit.
+  //
+  // Quando o `submitStartedPattern` acima não disparou (provider GENÉRICO não
+  // declara um hoje) e não houve park, sobram dois fatos: a agulha saiu da tela
+  // e "houve atividade". Os DOIS também são verdadeiros quando o Enter foi
+  // ENGOLIDO e uma REPINTURA limpou o composer — então são SUSPEITA, não
+  // conclusão. Afirmar `sent` a partir deles é o falso positivo que o dono
+  // relatou ("já estamos na última build e ainda não foi resolvido"): um
+  // "enviado" falso é PIOR que um "não sei", porque o dono AGE em cima do falso
+  // (reenvia e duplica, ou confia e não reenvia). Esta linha era `return "sent"`.
+  //
+  // `unknown` NÃO duplica entrega: `shouldPressEnterOnAttempt` só preme Enter na
+  // tentativa 0 ou depois de `"unsent"` — em `"unknown"` o laço apenas RELÊ,
+  // esperando a evidência positiva aparecer (o TUI pinta o começo de turno
+  // alguns ms depois; um provider que declara `submitStartedPattern` resolve
+  // para `sent` numa releitura seguinte). `decideDeliveryOutcome("unknown")` é
+  // `"unconfirmed"`, NUNCA `"failed"`: a UI oferece o reenvio como ESCOLHA, e
+  // `confirm.enters` fica em 1 — o número que as investigações de duplicata
+  // pediam e não tinham.
+  return "unknown";
 }
 
 /** Whether this confirm-loop iteration should press Enter. First attempt
