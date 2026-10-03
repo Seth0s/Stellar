@@ -449,6 +449,97 @@ function refusal(field: string, accepted: string, got: unknown): string {
 const RECEIVED_NOTHING = Symbol("nothing");
 
 // ---------------------------------------------------------------------------
+// A VERSÃO DO FORMATO DO ARQUIVO (task 88a3d004) — a decisão que faltava.
+//
+// O BURACO MEDIDO: `schemaVersion` existia e era comparado com `!== 1` em dois
+// lugares (o loader e a casca de boot), então MENOR e MAIOR caíam na MESMA
+// recusa genérica — sem direção e sem instrução para quem edita o arquivo à
+// mão (que é o fluxo suportado). Um arquivo de formato desconhecido ficava em
+// LIMBO: não migrado, não nomeado, e o humano sem saber o que fazer.
+//
+// POR QUE NÃO HÁ MIGRAÇÃO HOJE (a decisão, e é de produto tanto quanto de
+// código): só a versão 1 já existiu neste projeto. Não há formato antigo em
+// disco em lugar nenhum, então uma tabela de transformações versão-a-versão
+// nasceria VAZIA — e inventar degraus para um formato que nunca existiu é o
+// valor inventado que este repo proíbe. A opção "aceitar em silêncio" também
+// está fora: interpretar um formato desconhecido "no melhor esforço" é como
+// config de usuário quebra sem avisar, que é justamente o que a recusa de
+// versão sempre existiu para impedir.
+//
+// O QUE ACONTECE EM CADA CASO (recusar nomeando a versão, nos DOIS sentidos):
+//
+//   - MENOR que a atual: o arquivo é de um formato mais ANTIGO que este build.
+//     Não há transform; nada é aplicado e o arquivo fica INTOCADO. A instrução
+//     é apagar o arquivo para o app recriá-lo no formato atual — com a
+//     CONSEQUÊNCIA dita: as entradas de `providers` se perdem.
+//   - MAIOR que a atual: caso DISTINTO, e merece resposta diferente — o arquivo
+//     foi escrito por um Stellar mais NOVO que este app (o app foi rebaixado).
+//     Nada é aplicado, arquivo intocado, e o caminho é ATUALIZAR O APP.
+//   - INVÁLIDO (ausente, não-inteiro, `null`): a frase-base da fábrica única
+//     (`refusal`), que é a que o anti-drift de `providers-dynamic-json-contract`
+//     trava (`must be the number 1`).
+//
+// O SEAM DA MIGRAÇÃO FUTURA é `classifyProvidersSchemaVersion`: quando o
+// formato mudar DE VERDADE, a tabela de transformações (DADO, versão→transform,
+// testável isoladamente, no idioma dos módulos de decisão pura deste repo)
+// pendura AQUI — e um arquivo `older` deixa de ser recusado para ser migrado.
+// Hoje a tabela não existe porque não há o que transformar; o que existe é o
+// ponto de decisão nomeado, para a próxima pessoa não redescobrir o problema.
+//
+// E o invariante que NÃO muda: a recusa continua `specs: []` + um
+// `rejected[{index: -1}]`, então `loadDynamicProviders` segue NÃO podando —
+// um formato que este build não entende nunca apaga providers do usuário
+// (`providers-dynamic-prune.test.ts`).
+// ---------------------------------------------------------------------------
+
+export type ProvidersSchemaVersionClass = "current" | "older" | "newer" | "invalid";
+
+/**
+ * Pura, sem I/O. `found` é o valor CRU de `schemaVersion` no arquivo (pode ser
+ * qualquer coisa — o JSON não garante tipo). `older`/`newer` só existem para
+ * um inteiro; qualquer outra forma é `invalid` (e cai na frase-base da recusa,
+ * não numa suposição de direção).
+ */
+export function classifyProvidersSchemaVersion(
+  found: unknown,
+  current: number = PROVIDERS_CONFIG_SCHEMA_VERSION,
+): ProvidersSchemaVersionClass {
+  if (typeof found !== "number" || !Number.isInteger(found)) return "invalid";
+  if (found === current) return "current";
+  return found < current ? "older" : "newer";
+}
+
+/**
+ * A recusa de `schemaVersion` — pela fábrica ÚNICA deste validador (`refusal`),
+ * com a DIREÇÃO apendada. A frase-base (`must be the number 1 …`) não muda:
+ * o anti-drift a trava, e o que esta função acrescenta é a CONSEQUÊNCIA e o
+ * caminho, que é o que transforma "rejeitado" em "rejeitado, e é isto que você
+ * faz agora".
+ */
+export function providersSchemaVersionRefusal(found: unknown): string {
+  const base = refusal(
+    "schemaVersion",
+    `the number ${PROVIDERS_CONFIG_SCHEMA_VERSION} (the only version this build understands)`,
+    found,
+  );
+  switch (classifyProvidersSchemaVersion(found)) {
+    case "older":
+      return (
+        `${base} — this file is from an OLDER format (${String(found)}); this build has no transform for it, ` +
+        "so nothing is applied and the file is left untouched. Delete it to let the app recreate it at the current " +
+        "format (your `providers` entries would be lost)."
+      );
+    case "newer":
+      return (
+        `${base} — this file was written by a NEWER Stellar (format ${String(found)}); update the app. ` +
+        "Nothing is applied and the file is left untouched."
+      );
+    default:
+      return base;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Os valores aceitos, em UMA fonte. Cada lista é usada pelo VALIDADOR (que
 // recusa o resto) e pelo JSON SCHEMA publicado (`providersConfigSchema`), de
 // forma que "o que o schema deixa autocompletar" e "o que o loader aceita"
@@ -1671,8 +1762,12 @@ export function providersConfigSchema(): Record<string, unknown> {
       schemaVersion: {
         const: PROVIDERS_CONFIG_SCHEMA_VERSION,
         description:
-          `Versão do FORMATO do arquivo (não do app). Hoje só ${PROVIDERS_CONFIG_SCHEMA_VERSION} é entendida — ` +
-          "uma versão desconhecida faz o arquivo inteiro ser recusado, em vez de interpretado por sorte.",
+          `Versão do FORMATO do arquivo (não do app). Hoje só ${PROVIDERS_CONFIG_SCHEMA_VERSION} é entendida — versão ` +
+          "MENOR (formato mais ANTIGO que este build) ou MAIOR (escrito por um Stellar mais NOVO, ou seja, o app foi " +
+          "rebaixado) é RECUSADA inteira, nunca migrada e nunca interpretada por sorte: nada é aplicado e o arquivo " +
+          "fica intocado. Versão MENOR: apague o arquivo para o app recriá-lo no formato atual (as suas entradas de " +
+          "`providers` se perdem). Versão MAIOR: atualize o app. Este schema é reescrito a cada boot e sempre descreve " +
+          "a versão que ESTE build aceita, então o editor marca a divergência sozinho.",
       },
       providers: {
         type: "array",
@@ -2182,10 +2277,17 @@ export function ensureProvidersConfigFile(
   // reinterpretar um formato por sorte — a mesma postura do loader, que recusa
   // o arquivo inteiro nesse caso.
   if (raw.schemaVersion !== undefined && raw.schemaVersion !== PROVIDERS_CONFIG_SCHEMA_VERSION) {
+    const cls = classifyProvidersSchemaVersion(raw.schemaVersion);
+    const direction =
+      cls === "older"
+        ? "written by an OLDER Stellar than this build, and there is no transform for it"
+        : cls === "newer"
+          ? "written by a NEWER Stellar than this app — update the app"
+          : "an unrecognized value";
     return emptyResult(
       path,
       "unsupported",
-      `${path} declares schemaVersion ${JSON.stringify(raw.schemaVersion)}; this build understands only ${PROVIDERS_CONFIG_SCHEMA_VERSION} — file left untouched`,
+      `${path} declares schemaVersion ${JSON.stringify(raw.schemaVersion)} (${direction}); this build understands only ${PROVIDERS_CONFIG_SCHEMA_VERSION} — file left untouched`,
     );
   }
 
@@ -2289,20 +2391,10 @@ export function parseProviderSpecs(
       ],
     };
   }
-  if (raw.schemaVersion !== PROVIDERS_CONFIG_SCHEMA_VERSION) {
+  if (classifyProvidersSchemaVersion(raw.schemaVersion) !== "current") {
     return {
       specs: [],
-      rejected: [
-        {
-          index: -1,
-          id: null,
-          reason: refusal(
-            "schemaVersion",
-            `the number ${PROVIDERS_CONFIG_SCHEMA_VERSION} (the only version this build understands)`,
-            raw.schemaVersion,
-          ),
-        },
-      ],
+      rejected: [{ index: -1, id: null, reason: providersSchemaVersionRefusal(raw.schemaVersion) }],
     };
   }
   if (!Array.isArray(raw.providers)) {
