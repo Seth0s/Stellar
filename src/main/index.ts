@@ -118,7 +118,14 @@ import {
   type BrowserKeyEvent,
   type BrowserContextMenuParams,
 } from "./browser-registry";
-import { createMessageBus, type BusRequest, type BusResponse, type StickyResult } from "./message-bus";
+import {
+  createMessageBus,
+  blockedQuestionFromResultJson,
+  type BlockedQuestion,
+  type BusRequest,
+  type BusResponse,
+  type StickyResult,
+} from "./message-bus";
 import { createPrototypeServer } from "./prototype-server";
 import { parseManifest, presetUrl, type PrototypePresetInfo } from "./prototype-presets";
 import { ensureMcpRegistered } from "./mcp-registration";
@@ -1593,6 +1600,10 @@ function createWindow() {
     requestedReason: string | null;
     requestedBy: string | null;
     requestedAt: number | null;
+    /** Task 22f0a649 — a pergunta estruturada de uma task `blocked`, lida do
+     * `result_json`. `null` = não há pergunta (nenhuma coluna nova). A Fila a
+     * renderiza para o humano responder direto. */
+    blockedQuestion: BlockedQuestion | null;
     /** RODADA 4 — histórico de participação (`task_verdicts`), com provider do
      * card pra gráfico 1 / pílulas, e LIDO pela regra da task 156e6d08:
      * `verdict` = o que se pode atribuir a esta task, `storedVerdict` = o que a
@@ -1778,6 +1789,9 @@ function createWindow() {
         requestedReason: t.requested_reason ?? null,
         requestedBy: t.requested_by ?? null,
         requestedAt: t.requested_at ?? null,
+        // Task 22f0a649 — a pergunta de `blocked` chega à Fila pelo push, com o
+        // MESMO parse do MCP (`blockedQuestionFromResultJson`).
+        blockedQuestion: blockedQuestionFromResultJson(t.result_json),
         verdicts: verdictsByTask.get(t.id) ?? [],
         firstActor: firstActorByTask.get(t.id) ?? null,
         interruptionReason: interruptionReasonFromResultJson(t.result_json),
@@ -2896,6 +2910,24 @@ function createWindow() {
     }
     return { ok: true };
   });
+  // Task 22f0a649 — o humano responde a pergunta de `blocked` DIRETO na Fila,
+  // sem o orquestrador no meio. É o MESMO corpo que o MCP usa
+  // (`answerBlockedTask`), com `actor:"human"`: limpa a pergunta, devolve o
+  // status a `pending` e ENTREGA a resposta ao card pelo caminho do send.
+  ipcMain.handle(
+    "store:tasks:answer-blocked",
+    (_e, taskId: string, optionId: string | null, note: string | null) => {
+      const res = messageBus?.answerBlockedTask(
+        taskId,
+        { optionId: optionId ?? undefined, note: note ?? undefined },
+        "human",
+      );
+      if (!res) return { ok: false, error: "message bus unavailable" };
+      const boardId = store.getTask(taskId)?.board_id;
+      if (res.ok && boardId) notifyTaskChanged(boardId);
+      return res;
+    },
+  );
   // RODADA 4 — criar task pela UI do quadro (coluna "a fazer"). NÃO passa
   // por message-bus/`create_task` de propósito: aquele caminho força
   // `actor: "agent"`. Aqui `actor: "human"` é deliberado — decisão 8 faz

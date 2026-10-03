@@ -449,6 +449,75 @@
   margin-right: 4px;
 }
 
+/* Task 22f0a649 — `blocked` com pergunta estruturada: o humano responde AQUI.
+   --warn (não o --foam do status-ask) porque não é um pedido de status, é um
+   pedido de DECISÃO do dono. O bloco é clicável: `data-no-drag` no JSX. */
+.blockedQuestion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-3);
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  font-size: var(--text-3);
+  line-height: 1.4;
+}
+
+.blockedQuestionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.blockedChip {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--text-4);
+  font-weight: 700;
+  color: var(--warn);
+}
+
+.blockedAge {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-4);
+}
+
+.blockedText {
+  color: var(--text);
+}
+
+.blockedOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.blockedOptions button {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-3);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  background: color-mix(in srgb, var(--warn) 22%, var(--panel));
+  color: var(--text);
+  font-size: var(--text-3);
+  cursor: pointer;
+}
+
+.blockedOptions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 34%, var(--panel));
+}
+
+.blockedOptions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.blockedHint {
+  color: var(--muted);
+  font-size: var(--text-4);
+}
+
 /* DESIGN-BACKLOG.md "Falha TIPADA" — motivo de interrupção na coluna a fazer. */
 .interruptNotice {
   padding: 5px 7px;

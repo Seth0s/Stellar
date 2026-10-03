@@ -51,6 +51,10 @@ const STATUS_TO_COLUMN: Record<string, TaskColumn> = {
   running: "doing",
   done: "done",
   failed: "failed",
+  // Task 22f0a649 — `blocked` é uma task ATIVA esperando uma decisão do dono,
+  // não uma task que não começou: fica em "em andamento" com chip e bloco de
+  // pergunta próprios (um status que cai em "a fazer" pareceria não-iniciada).
+  blocked: "doing",
 };
 
 /** `update_task`'s own MCP schema (`mcp-server.ts`) takes `status` as a
@@ -945,6 +949,58 @@ export function describeStatusAskNotice(requestedStatus: string | null | undefin
   return t("task.statusAsk.notice", { label });
 }
 
+/** Task 22f0a649 — o status que carrega uma pergunta estruturada. */
+export const BLOCKED_TASK_STATUS = "blocked";
+
+/** Shape da pergunta que a Fila renderiza. Local (sem import do preload) para
+ * este módulo seguir testável com literais — mesma regra de `SprintView`. */
+export type BlockedQuestionView = {
+  text: string;
+  options: { id: string; label: string; description?: string }[];
+  askedAt: number;
+  by: string | null;
+};
+
+/** Parse DEFENSIVO da pergunta: `null` = não há pergunta (linha antiga, campo
+ * ausente, shape podre). NUNCA inventa uma pergunta que o agente não fez — a
+ * ausência é dado, e um `blocked` sem pergunta é recusado na escrita. */
+export function blockedQuestionOf(item: { blockedQuestion?: unknown } | null | undefined): BlockedQuestionView | null {
+  const raw = item?.blockedQuestion;
+  if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const q = raw as Record<string, unknown>;
+  const text = typeof q.text === "string" ? q.text.trim() : "";
+  const options: BlockedQuestionView["options"] = [];
+  for (const entry of Array.isArray(q.options) ? q.options : []) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === "string" ? e.id.trim() : "";
+    const label = typeof e.label === "string" ? e.label.trim() : "";
+    if (!id || !label) continue;
+    const description = typeof e.description === "string" && e.description.trim().length > 0 ? e.description.trim() : undefined;
+    options.push(description ? { id, label, description } : { id, label });
+  }
+  if (text.length === 0 || options.length < 2) return null;
+  return {
+    text,
+    options,
+    askedAt: typeof q.askedAt === "number" && Number.isFinite(q.askedAt) ? q.askedAt : 0,
+    by: typeof q.by === "string" && q.by.trim().length > 0 ? q.by.trim() : null,
+  };
+}
+
+/** Há quanto tempo a pergunta espera — o lado VISÍVEL da decisão (c): um
+ * `blocked` que ninguém responde mostra a idade na Fila. Duração, não texto de
+ * UI: não passa pelo catálogo. */
+export function describeBlockedAge(askedAt: number, nowMs: number): string | null {
+  if (!askedAt || nowMs < askedAt) return null;
+  const mins = Math.floor((nowMs - askedAt) / 60_000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — shape the Fila card
  * needs to render one sprint row (active or closed). Kept local so this
  * module stays free of Electron/preload imports. */
@@ -1046,6 +1102,9 @@ export function snapshotTaskToBoardItem(
   requestedReason: null;
   requestedBy: null;
   requestedAt: null;
+  /** O snapshot de sprint não carrega a pergunta (não é o push vivo) — `null`
+   * é a ausência honesta, nunca uma pergunta inventada. */
+  blockedQuestion: null;
   verdicts: [];
   firstActor: null;
   interruptionReason: null;
@@ -1079,6 +1138,7 @@ export function snapshotTaskToBoardItem(
     requestedReason: null,
     requestedBy: null,
     requestedAt: null,
+    blockedQuestion: null,
     verdicts: [],
     firstActor: null,
     interruptionReason: null,

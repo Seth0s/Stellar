@@ -34,6 +34,9 @@ import {
   describeStatusDivergence,
   describeStatusAskNotice,
   describeReviewWantedNotice,
+  blockedQuestionOf,
+  describeBlockedAge,
+  BLOCKED_TASK_STATUS,
   msToHours,
   cycleAxisMarks,
   computeVerdictsByProvider,
@@ -288,6 +291,17 @@ function TaskItem({
   const statusAskNotice = describeStatusAskNotice(task.requestedStatus);
   const interruptNotice = task.interruptionReason;
   const parsedPrompt = parseTaskPrompt(task.prompt);
+  // Task 22f0a649 — a pergunta estruturada de `blocked`, respondida AQUI pelo
+  // humano. `blockedQuestionOf` devolve null para shape podre/ausente: um
+  // `blocked` sem pergunta não renderiza bloco nenhum (e é recusado na escrita).
+  const blockedQuestion = task.status === BLOCKED_TASK_STATUS ? blockedQuestionOf(task) : null;
+  const blockedAge = blockedQuestion ? describeBlockedAge(blockedQuestion.askedAt, Date.now()) : null;
+  const [answering, setAnswering] = useState(false);
+  const answerBlocked = (optionId: string) => {
+    if (answering) return;
+    setAnswering(true);
+    void window.tasks.answerBlocked(task.id, optionId, null).finally(() => setAnswering(false));
+  };
   return (
     <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
       <div className={styles.itemTop}>
@@ -383,6 +397,36 @@ function TaskItem({
       {reviewWantedNotice && (
         <div className={styles.statusAskNotice} data-part="review-wanted-notice">
           {reviewWantedNotice}
+        </div>
+      )}
+      {blockedQuestion && (
+        <div className={styles.blockedQuestion} data-part="blocked-question" data-no-drag>
+          <div className={styles.blockedQuestionHead}>
+            <span className={styles.blockedChip}>{t("task.blocked.chip")}</span>
+            {blockedAge && (
+              <span className={styles.blockedAge} data-part="blocked-age">
+                {blockedAge}
+              </span>
+            )}
+          </div>
+          <div className={styles.blockedText} data-part="blocked-text">
+            {blockedQuestion.text}
+          </div>
+          <div className={styles.blockedOptions}>
+            {blockedQuestion.options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                data-no-drag
+                title={option.description}
+                disabled={answering}
+                onClick={() => answerBlocked(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.blockedHint}>{t("task.blocked.hint")}</div>
         </div>
       )}
       {interruptNotice && (
