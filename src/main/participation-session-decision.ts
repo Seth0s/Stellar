@@ -11,12 +11,29 @@
  * Resume target prefers the discovered id; falls back to the request
  * only when discovery never happened (nullable — never invent).
  *
- * Only providers in `canImposeSessionId` (claude/cursor today) get a
- * `session_id` stamp meant for `spawn_agent({ resumeId })`. Others keep
- * honest null even if a conversation id exists somewhere else.
+ * WHO GETS A `session_id` (task 11914cc7 — corrigido): antes o carimbo exigia
+ * `canImposeSessionId` (só claude/cursor aceitam um id ESCOLHIDO no spawn), e
+ * por isso commandcode/antigravity/opencode/cline/codex ficavam `null` MESMO
+ * tendo o id em disco — medido ao vivo: um card `commandcode` morreu no meio de
+ * uma task e não deu para retomar. A pergunta certa é DUAS: a CLI ESCREVE um
+ * id observável (`providerExposesSession` → tem `store`) E sabe RETOMAR por ele
+ * (`providerResumesById` → alguma flag + o `resumeById` do codex). O id é
+ * OBSERVADO pelo sistema (`onSessionFound`), nunca declarado pelo agente.
+ *
+ * `sessionResumeOutlook` fecha o terceiro caso: CLI que expõe sessão mas NÃO
+ * retoma por ela — aí `sessionId` fica `null` COM MOTIVO, para virar aviso, e
+ * nunca o silêncio de antes. Ausência de store continua sendo dado: um provider
+ * sem canal de descoberta não é observável e não há o que inventar.
  */
 
-import { canImposeSessionId } from "./providers";
+import { providerExposesSession, providerResumesById } from "./providers";
+
+/** A CLI expõe um id de sessão observável E sabe retomar por ele? É o par que
+ * autoriza carimbar `session_id` e oferecê-lo como `spawn_agent({ resumeId })`.
+ * Um só dos dois não basta: observável-mas-não-retomável não é retomável. */
+export function canResumeObservedSession(providerId: string | null | undefined): boolean {
+  return providerExposesSession(providerId) && providerResumesById(providerId);
+}
 
 export type ParticipationSession = {
   requestedResumeId: string | null;
@@ -46,17 +63,49 @@ export function sessionFromCardRow(card: {
 } | null | undefined): ParticipationSession {
   if (!card) return { requestedResumeId: null, sessionId: null };
   const id = normalizeSessionId(card.resume_id);
-  const resumable = !!card.provider && canImposeSessionId(card.provider);
   return {
     requestedResumeId: null,
-    sessionId: resumable ? id : null,
+    sessionId: canResumeObservedSession(card.provider) ? id : null,
   };
 }
 
-/** Should `onSessionFound` write `task_cards.session_id`? */
+/** Should `onSessionFound` write `task_cards.session_id`? Todo provider cujo id
+ * é OBSERVÁVEL e RETOMÁVEL — não só quem impõe o id no spawn. */
 export function shouldStampParticipationSession(provider: string | null | undefined): boolean {
-  if (!provider) return false;
-  return canImposeSessionId(provider);
+  return canResumeObservedSession(provider);
+}
+
+/**
+ * Por que (não) dá para retomar um card deste provider — o NÃO-SILÊNCIO que a
+ * task 11914cc7 pede. `resumable`: id observável e `resumeId` honrado.
+ * `unobservable`: a CLI não declara store (nada a observar; ausência é dado).
+ * `observed-not-resumable`: há id em disco mas a CLI não sabe retomar por ele —
+ * `sessionId` fica null COM esta razão, pronta para virar aviso visível, em vez
+ * do `null` mudo de antes.
+ */
+export type SessionResumeOutlook =
+  | { kind: "resumable" }
+  | { kind: "unobservable" }
+  | { kind: "observed-not-resumable"; warning: string };
+
+/** Núcleo PURO (sem `providerById`): as três respostas a partir dos dois
+ * booleanos já derivados. Existe separado para que o ramo do AVISO — que
+ * NENHUM provider medido atinge hoje — seja testável sem inventar um
+ * provider no registro. */
+export function decideSessionResumeOutlook(label: string, exposes: boolean, resumes: boolean): SessionResumeOutlook {
+  if (!exposes) return { kind: "unobservable" };
+  if (resumes) return { kind: "resumable" };
+  return {
+    kind: "observed-not-resumable",
+    warning:
+      `${label} writes a session id we can observe on disk, but its CLI declares no way to resume by it` +
+      " — the id is recorded as absent-for-resume on purpose, not silently dropped",
+  };
+}
+
+export function sessionResumeOutlook(provider: string | null | undefined): SessionResumeOutlook {
+  const label = typeof provider === "string" && provider.trim().length > 0 ? provider : "this provider";
+  return decideSessionResumeOutlook(label, providerExposesSession(provider), providerResumesById(provider));
 }
 
 /**

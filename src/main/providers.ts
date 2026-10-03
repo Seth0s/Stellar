@@ -253,6 +253,14 @@ export type SessionCapability = {
   /** Flag booleana "continue a sessão mais recente". Ausente = o provider
    * não tem uma (ou não foi medida) e `continueLast` não vira argv. */
   continueFlag?: string;
+  /** A CLI retoma uma sessão por um id OBSERVADO sem que ele caiba numa
+   * flag — o `codex` usa o SUBCOMANDO `resume <id>` (ver o provider), que
+   * uma declaração flag-shaped não expressa e cujo `buildArgs` à mão é a
+   * implementação. `true` só onde foi medido. Ausente = a resposta sai só
+   * das flags (`resumeFlag`/`imposeFlag`/`continueFlag`). É isto que faz
+   * `providerResumesById` responder a pergunta "dá para retomar esta CLI?"
+   * sem uma segunda lista. */
+  resumeById?: boolean;
   /** ONDE ESTA CLI GUARDA SESSÃO (task 2ea0269f) — a declaração que dá ao
    * rodapé do card de onde vir. A LINGUAGEM é `SessionStore`
    * (`session-store-spec.ts`) e o único leitor é `session-watch.ts`; aqui é
@@ -920,6 +928,12 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // a implementação.
       session: {
         canImposeSessionId: false,
+        // O `resume` do codex é SUBCOMANDO (`resume <id>` / `resume --last`),
+        // e o buildArgs à mão abaixo o emite — então esta CLI RETOMA por um id
+        // observado. Declarado aqui porque nenhuma flag o expressa (medido
+        // 2026-10-03, task 11914cc7: sem isto o codex seria lido como NÃO
+        // retomável e o id observado ficaria `null` em silêncio).
+        resumeById: true,
         // Medido 2026-09-13 (task c1064d95): `session_index.jsonl` está
         // INCOMPLETO nesta máquina (4 linhas para dezenas de rollouts) — a
         // descoberta lê o próprio rollout, nunca o índice.
@@ -1443,6 +1457,39 @@ export function imposeSessionIdProviders(): ProviderId[] {
 
 export function canImposeSessionId(providerId: string): boolean {
   return providerById(providerId)?.capacity.session.canImposeSessionId ?? false;
+}
+
+/**
+ * A CLI ESCREVE um id de sessão em disco que dá para OBSERVAR de fora?
+ * (`store` declarado — ver `session-store-spec.ts`.) É a pergunta que decide
+ * se a participação pode receber um `session_id`.
+ *
+ * NÃO confundir com `canImposeSessionId`: aquela pergunta é "aceita um id
+ * escolhido pelo Stellar num spawn novo?" (só claude/cursor); esta é "dá para
+ * LER o id que a CLI cunhou?" — e é a segunda que responde ao dono (o card
+ * commandcode/agy morria e a sessão se perdia). */
+export function providerExposesSession(providerId: string | null | undefined): boolean {
+  if (!providerId) return false;
+  return providerCapacity(providerId)?.session.store !== undefined;
+}
+
+/**
+ * A CLI RETOMA uma sessão a partir de um id OBSERVADO (não imposto)? Lida da
+ * própria declaração `capacity.session` — nunca de uma segunda lista `if
+ * (provider === …)`. Verdadeiro quando há QUALQUER mecanismo de retomada:
+ * `resumeFlag` (claude/cursor/antigravity/opencode/cline/commandcode), uma
+ * flag que cria-ou-retoma (`imposeFlag`), a flag de continuar, ou o
+ * `resumeById` que cobre o subcomando do codex. */
+export function providerResumesById(providerId: string | null | undefined): boolean {
+  if (!providerId) return false;
+  const session = providerCapacity(providerId)?.session;
+  if (!session) return false;
+  return (
+    session.resumeFlag !== undefined ||
+    session.imposeFlag !== undefined ||
+    session.continueFlag !== undefined ||
+    session.resumeById === true
+  );
 }
 
 /**

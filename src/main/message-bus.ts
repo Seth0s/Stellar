@@ -112,6 +112,7 @@ import {
 import { isSandboxAvailable } from "./sandbox";
 import { decideTerritoryConflict, type ActiveTaskTerritory } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
+import { sessionResumeOutlook } from "./participation-session-decision";
 import {
   carryGateEvidence,
   describeNoDeclaredRoot,
@@ -2061,21 +2062,30 @@ export function createMessageBus(
         cardId: t.card_id,
         at: t.at,
       })),
-      cards: row.cards?.map((c) => ({
-        cardId: c.card_id,
-        role: c.role,
-        // Participation profile — fact recorded at spawn/link.
-        provider: c.provider ?? null,
-        model: c.model ?? null,
-        effort: c.effort ?? null,
-        // Session identity — same Camada 2 fact; survives card close.
-        // Prefer sessionId for spawn_agent({ resumeId }); fall back to
-        // requestedResumeId when discovery never fired (see
-        // resumeTargetFromParticipation). list_tasks deliberately omits
-        // cards[] entirely — do not add these there (payload size).
-        requestedResumeId: c.requested_resume_id ?? null,
-        sessionId: c.session_id ?? null,
-      })),
+      cards: row.cards?.map((c) => {
+        const sessionResume = sessionResumeOutlook(c.provider ?? null);
+        return {
+          cardId: c.card_id,
+          role: c.role,
+          // Participation profile — fact recorded at spawn/link.
+          provider: c.provider ?? null,
+          model: c.model ?? null,
+          effort: c.effort ?? null,
+          // Session identity — same Camada 2 fact; survives card close.
+          // Prefer sessionId for spawn_agent({ resumeId }); fall back to
+          // requestedResumeId when discovery never fired (see
+          // resumeTargetFromParticipation). list_tasks deliberately omits
+          // cards[] entirely — do not add these there (payload size).
+          requestedResumeId: c.requested_resume_id ?? null,
+          sessionId: c.session_id ?? null,
+          // Não-silêncio (task 11914cc7): só quando há id observável em disco
+          // mas a CLI NÃO sabe retomar por ele — o caso em que antes só
+          // existia um `null` mudo. Providers retomáveis e providers sem
+          // store (ausência é dado) não ganham campo: o payload normal não
+          // muda.
+          ...(sessionResume.kind === "observed-not-resumable" ? { sessionResume } : {}),
+        };
+      }),
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
       // — mesma condição de presença que `transitions`/`cards` acima:
       // só existe quando `row` veio de `getTask`, e é SÓ LEITURA por
