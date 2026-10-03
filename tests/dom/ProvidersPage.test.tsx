@@ -123,6 +123,11 @@ beforeEach(() => {
         };
       }),
     },
+    // Uso/cota (task b7caf86d): a página lê cada provider ao montar. A fixture
+    // é "sem número" — o caminho honesto, que a tela deve saber exibir.
+    providerUsage: {
+      get: vi.fn(async (id: string) => ({ provider: id, supported: false, reason: "sem número exposto" })),
+    },
   });
 });
 

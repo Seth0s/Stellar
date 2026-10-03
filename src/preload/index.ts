@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 // importa no topo) entra no bundle do preload. Mesmo precedente do renderer,
 // que já importa tipos de `src/main` (ex.: `provider-usage`).
 import type { ProvidersReloadReport } from "../main/providers-dynamic";
+import type { ProviderUsageStats } from "../main/provider-usage";
 import type { BoardPreset } from "../main/board-preset-decision";
 import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
@@ -1916,6 +1917,19 @@ const system = {
   },
 };
 
+/**
+ * Uso/cota por provider (task b7caf86d). `main/provider-usage.ts` é a fonte
+ * única da leitura; aqui é só o canal. `allowSpawn` NUNCA vem da abertura da
+ * tela — só do gesto explícito "Medir agora" —, porque a fonte do opencode
+ * custa um processo (~440 MB medido) por chamada.
+ */
+export type ProviderUsageApi = {
+  get: (providerId: string, opts?: { allowSpawn?: boolean }) => Promise<ProviderUsageStats>;
+};
+const providerUsage: ProviderUsageApi = {
+  get: (providerId, opts) => ipcRenderer.invoke("providers:usage", providerId, opts ?? {}),
+};
+
 /** DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale from `app.getLocale()` with
  * a persisted override (`locale.json` in userData, main/locale-prefs.ts). */
 type I18nInfo = { locale: "pt-BR" | "en"; override: ("pt-BR" | "en") | null; systemLocale: string };
@@ -1973,6 +1987,7 @@ contextBridge.exposeInMainWorld("chat", chat);
 contextBridge.exposeInMainWorld("canvasExport", canvasExport);
 contextBridge.exposeInMainWorld("boardAssets", boardAssets);
 contextBridge.exposeInMainWorld("system", system);
+contextBridge.exposeInMainWorld("providerUsage", providerUsage);
 contextBridge.exposeInMainWorld("i18n", i18n);
 contextBridge.exposeInMainWorld("bus", bus);
 

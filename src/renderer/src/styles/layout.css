@@ -2243,6 +2243,141 @@ select.resume-input {
   text-align: right;
 }
 
+/* Uso/cota por provider (task b7caf86d): barra + % inline e o detalhe em
+   colapsado. As dimensões da barra são geometria FIXA da barra (não ritmo) —
+   por isso vivem em custom properties locais: um degrau de --space-* seria
+   erro de tipo para uma largura de coluna (docs/SYSTEM_DESIGN §1.5). */
+.provider-usage-meter {
+  --usage-bar-width: 120px;
+  --usage-bar-height: 6px;
+  --usage-bar-value-col: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.provider-usage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.provider-usage-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.provider-usage-bar-label {
+  font-size: var(--text-2);
+  color: var(--muted);
+}
+
+.provider-usage-bar {
+  display: inline-block;
+  width: var(--usage-bar-width);
+  height: var(--usage-bar-height);
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.provider-usage-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--foam);
+  border-radius: var(--radius-pill);
+}
+
+.provider-usage-percent {
+  font-family: var(--font-mono);
+  font-size: var(--text-2);
+  color: var(--text);
+  min-width: var(--usage-bar-value-col);
+}
+
+.provider-usage-na {
+  font-size: var(--text-2);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.provider-usage-toggle {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-2);
+  padding: 0;
+  text-decoration: underline;
+}
+
+.provider-usage-toggle:hover {
+  color: var(--text);
+}
+
+.provider-usage-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-left: 1px solid var(--border);
+  font-size: var(--text-2);
+  color: var(--muted);
+}
+
+.provider-usage-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+}
+
+.provider-usage-metric {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.provider-usage-metric-label {
+  color: var(--muted);
+}
+
+.provider-usage-metric-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.provider-usage-age {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.provider-usage-stale {
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-1);
+  padding: 0 var(--space-1);
+}
+
+.provider-usage-measure,
+.provider-usage-dashboard {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--text);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-2);
+}
+
+.provider-usage-measure:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .providers-empty {
   color: var(--muted);
   text-align: center;

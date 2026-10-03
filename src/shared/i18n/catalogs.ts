@@ -106,6 +106,30 @@ export const ptBR = {
   "settings.page.maestro": "Maestro",
   "settings.page.agents": "Agentes",
   "settings.page.providers": "Providers",
+  // Uso/cota por provider (task b7caf86d): barra + porcentagem inline e o
+  // detalhe em colapsado. Bloco `usage.*` próprio — o texto dos providers não
+  // se mistura com o do medidor.
+  "usage.loading": "Medindo uso…",
+  // O invariante em uma palavra: sem número, é ISTO — nunca "0%".
+  "usage.unavailable": "não disponível",
+  "usage.showDetails": "Detalhes",
+  "usage.hideDetails": "Ocultar detalhes",
+  "usage.percent": "{value}%",
+  "usage.capturedAt": "Capturado {age}",
+  "usage.stale": "desatualizado",
+  "usage.segment.session": "sessão (5h)",
+  "usage.segment.week": "semana (7d)",
+  "usage.segment.credits": "créditos",
+  "usage.segment.other": "uso",
+  "usage.metric.cost": "Custo",
+  "usage.metric.inputTokens": "Tokens de entrada",
+  "usage.metric.outputTokens": "Tokens de saída",
+  "usage.metric.cacheReadTokens": "Cache read",
+  "usage.metric.sessions": "Sessões",
+  "usage.metric.messages": "Mensagens",
+  "usage.measureNow": "Medir agora",
+  "usage.measuring": "Medindo…",
+  "usage.openDashboard": "Abrir dashboard",
   // Settings → Providers (task cebaf3c8): a tela dos providers dinâmicos.
   // O form cobre só o trivial; o resto é o arquivo cru no editor do SO.
   "settings.providers.subtitle":
@@ -1196,6 +1220,27 @@ export const en: Record<MessageKey, string> = {
   "settings.page.maestro": "Maestro",
   "settings.page.agents": "Agents",
   "settings.page.providers": "Providers",
+  // Provider usage/quota (task b7caf86d) — mirrors the pt-BR `usage.*` block.
+  "usage.loading": "Measuring usage…",
+  "usage.unavailable": "not available",
+  "usage.showDetails": "Details",
+  "usage.hideDetails": "Hide details",
+  "usage.percent": "{value}%",
+  "usage.capturedAt": "Captured {age}",
+  "usage.stale": "stale",
+  "usage.segment.session": "session (5h)",
+  "usage.segment.week": "week (7d)",
+  "usage.segment.credits": "credits",
+  "usage.segment.other": "usage",
+  "usage.metric.cost": "Cost",
+  "usage.metric.inputTokens": "Input tokens",
+  "usage.metric.outputTokens": "Output tokens",
+  "usage.metric.cacheReadTokens": "Cache read",
+  "usage.metric.sessions": "Sessions",
+  "usage.metric.messages": "Messages",
+  "usage.measureNow": "Measure now",
+  "usage.measuring": "Measuring…",
+  "usage.openDashboard": "Open dashboard",
   // Settings → Providers (task cebaf3c8) — mirrors the pt-BR block above.
   "settings.providers.subtitle":
     "Third-party agents and CLIs configured by file. The form covers the essentials; technical fields keep safe defaults.",
