@@ -1257,6 +1257,32 @@ function createWindow() {
   }
 
   const registry = createPtyRegistry({
+    /**
+     * Task 86613ff9 (PEÇA 1 de 7) — cada VIRADA do card (spawn, first_output,
+     * turn_end, quota) vira EVENTO persistível, chaveado por `(task_id,
+     * card_id, at)`. A PK exige `task_id`: sem vínculo card<->task não há
+     * chave, e inventar uma seria fabricar atribuição — a ausência é
+     * DECLARADA (o evento não nasce), nunca preenchida com um id de mentira.
+     * A cauda passa pela MESMA redação do retrato do fecho; com a tela
+     * desligada (default) ela é vazia, e isso é ausência declarada.
+     */
+    onTraceEvent: (event) => {
+      const link = store.getLatestTaskCardForCard(event.cardId);
+      if (!link) return;
+      const row = store.getCard(event.cardId);
+      const screen = decideTraceTailForStorage({ tail: event.tail });
+      store.saveCardTraceEvent({
+        taskId: link.task_id,
+        cardId: event.cardId,
+        at: event.at,
+        kind: event.kind,
+        boardId: row?.board_id ?? null,
+        providerId: row?.provider ?? null,
+        tail: screen.text,
+        tailAtCap: event.tailAtCap,
+        redacted: screen.redacted,
+      });
+    },
     onData: (id, data) => {
       ptyRxChunks += 1;
       ptyRxBytes += data.length;
@@ -2837,6 +2863,23 @@ function createWindow() {
       quota_death: snapshot.quotaDeath ? 1 : 0,
       kill_requested: snapshot.killRequested ? 1 : 0,
     });
+    // Task 86613ff9 (PEÇA 1) — o FECHO é a quinta virada, e é aqui que ele
+    // acontece. A chave é a task viva do card; sem vínculo não há `task_id` e
+    // o evento não nasce (mesma regra de `onTraceEvent`).
+    const link = store.getLatestTaskCardForCard(cardId);
+    if (link) {
+      store.saveCardTraceEvent({
+        taskId: link.task_id,
+        cardId,
+        at: Date.now(),
+        kind: "close",
+        boardId: row.board_id,
+        providerId: row.provider,
+        tail: screen.text,
+        tailAtCap: snapshot.tailAtCap,
+        redacted: screen.redacted,
+      });
+    }
   }
 
   ipcMain.handle("store:archive-card", (_e, id: string) => {

@@ -341,6 +341,22 @@ export type PtyTraceSnapshot = {
   killRequested: boolean;
 };
 
+/**
+ * Task 86613ff9 (PEÇA 1 de 7) — uma VIRADA do card, para virar evento
+ * persistível. É o IRMÃO momentâneo do `PtyTraceSnapshot`: aquele é o retrato
+ * do fecho (uma linha, no fim); este é o fato no INSTANTE em que acontece.
+ * `at` é a marca real da virada (nunca a do fecho). `tail` é a cauda
+ * ANSI-stripped que o registry já mantém para providers com cota — vazia é
+ * ausência declarada, e quem grava passa pela MESMA redação do fecho.
+ */
+export type PtyTraceEvent = {
+  cardId: string;
+  kind: "spawn" | "first_output" | "turn_end" | "quota";
+  at: number;
+  tail: string;
+  tailAtCap: boolean;
+};
+
 type Entry = {
   proc: pty.IPty;
   cols: number;
@@ -661,6 +677,13 @@ export function createPtyRegistry(registryOpts: {
    */
   onTrustPromptPending?: (id: string, pending: boolean) => void;
   /**
+   * Task 86613ff9 (PEÇA 1 de 7) — as VIRADAS do card viram EVENTO persistível.
+   * Opcional e source-compatible (mesmo idioma de `onTrustPromptPending`
+   * acima): o consumidor atual segue compilando sem mudança até ligar o sinal.
+   * Nunca lança para fora — ver `emitTraceEvent`.
+   */
+  onTraceEvent?: (event: PtyTraceEvent) => void;
+  /**
    * Fila derived status (CAMADA 3) depends on `isAlive`, but the renderer
    * is push-never-poll for `task:changed`. Task-row writers alone never
    * see a PTY birth/death. Measured 2026-09-14: spawn_agent links
@@ -686,6 +709,8 @@ export function createPtyRegistry(registryOpts: {
   function adoptEntry(id: string, entry: Entry): void {
     const wasAlive = entries.has(id);
     entries.set(id, entry);
+    // Task 86613ff9 — a VIRADA do nascimento, datada pelo relógio do spawn.
+    emitTraceEvent(id, "spawn", entry.spawnedAtMs);
     if (!wasAlive) registryOpts.onLivenessChanged?.(id, true);
   }
   /**
@@ -700,6 +725,19 @@ export function createPtyRegistry(registryOpts: {
    */
   const TRACE_STASH_MAX = 64;
   const lastTraceByCard = new Map<string, PtyTraceSnapshot>();
+  /**
+   * Task 86613ff9 (PEÇA 1) — emite UMA virada. Emitir rastro NUNCA pode
+   * derrubar o PTY: um erro do consumidor é engolido aqui, porque perder o
+   * card por causa do seu próprio rastro é a troca errada. Ausência de
+   * consumidor = simplesmente não persistir.
+   */
+  function emitTraceEvent(cardId: string, kind: PtyTraceEvent["kind"], at: number, tail = "", tailAtCap = false): void {
+    try {
+      registryOpts.onTraceEvent?.({ cardId, kind, at, tail, tailAtCap });
+    } catch {
+      /* o rastro não derruba o card (ver o doc acima) */
+    }
+  }
   function snapshotTrace(id: string, e: Entry): PtyTraceSnapshot {
     return {
       cardId: id,
@@ -777,6 +815,9 @@ export function createPtyRegistry(registryOpts: {
         const hit = detectQuotaExhaustion(e.providerId, e.quotaScanCarry);
         if (hit) {
           e.quotaSignal = { providerId: e.providerId, label: hit.label, excerpt: hit.excerpt, atMs: Date.now() };
+          // Task 86613ff9 — a morte por cota é uma virada própria (a série das
+          // 7 peças precisa dela separada do `turn_end`).
+          emitTraceEvent(id, "quota", e.quotaSignal.atMs, e.outputTail, e.outputTail.length >= QUOTA_TAIL_MAX);
         }
       }
     }
@@ -1187,7 +1228,12 @@ export function createPtyRegistry(registryOpts: {
 
     proc.onData((data) => {
       entry.lastActivityAt = Date.now();
-      entry.hasReceivedData = true;
+      // Task 86613ff9 — `first_output` é a PRIMEIRA vez que o processo fala,
+      // não cada chunk: a virada, e só ela, vira evento.
+      if (!entry.hasReceivedData) {
+        entry.hasReceivedData = true;
+        emitTraceEvent(id, "first_output", Date.now());
+      }
       // Rodada 4 (`49ae26b7`) — track DECSET 2004h/l so deliveries only
       // wrap bracketed paste when the peer asked. Pure update; no I/O.
       entry.bracketedPasteMode = updateBracketedPasteMode(entry.bracketedPasteMode, data);
@@ -1642,6 +1688,8 @@ export function createPtyRegistry(registryOpts: {
     const entry = entries.get(id);
     if (!entry) return;
     entry.turnEndedAt = Date.now();
+    // Task 86613ff9 — o fim de turno, datado no instante em que ele é declarado.
+    emitTraceEvent(id, "turn_end", entry.turnEndedAt);
   }
 
   /** Os fatos que `decideCardStatus` (card-status-decision.ts) consome —
