@@ -4470,7 +4470,11 @@ export function createMessageBus(
       // `purpose`/`review` inválido continua sendo o erro reportado (é o
       // dado que o chamador mandou, não a ausência de board).
       if (boardId === null) {
-        return { ok: false, error: TASK_BOARD_UNDECLARED_REASON };
+        // `field` explícito, na MESMA classe dos outros recusas deste handler
+        // (`cwd`, `gates`, o contrato): o erro já nomeia os DOIS campos que o
+        // chamador pode passar (`boardId`/`cardId`), e o `field` diz qual é o
+        // canônico — quem consome tem onde apontar sem parsear prosa.
+        return { ok: false, error: TASK_BOARD_UNDECLARED_REASON, field: "boardId" };
       }
       // CONFINAMENTO DE `cwd` + AUTORIA DE `gates` (decisão do dono, 2026-09-21).
       // As duas recusam ANTES de qualquer escrita e NOMEIAM o campo, no idioma
