@@ -1,0 +1,148 @@
+/* GAVETA (task 377a6029) — presa à borda ESQUERDA do card terminal.
+   Só tokens do design system (tokens.css): nenhum valor cru de cor/raio/espaço
+   ou tipografia — o gate check-design-tokens morde em código novo. */
+.reservationDrawer {
+  position: absolute;
+  top: var(--titlebar-h);
+  left: 0;
+  z-index: 6;
+  pointer-events: auto;
+  font-family: var(--font-ui);
+}
+
+.tab {
+  position: absolute;
+  left: 0;
+  transform: translateX(-100%) rotate(180deg);
+  writing-mode: vertical-rl;
+  padding: var(--space-4) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--text-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabOpen {
+  background: var(--surface);
+}
+
+.panel {
+  min-width: 240px;
+  max-width: 320px;
+  margin-left: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  background: var(--ink);
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.head {
+  font-size: var(--text-4);
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+.empty {
+  font-size: var(--text-3);
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.item {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--panel);
+  cursor: grab;
+}
+
+.itemHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.itemTitle {
+  font-size: var(--text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  font-size: var(--text-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.waitingDeps {
+  color: var(--warn);
+}
+.ready {
+  color: var(--good);
+}
+.delivering {
+  color: var(--foam);
+}
+.running {
+  color: var(--foam);
+}
+.review {
+  color: var(--violet);
+}
+
+.deps {
+  font-size: var(--text-2);
+  color: var(--muted);
+  margin-top: var(--space-1);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.actions button {
+  font-size: var(--text-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* CONECTOR TRACEJADO gaveta→task (task 6266d3e7). Portal fixo cobrindo a
+   viewport, sem capturar cliques; a linha `--violet` casa com o destaque que
+   o item da Fila ganha (`.itemHovered`). */
+.hoverConnector {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+.hoverConnectorLine {
+  stroke: var(--violet);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+}
+.hoverConnectorDot {
+  fill: var(--violet);
+}

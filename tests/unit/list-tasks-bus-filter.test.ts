@@ -101,7 +101,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       expect(res.tasks[0]!.cardId).toBe("c1");
       // O status é o do banco; o segundo fato viaja no campo próprio.
       expect(res.tasks[0]!.status).toBe("pending");
-      expect(res.tasks[0]!.cardAlive).toBe(true);
+      // (task 6266d3e7) O summary é uma ALLOWLIST: `cardAlive` saiu dele.
       expect(res.tasks[0]!).not.toHaveProperty("prompt");
       expect(res.tasks[0]!).not.toHaveProperty("result");
 
@@ -120,7 +120,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
     }
   });
 
-  it("view inválida é recusada; omitido preserva firehose full", async () => {
+  it("view inválida é recusada; omitido = summary (task 6266d3e7), full é explícito", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-list-tasks-query-bus-"));
     const store = openStore(dir);
     store.upsertTask(baseTask("t1"));
@@ -133,13 +133,45 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       expect(bad.ok).toBe(false);
       expect(bad.error).toMatch(/view/);
 
-      const full = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
+      // Omitir não traz mais o firehose: summary é o default.
+      const def = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
+        ok: boolean;
+        tasks: Array<Record<string, unknown>>;
+      };
+      expect(def.ok).toBe(true);
+      expect(def.tasks[0]).not.toHaveProperty("prompt");
+
+      // `view:"full"` explícito continua largo.
+      const full = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
         ok: boolean;
         tasks: Array<Record<string, unknown>>;
       };
       expect(full.ok).toBe(true);
       expect(full.tasks[0]).toHaveProperty("prompt");
       expect(full.tasks[0]).toHaveProperty("result");
+    } finally {
+      bus.close();
+      store.close();
+    }
+  });
+
+  it("default summary de 120 tasks responde < 30 KB (aceite task 6266d3e7)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-list-tasks-size-"));
+    const store = openStore(dir);
+    for (let i = 0; i < 120; i++) {
+      store.upsertTask(baseTask(`t-${i}`, { board_id: "board-a", prompt: `task ${i} — ${"p".repeat(200)}` }));
+    }
+    const bus = openBus(store);
+    try {
+      const res = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-a" } as BusRequest)) as {
+        ok: boolean;
+        tasks: unknown[];
+      };
+      expect(res.ok).toBe(true);
+      expect(res.tasks).toHaveLength(120);
+      // O firehose (>100 tasks) some no default: summary < 30 KB.
+      const bytes = Buffer.byteLength(JSON.stringify(res.tasks), "utf8");
+      expect(bytes).toBeLessThan(30_000);
     } finally {
       bus.close();
       store.close();

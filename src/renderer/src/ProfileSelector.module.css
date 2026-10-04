@@ -1,0 +1,181 @@
+/* Seletor de perfis locais (BACKEND_V1.md §3/§7.1) — só tokens do design
+   system (tokens.css). O gate check-design-tokens morde em CSS novo. */
+.wrap {
+  position: relative;
+  font-family: var(--font-ui);
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--text-3);
+  cursor: pointer;
+}
+
+.trigger:hover {
+  background: var(--surface);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-circle);
+  background: var(--good);
+}
+
+.menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: var(--space-2);
+  z-index: 20;
+  min-width: 240px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  background: var(--ink);
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-3);
+  color: var(--muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--panel);
+}
+
+.itemActive {
+  border-color: var(--good);
+}
+
+.name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-3);
+}
+
+.badge {
+  padding: 0 var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2);
+  color: var(--muted);
+}
+
+.badgeActive {
+  color: var(--good);
+}
+
+.missing {
+  font-size: var(--text-2);
+  color: var(--warn);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.input {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-3);
+}
+
+.select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-3);
+}
+
+.btn {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-3);
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btnPrimary {
+  background: var(--good);
+  border-color: var(--good);
+  color: var(--ink);
+}
+
+.error {
+  margin-top: var(--space-2);
+  font-size: var(--text-2);
+  color: var(--warn);
+}
+
+.hint {
+  margin-top: var(--space-2);
+  font-size: var(--text-2);
+  color: var(--muted);
+}
+
+/* A3c (P5) — casa das CLIs por perfil. */
+.homeSection {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.warn {
+  margin-top: var(--space-2);
+  font-size: var(--text-2);
+  color: var(--warn);
+}
+
+.saving {
+  margin-top: var(--space-2);
+  font-size: var(--text-2);
+  color: var(--foam);
+}

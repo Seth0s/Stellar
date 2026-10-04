@@ -1325,3 +1325,100 @@
   color: var(--muted);
   font-size: var(--text-3);
 }
+
+/* HOVER vindo da GAVETA (task 6266d3e7) — o item correspondente acende
+   enquanto o ponteiro está no item da gaveta. Cor própria (`--violet`, a mesma
+   do conector tracejado) para o humano ligar os dois. */
+.itemHovered {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--violet) 45%, transparent);
+}
+
+/* CHIP DE FASE (task 6266d3e7) — pílula com borda em `currentColor`; a cor do
+   TOM vem das classes abaixo. Só tokens: o gate check-design-tokens morde. */
+.phaseChip {
+  align-self: flex-start;
+  font-size: var(--text-2);
+  line-height: 1;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+.phaseMuted {
+  color: var(--muted);
+}
+.phaseFoam {
+  color: var(--foam);
+}
+.phaseViolet {
+  color: var(--violet);
+}
+.phaseGood {
+  color: var(--good);
+}
+.phaseDanger {
+  color: var(--danger);
+}
+.phaseWarn {
+  color: var(--warn);
+}
+
+/* FILTRO RÁPIDO "aguardando revisão" com contador (task 6266d3e7). */
+.phaseFilterBar {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.phaseFilterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-3);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.phaseFilterActive {
+  border-color: var(--violet);
+  color: var(--violet);
+  background: color-mix(in srgb, var(--violet) 12%, transparent);
+}
+.phaseFilterCount {
+  background: var(--panel);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* INDICADOR DE GATE (task ff24b36d) — discreto, só com um comando pesado em
+   curso. `--warn` para o lock de repo, `--violet` para o exclusivo de máquina. */
+.gateLockBar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-2);
+  color: var(--muted);
+}
+.gateLockItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  color: var(--warn);
+}
+.gateLockItem[data-scope="machine"] {
+  color: var(--violet);
+}

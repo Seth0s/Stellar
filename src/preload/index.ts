@@ -100,6 +100,15 @@ const pty = {
     ipcRenderer.on("pty:resume-invalid", listener);
     return () => ipcRenderer.removeListener("pty:resume-invalid", listener);
   },
+  /** A3c (P5) — o card caiu nas pastas do sistema porque a CLI não separa por
+   *  perfil. Canal SEPARADO da saída do pty (uma TUI em tela cheia redesenha
+   *  por cima de bytes injetados); o rodapé do card é follow-up, o seletor de
+   *  perfil já mostra o aviso. */
+  onHomeNotice: (cb: (id: string, providerId: string) => void) => {
+    const listener = (_e: unknown, id: string, providerId: string) => cb(id, providerId);
+    ipcRenderer.on("pty:home-notice", listener);
+    return () => ipcRenderer.removeListener("pty:home-notice", listener);
+  },
   onUrlSeen: (cb: (id: string, url: string) => void) => {
     const listener = (_e: unknown, id: string, url: string) => cb(id, url);
     ipcRenderer.on("pty:url-seen", listener);
@@ -1115,6 +1124,17 @@ export type TaskBoardItem = {
  * fica pra depois, ver DESIGN-BACKLOG.md). */
 const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
+  /** GAVETA (task 377a6029) — a fila de tasks RESERVADAS deste card, em ordem. */
+  listReservations: (
+    cardId: string,
+  ): Promise<{ ok: boolean; reservations?: Array<{ taskId: string; title: string | null; status: string | null; deps: Array<{ id: string; status: string | null }> }>; error?: string }> =>
+    ipcRenderer.invoke("store:tasks:reservations:list", cardId),
+  reorderReservations: (cardId: string, taskIds: string[]): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("store:tasks:reservations:reorder", cardId, taskIds),
+  startReservation: (taskId: string, cardId: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("store:tasks:reservations:start", taskId, cardId),
+  releaseReservation: (taskId: string, cardId: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("store:tasks:reservations:release", taskId, cardId),
   /** O diff capturado pelo app nesta task (task 7096e8af) — SOB DEMANDA (o
    * board não o carrega no push, por tamanho). `null` = sem evidência. */
   gateDiff: (taskId: string): Promise<import("../main/gate-runner").DiffCaptureEvidence | null> =>
@@ -1962,6 +1982,96 @@ const bus = {
     | { ok: true; delivery: BusDelivery; id: string; target: string; reason?: string; requesterId?: string }
     | { ok: false; error: string }
   > => ipcRenderer.invoke("bus:get-delivery", id),
+  /** GATE-LOCK (task ff24b36d) — leitura passiva de quem segura/espera cada
+   * lock de gate AGORA, para o indicador discreto da Fila. Vazio = nenhum
+   * comando pesado rodando. */
+  gateLockStatus: (): Promise<{
+    ok: boolean;
+    locks?: Array<{
+      key: string;
+      scope: "repo" | "machine";
+      running: { holder: { taskId: string | null; cardId: string | null; label: string }; startedAt: number } | null;
+      queue: Array<{ position: number; holder: { taskId: string | null; cardId: string | null; label: string }; enqueuedAt: number }>;
+    }>;
+  }> => ipcRenderer.invoke("bus:gate-lock-status"),
+};
+
+/** Perfis locais (BACKEND_V1.md §3/§7.1) — o seletor da Home. O registro
+ *  (`profiles.json`) e `profiles/` vivem na RAIZ do userData, não no perfil
+ *  aberto; trocar relança o app no perfil alvo. */
+export type ProfileKind = "personal" | "team";
+export type ProviderHomeMode = "system" | "isolated";
+export type ProfileView = {
+  id: string;
+  name: string;
+  kind: ProfileKind;
+  createdAt: number;
+  /** A3c (P5) — casa das CLIs deste perfil. */
+  homeMode: ProviderHomeMode;
+  isDefault: boolean;
+  isActive: boolean;
+  openable: boolean;
+};
+export type ProfilesState = {
+  registryPath: string;
+  activeProfileId: string | null;
+  profiles: ProfileView[];
+};
+/** A3c (P5) — casa do perfil ATIVO + suporte por provider. */
+export type ProfileHomeStatus = {
+  homeMode: ProviderHomeMode | null;
+  homeDirBase: string | null;
+  providers: { id: string; label: string; supported: boolean; tool: string | null }[];
+};
+export type ProfilesMutationResult =
+  | { ok: true; state: ProfilesState }
+  | { ok: false; reason: string; state: ProfilesState };
+export type ProfilesSwitchResult = { ok: true } | { ok: false; reason: string };
+export type SetHomeModeResult =
+  | { ok: true; state: ProfilesState; home: ProfileHomeStatus }
+  | { ok: false; reason: string; home: ProfileHomeStatus };
+export type ProfilesApi = {
+  list: () => Promise<ProfilesState>;
+  create: (input: { name: string; kind: ProfileKind; homeMode?: ProviderHomeMode }) => Promise<ProfilesMutationResult>;
+  rename: (id: string, name: string) => Promise<ProfilesMutationResult>;
+  switch: (id: string) => Promise<ProfilesSwitchResult>;
+  homeStatus: () => Promise<ProfileHomeStatus>;
+  setHomeMode: (id: string, mode: ProviderHomeMode) => Promise<SetHomeModeResult>;
+};
+const profiles: ProfilesApi = {
+  list: () => ipcRenderer.invoke("profiles:list"),
+  create: (input) => ipcRenderer.invoke("profiles:create", input),
+  rename: (id, name) => ipcRenderer.invoke("profiles:rename", id, name),
+  switch: (id) => ipcRenderer.invoke("profiles:switch", id),
+  homeStatus: () => ipcRenderer.invoke("profiles:home-status"),
+  setHomeMode: (id, mode) => ipcRenderer.invoke("profiles:set-home-mode", id, mode),
+};
+
+/** Conta Stellar (A2 — BACKEND_V1.md §4/§7.2). O login roda no MAIN (listener
+ *  loopback + PKCE + safeStorage do perfil); a UI só lê o estado e dispara. */
+export type CloudIdentityInfo = { kind: string; subject: string; login: string | null };
+export type CloudAccountInfo = { displayName: string; identities: CloudIdentityInfo[] };
+export type CloudStatusInfo =
+  | { state: "logged-out"; apiBaseUrl: string; lastError: string | null }
+  | { state: "pending"; apiBaseUrl: string; provider: "github" | "email" }
+  | { state: "logged-in"; apiBaseUrl: string; account: CloudAccountInfo; expiresAtMs: number };
+export type CloudApi = {
+  status: () => Promise<CloudStatusInfo>;
+  login: (provider: "github" | "email", email?: string) => Promise<CloudStatusInfo>;
+  cancel: () => Promise<CloudStatusInfo>;
+  logout: () => Promise<CloudStatusInfo>;
+  onStatusChanged: (cb: (status: CloudStatusInfo) => void) => () => void;
+};
+const cloud: CloudApi = {
+  status: () => ipcRenderer.invoke("cloud:status"),
+  login: (provider, email) => ipcRenderer.invoke("cloud:login", provider, email),
+  cancel: () => ipcRenderer.invoke("cloud:cancel"),
+  logout: () => ipcRenderer.invoke("cloud:logout"),
+  onStatusChanged: (cb) => {
+    const listener = (_e: unknown, status: CloudStatusInfo) => cb(status);
+    ipcRenderer.on("cloud:status-changed", listener);
+    return () => ipcRenderer.removeListener("cloud:status-changed", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("pty", pty);
@@ -1990,6 +2100,8 @@ contextBridge.exposeInMainWorld("system", system);
 contextBridge.exposeInMainWorld("providerUsage", providerUsage);
 contextBridge.exposeInMainWorld("i18n", i18n);
 contextBridge.exposeInMainWorld("bus", bus);
+contextBridge.exposeInMainWorld("profiles", profiles);
+contextBridge.exposeInMainWorld("cloud", cloud);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */

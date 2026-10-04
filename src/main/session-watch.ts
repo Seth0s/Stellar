@@ -423,6 +423,37 @@ function declaredSessionStore(providerId: string): SessionStore | undefined {
 }
 
 /**
+ * RESERVA DE POSSE ANCORADA NO SPAWN (task ea71065e, 2026-10-04).
+ *
+ * DEFEITO MEDIDO: 5 cards `commandcode` no MESMO cwd (`/Projects/StellarPage`)
+ * ficaram com `session_id` null. O watcher de spawn rodava SEM reserva de posse;
+ * com vários `<id>.meta.json` na mesma pasta, `decideClaimAmongCandidates`
+ * devolve `ambiguous` e NUNCA reivindica — e como o brief do dispatch vai por
+ * argv (nenhum `write()`), nenhuma reserva de rearm nascia para desambiguar.
+ *
+ * A REGRA, DERIVADA DA DECLARAÇÃO (nunca `if (provider)`):
+ *   - provider sem store declarado — nada a observar — sem reserva;
+ *   - provider cujo registro só nasce DEPOIS de um input real
+ *     (`REARM_ON_INPUT_PROVIDERS`: antigravity, opencode — medido) — sem reserva
+ *     no spawn: um poller de spawn não pode reivindicar o arquivo que apareceu
+ *     porque OUTRO card recebeu input. A reserva continua nascendo do `write()`.
+ *   - os demais (commandcode, codex, cline…): o registro nasce por causa DESTE
+ *     card (o prompt do spawn já é o input), então a posse é ancorada no
+ *     instante do spawn. O desempate é o MAIOR `rearmAtMs` anterior ao arquivo
+ *     — se dois cards empatam no instante, a recusa (`ambiguous`) é preservada e
+ *     o não-silêncio fica por conta de `onStuck`.
+ */
+export function spawnWatchReservation(
+  providerId: string,
+  ownerId: string,
+  spawnedAtMs: number,
+): { ownerId: string; rearmAtMs: number; matchStartMs: number } | undefined {
+  if (!declaredSessionStore(providerId)) return undefined;
+  if (REARM_ON_INPUT_PROVIDERS.includes(providerId)) return undefined;
+  return { ownerId, rearmAtMs: spawnedAtMs, matchStartMs: spawnedAtMs };
+}
+
+/**
  * OS ENCODINGS DE CWD — cada um é uma MEDIÇÃO, com a amostra declarada:
  *
  *  - `{cwd:dashes}` (claude): `/` → `-`. Medido contra os diretórios reais de
@@ -1022,6 +1053,12 @@ export function watchForSession(
     rearmAtMs?: number;
     /** Ownership lower bound; distinct from the candidate scan floor. */
     matchStartMs?: number;
+    /** NÃO-SILÊNCIO (task ea71065e, 2026-10-04) — o watcher viu candidatos
+     * mas não conseguiu atribuir nenhum (`ambiguous`/`not-ours`). Chamado UMA
+     * vez por watcher, e só com candidatos na mesa: "nada ainda" e
+     * "aguardando input" são estados normais e nunca disparam. Quem consome
+     * transforma isto no aviso de contexto perdido — nunca num chute de id. */
+    onStuck?: (reason: "ambiguous" | "not-ours") => void;
   } = {},
 ): () => void {
   // Antes: `providerId !== "claude" && … && providerId !== "opencode"`. Agora
@@ -1031,6 +1068,7 @@ export function watchForSession(
   if (!declaredSessionStore(providerId)) return () => {};
 
   let stopped = false;
+  let stuckNotified = false;
   const matchStartMs = options.matchStartMs ?? options.rearmAtMs ?? spawnedAtMs;
   const releaseReservation =
     options.ownerId !== undefined && options.rearmAtMs !== undefined
@@ -1055,7 +1093,20 @@ export function watchForSession(
           reservations: reservationsFor(providerId, cwd),
           requiresInputReservation: REARM_ON_INPUT_PROVIDERS.includes(providerId),
         });
-        if (decision.action !== "claim") return null;
+        if (decision.action !== "claim") {
+          // Candidatos existem e mesmo assim não deu para atribuir: é aqui que
+          // o card fica sem sessão. `no-candidates`/`awaiting-input` NÃO contam
+          // (estados normais) — só a recusa real com candidatos na mesa.
+          if (
+            candidates.length > 0 &&
+            !stuckNotified &&
+            (decision.reason === "ambiguous" || decision.reason === "not-ours")
+          ) {
+            stuckNotified = true;
+            options.onStuck?.(decision.reason);
+          }
+          return null;
+        }
         claimSessionId(decision.id);
         return decision.id;
       });

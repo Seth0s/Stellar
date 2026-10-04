@@ -4,8 +4,13 @@ import { cardHasReviewer, normalizeTaskPurpose, type TaskPurpose } from "../../t
 // dependência nenhuma — o renderer não reimplementa a leitura do passado.
 // `import type` some no build; a função é uma linha pura e compartilhada.
 import { isRoundAttributableToTask, type TaskVerdictReadRule } from "../../main/task-verdict-read-decision";
+// A regra da FASE é UMA só, no main (`task-phase-decision.ts`) — o renderer não
+// reimplementa a precedência; monta os FATOS que o preview do board já carrega
+// e delega. Mesmo padrão do import de `task-verdict-read-decision` acima.
+import { deriveTaskPhase, type TaskPhase, type TaskPhaseFacts } from "../../main/task-phase-decision";
 
 export type { TaskPurpose };
+export type { TaskPhase };
 
 /**
  * DESIGN-BACKLOG.md §2.1 "Card `task`" — pure, React-free view-model logic
@@ -1058,6 +1063,119 @@ export function describeSprintCounts(s: Pick<SprintView, "countTodo" | "countDoi
   });
   return `${counts} · migrou −${s.migratedOut}/+${s.migratedIn}`;
 }
+
+/**
+ * FASE DERIVADA NA FILA (task 6266d3e7). O board JÁ carrega a maior parte dos
+ * fatos; a fase é montada aqui e decidida pela MESMA função do main
+ * (`deriveTaskPhase`), nunca por uma segunda regra. DUAS APROXIMAÇÕES
+ * declaradas, porque o push do board NÃO carrega a reserva nem o instante da
+ * entrega:
+ *  - `hasReservedCard` fica `false` — o payload não tem `reservation_state`
+ *    (a reserva vive na gaveta, que é outra leitura). Uma taskreservada
+ *    aparece como `ready`, nunca como `reserved` inventado;
+ *  - `implementerReportedSinceLastDelivery` é `report !== null` — há um
+ *    relatório do card principal; sem o carimbo da última entrega, não dá para
+ *    dizer se ele é DESTA entrega (documentado, não escondido).
+ * Defeito nunca é mascarado: nos dois casos o resultado é a leitura HONESTA
+ * possível com os fatos presentes.
+ */
+export type BoardPhaseInput = {
+  status: string;
+  deps: readonly string[];
+  depStatuses: Readonly<Record<string, string>>;
+  cardAlive: boolean;
+  report: { verdict: string | null } | null;
+  verdicts: readonly { verdict: string | null }[];
+};
+
+export function phaseFactsFromBoardItem(task: BoardPhaseInput): TaskPhaseFacts {
+  const lastVerdict = task.verdicts.length > 0 ? task.verdicts[task.verdicts.length - 1]!.verdict : null;
+  return {
+    status: task.status,
+    deps: task.deps.map((id) => ({ status: task.depStatuses[id] ?? null })),
+    hasActiveImplementer: task.cardAlive,
+    hasReservedCard: false,
+    implementerReportedSinceLastDelivery: task.report !== null,
+    reviewerChangesRequested: lastVerdict === "reprovado",
+  };
+}
+
+export function deriveTaskPhaseForBoardItem(task: BoardPhaseInput): TaskPhase {
+  return deriveTaskPhase(phaseFactsFromBoardItem(task));
+}
+
+/** Chave i18n do chip, uma por fase (as chaves já existem em catalogs.ts). */
+export const PHASE_LABEL_KEY: Record<TaskPhase, MessageKey> = {
+  waiting_deps: "task.phase.waiting_deps",
+  ready: "task.phase.ready",
+  reserved: "task.phase.reserved",
+  running: "task.phase.running",
+  awaiting_review: "task.phase.awaiting_review",
+  changes_requested: "task.phase.changes_requested",
+  done: "task.phase.done",
+  failed: "task.phase.failed",
+};
+
+/** Tom do chip — o significado mora na COR (mesma convenção das pílulas de
+ * meta); o TaskCard traduz cada tom num token do design system. Dado estático
+ * de apresentação, sem CSS aqui (este módulo não conhece estilo). */
+export type PhaseTone = "muted" | "foam" | "violet" | "good" | "danger" | "warn";
+
+export const PHASE_TONE: Record<TaskPhase, PhaseTone> = {
+  waiting_deps: "warn",
+  ready: "muted",
+  reserved: "violet",
+  running: "foam",
+  awaiting_review: "violet",
+  changes_requested: "danger",
+  done: "good",
+  failed: "danger",
+};
+
+/** Filtro rápido da Fila — "aguardando revisão". Devolve SÓ as tasks nessa
+ * fase quando `active`; a lista inteira quando não. Nunca uma cópia parcial
+ * silenciosa: o contador (abaixo) e o filtro usam a MESMA derivação. */
+export function filterTasksByAwaitingReview<T extends BoardPhaseInput>(tasks: readonly T[], active: boolean): T[] {
+  if (!active) return [...tasks];
+  return tasks.filter((t) => deriveTaskPhaseForBoardItem(t) === "awaiting_review");
+}
+
+/** Quantas tasks estão "aguardando revisão" — o contador do filtro rápido. */
+export function countAwaitingReview(tasks: readonly BoardPhaseInput[]): number {
+  let n = 0;
+  for (const t of tasks) if (deriveTaskPhaseForBoardItem(t) === "awaiting_review") n++;
+  return n;
+}
+
+/** A fase de um ITEM da gaveta: o main devolve `phase` pronto na resposta de
+ * `list_reservations`; a UI só decide o rótulo/estado. `null` (linha antiga,
+ * resposta sem o campo) cai no estado "pronta" — nunca um palpite de
+ * execução. Mapeia a fase para o vocabulário de estado da gaveta. */
+export type ReservationDisplayState = "waiting-deps" | "delivering" | "running" | "review" | "ready";
+
+export function reservationStateFromPhase(phase: TaskPhase | null | undefined): ReservationDisplayState {
+  switch (phase) {
+    case "waiting_deps":
+      return "waiting-deps";
+    case "running":
+      return "running";
+    case "awaiting_review":
+    case "changes_requested":
+      return "review";
+    default:
+      // `ready`, `reserved`, `done`, `failed`, `null` — deps fechadas, nada
+      // rodando e nada aguardando revisão: a reserva está pronta para começar.
+      return "ready";
+  }
+}
+
+/** Evento de HOVER task↔gaveta (task 6266d3e7). A gaveta (ReservationDrawer)
+ * e o item da Fila (TaskCard) moram em CARDS diferentes no mesmo documento —
+ * o único canal entre eles sem passar por App.tsx é um CustomEvent do window.
+ * A gaveta emite `{ taskId }` ao entrar num item (e `null` ao sair); a Fila
+ * escuta e destaca o item. Nome exportado para os dois lados citarem a MESMA
+ * string. */
+export const TASK_HOVER_EVENT = "stellar:task-hover";
 
 /** Build a read-only TaskBoardItem stub from a frozen sprint snapshot
  * entry — enough for TaskItem columns without inventing live cards/reports. */

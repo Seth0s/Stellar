@@ -95,7 +95,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       store.upsertTask(baseTaskFields("t2", { board_id: "board-b" }));
       store.upsertTask(baseTaskFields("t3", { board_id: "board-a" }));
 
-      const filtered = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-a" } as BusRequest)) as {
+      const filtered = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-a", view: "full" } as BusRequest)) as {
         ok: boolean;
         tasks: { id: string }[];
       };
@@ -104,7 +104,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       expect(counts.listTasksByBoard).toBe(1);
       expect(counts.listTasks).toBe(0);
 
-      const unfiltered = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
+      const unfiltered = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
         ok: boolean;
         tasks: { id: string }[];
       };
@@ -115,7 +115,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       expect(counts.listTasksByBoard).toBe(1);
 
       // An empty board is a real, correct result — not an error.
-      const empty = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-nonexistent" } as BusRequest)) as {
+      const empty = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-nonexistent", view: "full" } as BusRequest)) as {
         ok: boolean;
         tasks: unknown[];
       };

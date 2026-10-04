@@ -338,7 +338,10 @@ export type CloseCardLinkedTask = {
   requesterRoleOnTask: JudgmentRequesterRole;
   /** Reviewer links OTHER than the card being closed whose PTY is alive right now. */
   otherLiveReviewers: number;
-  /** The target card's last ACCEPTED report declared `ok: true`. */
+  /** O ÚLTIMO report aceito DA PRÓPRIA TASK (não "do card") declarou
+   * `ok: true`. Task c10a1faf: o card é um SLOT que responde por VÁRIAS tasks,
+   * então um report sobre OUTRA task não pode assinar esta — o coletor
+   * (`message-bus.ts`) já entrega este fato escopado à task. */
   lastReportOk: boolean;
   /** Rodadas gravadas NESTA task para o card que está fechando, cronológicas.
    *
@@ -381,15 +384,18 @@ export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCar
 }
 
 /** AGENT-FACING — DO NOT TRANSLATE. Sem review exigido, mas sem evidência
- * de sucesso: o fechamento tem que ser explícito, não silencioso. */
+ * de sucesso DA PRÓPRIA TASK: o fechamento tem que ser explícito, não
+ * silencioso. Um report do card sobre OUTRA task não conta (task c10a1faf —
+ * era assim que o fechamento "concluía" uma task que nunca começou). */
 export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId: string): string {
   return (
     `[de: stellar] close_card of "${targetCardId}" refused: the card is linked to open task "${taskId}", ` +
-    `and its last ACCEPTED report does not declare success (ok:true). ` +
+    `and NO accepted report OF THIS TASK declares success (ok:true) — a report the card filed about a ` +
+    `DIFFERENT task does not sign this one. ` +
     `Closing now would leave the task open and orphaned (28 of the 38 open tasks today are like this). ` +
     `Conclude the task first: update_task with status done/failed, or request_task_status for the human — ` +
     `or, if whoever closes is NOT the implementer of this task (reviewer, outsider or human), ` +
-    `let the card report ok:true, in which case the close itself concludes the task (LAYER 4 still applies: ` +
+    `let the card report ok:true FOR THIS TASK, in which case the close itself concludes the task (LAYER 4 still applies: ` +
     `the implementer closing its own card still does not judge). Nothing was closed.`
   );
 }

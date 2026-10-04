@@ -228,7 +228,7 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
 
   it("isAnswerLanded: só o que foi DIGITADO no card de quem dirige conta como resposta", () => {
     // `delivered` (o agente leu) e `parked` (está na fila mid-turn do destino —
-    // "já está lá, não reenvie", send-settle-decision.ts) são resposta.
+    // "já está lá, não reenvie") são resposta.
     expect(isAnswerLanded("delivered")).toBe(true);
     expect(isAnswerLanded("parked")).toBe(true);
     // AUSÊNCIA HONESTA: fila (ainda não digitado), falha, cancelamento e o

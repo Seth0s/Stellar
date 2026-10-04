@@ -13,11 +13,15 @@
  * the filesystem, never intercept `git add`, never judge gate output.
  */
 
+import { describeGateLine, gatesFromJson, gatesToJson, normalizeGateList, sameGateList, type GateSpec } from "./gate-declaration";
+
 export type TaskContract = {
   /** Paths / globs the agent may touch. Empty/absent = undeclared. */
   territory: string[] | null;
-  /** Commands the agent must run before declaring success. */
-  gates: string[] | null;
+  /** Commands the app must run before declaring success. A gate is a string
+   * (as always) or `{ cmd, exclusive: "machine" }` — the exclusive one runs
+   * LAST, under the machine-wide lock (task ff24b36d). */
+  gates: GateSpec[] | null;
   /** false = do not commit. null = undeclared (not "allowed"). */
   allowCommit: boolean | null;
   /** Top-level keys required on an accepted (non-failure) report. */
@@ -92,12 +96,13 @@ export function parseTaskContractInput(input: TaskContractInput): TaskContractPa
     if (input.gates === null) {
       contract.gates = null;
     } else {
-      const list = normalizeStringList(input.gates);
+      const list = normalizeGateList(input.gates);
       if (list === null && input.gates !== null) {
         return {
           ok: false,
           field: "gates",
-          error: 'gates must be an array of non-empty strings (or omitted/null), got a value that is not',
+          error:
+            'gates must be an array of non-empty strings or { cmd, exclusive: "machine" } objects (or omitted/null), got a value that is not',
         };
       }
       contract.gates = list;
@@ -144,8 +149,8 @@ export function territoryToSql(list: string[] | null | undefined): string | null
   return list && list.length > 0 ? JSON.stringify(list) : null;
 }
 
-export function gatesToSql(list: string[] | null | undefined): string | null {
-  return list && list.length > 0 ? JSON.stringify(list) : null;
+export function gatesToSql(list: GateSpec[] | null | undefined): string | null {
+  return gatesToJson(list);
 }
 
 export function reportSchemaToSql(list: string[] | null | undefined): string | null {
@@ -162,8 +167,8 @@ export function territoryFromSql(json: string | null | undefined): string[] | nu
   return normalizeStringList(safeParseJson(json));
 }
 
-export function gatesFromSql(json: string | null | undefined): string[] | null {
-  return normalizeStringList(safeParseJson(json));
+export function gatesFromSql(json: string | null | undefined): GateSpec[] | null {
+  return gatesFromJson(json);
 }
 
 export function reportSchemaFromSql(json: string | null | undefined): string[] | null {
@@ -221,7 +226,7 @@ export function appendTaskContract(brief: string | undefined, contract: TaskCont
   }
   if (contract.gates && contract.gates.length > 0) {
     lines.push("gates:");
-    for (const gate of contract.gates) lines.push(`- ${gate}`);
+    for (const gate of contract.gates) lines.push(`- ${describeGateLine(gate)}`);
   }
   if (contract.allowCommit !== null) {
     lines.push(`allowCommit: ${contract.allowCommit ? "true" : "false"}`);
@@ -270,7 +275,7 @@ export type GatesSandboxDecision = { action: "allow" } | { action: "refuse"; err
 export function decideGatesSandboxAvailability(input: {
   tool?: string;
   /** Conjunto que a chamada quer gravar (já normalizado: `[]` vira `null`). */
-  gates: string[] | null | undefined;
+  gates: GateSpec[] | null | undefined;
   /** `isSandboxAvailable()` do lado de quem chama — a plataforma inteira. */
   sandboxAvailable: boolean;
 }): GatesSandboxDecision {
@@ -285,7 +290,7 @@ export function decideGatesSandboxAvailability(input: {
 /** AGENT-FACING — DO NOT TRANSLATE. English verbs in Portuguese sentences,
  * `[de: stellar]`, same shape as every other refusal the bus returns, and it
  * TEACHES: names the measured fact and the way out. */
-export function describeGatesSandboxUnavailable(input: { tool?: string; gates: readonly string[] }): string {
+export function describeGatesSandboxUnavailable(input: { tool?: string; gates: readonly GateSpec[] }): string {
   return (
     `[de: stellar] ${input.tool ?? "create_task/update_task"} refused: \`gates\` are commands the APP RUNS, ` +
     `and the app only runs them confined — on this system there is no sandbox (bubblewrap/bwrap), so the ` +
@@ -322,15 +327,6 @@ export function describeGatesSandboxUnavailable(input: { tool?: string; gates: r
  * (`getTaskCards(taskId)`); esta função não lê nada — recebe a marca.
  */
 
-/** Igualdade de conjunto ORDENADA: ordem é execução (mudar a ordem muda o
- * que roda e em que ordem), então uma permutação é um conjunto novo. */
-function sameGateSet(a: readonly string[] | null, b: readonly string[] | null): boolean {
-  const left = a ?? [];
-  const right = b ?? [];
-  if (left.length !== right.length) return false;
-  return left.every((gate, i) => gate === right[i]);
-}
-
 export type GatesAuthorshipDecision =
   | { action: "allow" }
   | { action: "allow-and-record"; note: string }
@@ -339,14 +335,16 @@ export type GatesAuthorshipDecision =
 export function decideGatesAuthorship(input: {
   tool?: string;
   /** Conjunto que a chamada quer gravar (já normalizado pelo parse do contrato). */
-  gates: string[] | null | undefined;
+  gates: GateSpec[] | null | undefined;
   /** Conjunto que a task TEM hoje (`null` no create). */
-  current: string[] | null | undefined;
+  current: GateSpec[] | null | undefined;
   boardId: string;
   orchestratorCardId: string | null | undefined;
   requesterId: string | null | undefined;
 }): GatesAuthorshipDecision {
-  if (sameGateSet(input.gates ?? null, input.current ?? null)) return { action: "allow" };
+  // Igualdade ORDENADA: ordem é execução (mudar a ordem muda o que roda e em
+  // que ordem), então uma permutação é um conjunto novo.
+  if (sameGateList(input.gates ?? null, input.current ?? null)) return { action: "allow" };
   const mark =
     typeof input.orchestratorCardId === "string" && input.orchestratorCardId.trim().length > 0
       ? input.orchestratorCardId.trim()
@@ -375,7 +373,7 @@ export function decideGatesAuthorship(input: {
 
 export function describeGatesAuthorshipRefusal(input: {
   tool?: string;
-  gates: readonly string[];
+  gates: readonly GateSpec[];
   boardId: string;
   orchestratorCardId: string;
   requesterId: string | null;

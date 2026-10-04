@@ -138,6 +138,9 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       // superfície — sem o bump um bus na 8 descartaria os dois em silêncio e o
       // cenário que prendeu SEIS tasks continuaria ponta-a-ponta.
       9: "ceef0d5170318f4b",
+      // Protocol 10 — `gate-lock` entrou na CLI (task ff24b36d): comando pesado
+      // sob o lock do gate-runner. cmd novo é mudança de superfície.
+      10: "7d52fcd2f5882401",
     };
     expect(
       hash,

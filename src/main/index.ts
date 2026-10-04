@@ -12,7 +12,7 @@ import {
   session,
   shell,
 } from "electron";
-import { appendFileSync, chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -55,7 +55,7 @@ import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
-import { checkAgentAvailability, providerById, refreshProviderReadiness, type SpawnOpts } from "./providers";
+import { checkAgentAvailability, providerById, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
 import { getProviderUsage } from "./provider-usage";
 import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
@@ -151,6 +151,7 @@ import { decideSingleInstancePolicy, describeSingleInstanceRefusal } from "./sin
 import { createNotifyCoalescer } from "./notify-coalescer";
 import {
   APP_NAME,
+  DB_BASENAME,
   SOCK_BASENAME,
   applyUserDataMigration,
   decideUserDataMigration,
@@ -158,6 +159,22 @@ import {
   probeLegacyInstanceLive,
   readMigrationFsSnapshot,
 } from "./user-data-migration";
+import {
+  bootstrapProfiles,
+  createProfile,
+  describeProfilesState,
+  profileDirectory,
+  readProfilesRegistry,
+  renameProfile,
+  setDefaultProfile,
+  setProfileHomeMode,
+} from "./profiles";
+import { isProviderHomeMode, planConfigHome, workHomeToolForProvider } from "./config-home-decision";
+import { buildRelaunchArgs, isProfileKind, isValidProfileName, parseProfileArg } from "./profiles-decision";
+import { readLocalIdentityFile, setMachineIdentityDir } from "./local-identity";
+import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth";
+import { resolveCloudApiBaseUrl } from "./cloud-auth-decision";
+import { hostname } from "node:os";
 import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
 import { ACBRIDGE_PROTOCOL } from "./acbridge-protocol-decision";
 
@@ -378,8 +395,201 @@ if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
   app.quit();
 }
 
+// ---------------------------------------------------------------------
+// PERFIS LOCAIS — bootstrap SÍNCRONO, no topo do módulo (BACKEND_V1.md §3/§7.1).
+//
+// POR QUE AQUI E SÍNCRONO: `app.setPath("userData"/"sessionData")` só tem
+// efeito ANTES do evento `ready`. `whenReady()` é assíncrono — o `ready` pode
+// disparar durante um `await` —, então rodar síncrono aqui é o que garante que
+// `createWindow()` (store, socket, MCP) já veja o diretório do perfil.
+//
+// ORDEM, e por quê:
+//  1. O lock de instância única ACIMA foi pedido sob a RAIZ (antes do
+//     setPath): continua UM por máquina, não um por perfil — dois perfis não
+//     abrem ao mesmo tempo (§3).
+//  2. A migração de identidade agent-canvas→stellar roda aqui quando é
+//     seguro. O probe do sock é assíncrono; sem sock legado ele devolveria
+//     false, então migrar é seguro sem esperar. Com sock presente E raiz
+//     vazia, adia-se para o `whenReady` (que mantém o probe real).
+//  3. O bootstrap move a raiz → `profiles/<pessoal>/` e resolve o perfil
+//     (`--profile=<id>` ou o padrão do registro).
+//  4. `setPath` aponta userData E sessionData para o perfil: sessionData
+//     separado é o que isola localStorage/cookies do Chromium entre perfis
+//     (§3: "nada de um perfil fica visível no outro"). Custo aceito e
+//     documentado: os caches do Chromium passam a ser por perfil.
+// ---------------------------------------------------------------------
+const BASE_USER_DATA = app.getPath("userData");
+const legacyDir = legacyUserDataDir(BASE_USER_DATA);
+const legacySock = join(legacyDir, SOCK_BASENAME);
+/** `profile_id` aberto nesta execução (a raiz é `BASE_USER_DATA`). */
+let activeProfileId: string | null = null;
+/** Bootstrap adiado para o `whenReady` (sock legado + raiz vazia): este boot
+ *  roda sem perfil; o próximo migra. Nada é perdido. */
+let legacyMigrationDeferred = false;
+/** O bootstrap abortou (registro corrompido/futuro): `whenReady` não abre. */
+let profileBootstrapAborted = false;
+
+if (!existsSync(legacySock)) {
+  // Sem sock legado, `probeLegacyInstanceLive` seria false: a migração de
+  // identidade pode rodar síncrona e com segurança.
+  const migrationDecision = decideUserDataMigration(readMigrationFsSnapshot(legacyDir, BASE_USER_DATA, false));
+  if (migrationDecision.action === "abort") {
+    const messages: Record<typeof migrationDecision.reason, string> = {
+      "legacy-instance-live":
+        `[stellar] Recusando start: instância legada ainda escuta em ${legacySock}. ` +
+        `Feche todos os cards/processos agent-canvas antes de abrir o Stellar com a identidade nova.`,
+      "partial-interrupted":
+        `[stellar] Migração incompleta em ${BASE_USER_DATA} (marcador ${join(BASE_USER_DATA, ".migration-in-progress")}). ` +
+        `Remova o destino parcial à mão se for seguro, ou restaure a partir de ${legacyDir} — não apague o legado sem confirmação.`,
+      "target-conflict":
+        `[stellar] ${BASE_USER_DATA} já tem agent-canvas.db sem marcador de migração. ` +
+        `Não vou sobrescrever. Resolva o conflito antes de abrir.`,
+    };
+    console.error(messages[migrationDecision.reason]);
+    app.quit();
+    profileBootstrapAborted = true;
+  } else if (migrationDecision.action === "migrate") {
+    const result = applyUserDataMigration(legacyDir, BASE_USER_DATA);
+    if (!result.ok) {
+      console.error(`[stellar] Migração de userData falhou: ${result.error}`);
+      app.quit();
+      profileBootstrapAborted = true;
+    } else {
+      console.info(
+        `[stellar] Migração agent-canvas → stellar: copiados [${result.copied.join(", ")}] de ${legacyDir}. ` +
+          `Diretório legado intacto (reversível).`,
+      );
+    }
+  }
+} else if (!existsSync(join(BASE_USER_DATA, DB_BASENAME)) && existsSync(join(legacyDir, DB_BASENAME))) {
+  legacyMigrationDeferred = true;
+  console.warn(
+    `[stellar] sock legado em ${legacySock} com raiz vazia — adiando as migrações de identidade e de perfis para o boot ` +
+      `decidir com o probe real. Este boot roda SEM perfil; nada é perdido.`,
+  );
+}
+
+if (!profileBootstrapAborted && !legacyMigrationDeferred) {
+  // Nome semeado do perfil pessoal usa o override de idioma da MÁQUINA
+  // (locale.json na raiz), sem `app.getLocale()` — que só é confiável depois
+  // do ready. Sem override, vale o pt-BR (fonte do catálogo).
+  setLocale(createLocalePrefs(BASE_USER_DATA).getOverride() ?? "pt-BR");
+  const boot = bootstrapProfiles(BASE_USER_DATA, {
+    requestedId: parseProfileArg(process.argv),
+    now: Date.now(),
+    generateId: randomUUID,
+    defaultPersonalName: t("profiles.defaultPersonalName"),
+  });
+  if (!boot.ok) {
+    console.error(boot.message);
+    if (boot.kind === "backup-failed") {
+      // Cópia de segurança falhou: NÃO migra e NÃO sai — abre no layout
+      // ANTERIOR (raiz), sem perder nada. O próximo boot tenta de novo.
+    } else {
+      app.quit();
+      profileBootstrapAborted = true;
+    }
+  } else {
+    for (const notice of boot.notices) console.warn(notice);
+    activeProfileId = boot.profileId;
+    app.setPath("userData", boot.profileDir);
+    // localStorage/cookies/caches do Chromium por perfil — isolamento do §3.
+    app.setPath("sessionData", boot.profileDir);
+    // `user_id`/`install_id` continuam sendo da MÁQUINA (raiz) e iguais em
+    // todo perfil (§3, item 5): a casca de identidade adota a canônica daqui.
+    setMachineIdentityDir(BASE_USER_DATA);
+    if (boot.migrated) {
+      console.info(
+        `[stellar] perfis: raiz migrada para ${boot.profileDir} ` +
+          `(${boot.entriesMoved.length} entradas; manifesto em profiles-migration.backup.json).`,
+      );
+    } else {
+      console.info(`[stellar] perfis: abrindo ${boot.profileDir}`);
+    }
+  }
+}
+
+/** Serviço de login na conta Stellar (A2). Criado no `whenReady` (safeStorage
+ *  exige o app pronto) e usado pelos handlers IPC registrados em createWindow. */
+let cloudAuth: CloudAuth | null = null;
+
+/** user_id/install_id locais para o login (§3: anexar a conta ao user_id local).
+ *  Lê a cópia do perfil; antes de o store abrir (primeiro boot), cai na canônica
+ *  da máquina. `null` = ainda não há identidade. */
+function readCloudIdentity(): { userId: string; installId: string } | null {
+  const identity = readLocalIdentityFile(app.getPath("userData")) ?? readLocalIdentityFile(BASE_USER_DATA);
+  return identity ? { userId: identity.user_id, installId: identity.install_id } : null;
+}
+
+/** Abre a URL do login no navegador do sistema. `STELLARCLOUD_AUTH_BROWSER=log`
+ *  NÃO abre nada: escreve a URL no stderr para o smoke/agente fazer o papel do
+ *  navegador (seam de teste, como os providers falsos). */
+function openCloudUrl(url: string): void {
+  if (process.env.STELLARCLOUD_AUTH_BROWSER === "log") {
+    process.stderr.write(`[cloud-auth] STELLARCLOUD_AUTH_URL=${url}\n`);
+    return;
+  }
+  void shell.openExternal(url).catch((err) => {
+    console.error("[cloud-auth] não deu para abrir o navegador:", err);
+  });
+}
+
+/** Estado da conta para o IPC; `logged-out` quando o serviço ainda não subiu. */
+function cloudStatusOrLoggedOut(): CloudStatus {
+  return cloudAuth?.getStatus() ?? { state: "logged-out", apiBaseUrl: resolveCloudApiBaseUrl(process.env), lastError: null };
+}
+
+/**
+ * A3c (P5) — a casa de config/login do provider no PERFIL ativo. `null` = nada
+ * a injetar (perfil `system`, sem perfil, ou casca sem agente).
+ */
+function resolveProviderHomeForActiveProfile(
+  providerId: string,
+): { env: Record<string, string>; argv: string[]; notice: boolean } | null {
+  if (!activeProfileId) return null;
+  const finding = readProfilesRegistry(BASE_USER_DATA);
+  if (finding.kind !== "valid") return null;
+  const profile = finding.registry.profiles.find((p) => p.id === activeProfileId);
+  if (!profile) return null;
+  const declaration = providerById(providerId)?.configHome ?? null;
+  const plan = planConfigHome({
+    providerId,
+    homeMode: profile.homeMode,
+    profileDir: profileDirectory(BASE_USER_DATA, activeProfileId),
+    declaration,
+  });
+  if (plan.kind === "system") return null;
+  if (plan.kind === "unsupported") return { env: {}, argv: [], notice: true };
+  // A pasta do perfil nasce vazia no primeiro uso: o login da CLI acontece ali.
+  mkdirSync(plan.homeDir, { recursive: true });
+  return { env: plan.env, argv: plan.argv, notice: false };
+}
+
+/** A3c — estado da casa para a UI: modo do perfil ativo e suporte por provider. */
+function profileHomeStatus(): {
+  homeMode: "system" | "isolated" | null;
+  homeDirBase: string | null;
+  providers: { id: string; label: string; supported: boolean; tool: string | null }[];
+} {
+  const finding = readProfilesRegistry(BASE_USER_DATA);
+  const profile =
+    activeProfileId && finding.kind === "valid"
+      ? finding.registry.profiles.find((p) => p.id === activeProfileId) ?? null
+      : null;
+  const providers = PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => ({
+    id: p.id,
+    label: p.label,
+    supported: p.configHome !== undefined,
+    tool: workHomeToolForProvider(p.id),
+  }));
+  return {
+    homeMode: profile?.homeMode ?? null,
+    homeDirBase: profile ? join(profileDirectory(BASE_USER_DATA, profile.id), "homes") : null,
+    providers,
+  };
+}
+
 /** A versão do APP, independente de COMO o processo foi lançado.
- *
  * `app.getVersion()` responde a versão do `package.json` do diretório de app
  * que o Electron resolveu — que é o do repo quando o app sobe como
  * `electron .`, mas NÃO quando sobe como `electron out/main/index.js` (o modo
@@ -669,7 +879,9 @@ function createWindow() {
   // facing string is read (application menu + browser context menu below).
   // Override lives in locale.json under userData (not store.ts — board DB
   // is a different concern). Agent-facing strings never call `t()`.
-  const localePrefs = createLocalePrefs(app.getPath("userData"));
+  // Locale é da MÁQUINA, não do perfil (BACKEND_V1.md §3): lê o `locale.json`
+  // da RAIZ, não o do perfil — trocar de perfil não muda o idioma da UI.
+  const localePrefs = createLocalePrefs(BASE_USER_DATA);
   const systemLocale = app.getLocale();
   setLocale(resolveLocale(systemLocale, localePrefs.getOverride()));
   // PTY locale synthesis uses the OS preferred language
@@ -1300,6 +1512,14 @@ function createWindow() {
       }
       remoteServer?.broadcastPtyData(id, data);
     },
+    // A3c (P5): a casa de config/login por PERFIL (BACKEND_V1.md §5.5).
+    resolveProviderHome: (providerId) => resolveProviderHomeForActiveProfile(providerId),
+    // O card não separa por perfil: canal SEPARADO da saída do pty (uma TUI
+    // redesenha por cima de bytes injetados). O seletor de perfil mostra o
+    // aviso; o rodapé do card é follow-up (ver report).
+    onHomeNotice: (id, providerId) => {
+      safeSend(win, "pty:home-notice", id, providerId);
+    },
     onExit: (id, exitCode) => {
       safeSend(win, "pty:exit", id, exitCode);
       remoteServer?.broadcastPtyExit(id, exitCode);
@@ -1344,6 +1564,11 @@ function createWindow() {
       }
       safeSend(win, "pty:session-found", id, sessionId);
     },
+    // NÃO-SILÊNCIO (task ea71065e) — o watcher de sessão viu candidatos e não
+    // conseguiu atribuir nenhum (vários `<id>` no mesmo cwd). O card de task
+    // fica sem `session_id`; o bus avisa o ORQUESTRADOR do board. `messageBus`
+    // é criado depois desta wiring (null aqui) — a callback só roda em runtime.
+    onSessionWatchStuck: (id, reason) => messageBus?.notifySessionUnresolved(id, reason),
     // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — canal dedicado pro aviso
     // de resumeId inválido (ver `pty-registry.ts`'s doc comment em
     // `onResumeInvalid`): DOM de verdade no rodapé do card
@@ -2035,7 +2260,7 @@ function createWindow() {
         switch (c.kind) {
           case "terminal":
           case "chat":
-            return { ...base, provider: c.provider, cwd: c.cwd };
+            return { ...base, provider: c.provider, cwd: c.cwd, resume_id: c.resume_id };
           case "files":
           case "changes":
             return { ...base, provider: "", cwd: c.cwd };
@@ -2240,6 +2465,7 @@ function createWindow() {
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
     getReport: (cardId, afterSeq) => store.getReport(cardId, afterSeq),
+    getTaskVerdicts: (taskId) => store.getTaskVerdicts(taskId).map((v) => ({ verdict: v.verdict, at: v.at })),
     // Task d7fa2d58 — a leitura que NÃO apodrece (`seq`, o id do servidor) e a
     // ambiguidade de um SLOT (`card_id`), para o `get_report` poder DIZER a que
     // task o relatório pertence em vez de devolver o de outra em silêncio.
@@ -2297,6 +2523,31 @@ function createWindow() {
       const task = store.getTask(taskId);
       // Fatia 3b-2 (ab83ba5f): com o link, o mesmo aviso por janela.
       if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
+    },
+    // RESERVA DE TASKS POR CARD (task 377a6029) — thin wrappers do store. O
+    // link RESERVADO não entrega nada: só grava a fila. O `reserveTaskCard`
+    // também empurra a Fila (o card mudou de vínculo).
+    reserveTaskCard: (taskId, cardId, profile) => {
+      const changes = store.reserveTaskCard(taskId, cardId, profile);
+      const task = store.getTask(taskId);
+      if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
+      return changes;
+    },
+    listReservationsForCard: (cardId) => store.listReservationsForCard(cardId),
+    activateReservedTaskCard: (taskId, cardId) => {
+      const changes = store.activateReservedTaskCard(taskId, cardId);
+      const task = store.getTask(taskId);
+      if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
+      return changes;
+    },
+    reorderReservedTaskCards: (cardId, taskIds) => store.reorderReservedTaskCards(cardId, taskIds),
+    listLiveImplementersForTask: (taskId) => store.listLiveImplementersForTask(taskId),
+    moveReservedTaskCards: (fromCardId, toCardId) => {
+      const moved = store.moveReservedTaskCards(fromCardId, toCardId);
+      // A Fila precisa ver a mudança de dono da reserva sem reload.
+      const anyTask = store.listReservationsForCard(toCardId)[0];
+      if (anyTask) taskNotifyCoalescer.notify(store.getTask(anyTask.task_id)?.board_id ?? "");
+      return moved;
     },
     // TROCA DE CARD (task e8802e32) — a transacao vive no store; aqui so a
     // ponte. A Fila precisa ver a mudanca sem reload (o chip de papel muda e
@@ -2597,6 +2848,10 @@ function createWindow() {
     if (typeof id !== "string") return { ok: false as const, error: "invalid delivery id" };
     return messageBus!.handleRequest({ cmd: "get_delivery", id });
   });
+  // GATE-LOCK (task ff24b36d) — leitura passiva para o indicador da Fila: quem
+  // segura/espera cada lock de gate AGORA. Nenhum estado novo aqui; a verdade
+  // mora em gate-lock.ts (main).
+  ipcMain.handle("bus:gate-lock-status", () => messageBus!.handleRequest({ cmd: "gate_lock_status" }));
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
@@ -2982,6 +3237,18 @@ function createWindow() {
       if (res.ok && boardId) notifyTaskChanged(boardId);
       return res;
     },
+  );
+  // GAVETA (task 377a6029) — a fila de reservas de um card. Leitura pura e as
+  // três ações do card ("começar agora", "soltar reserva", reordenar).
+  ipcMain.handle("store:tasks:reservations:list", (_e, cardId: string) => messageBus?.handleRequest({ cmd: "list_reservations", cardId }));
+  ipcMain.handle("store:tasks:reservations:reorder", (_e, cardId: string, taskIds: string[]) =>
+    messageBus?.handleRequest({ cmd: "reorder_reservations", cardId, taskIds }),
+  );
+  ipcMain.handle("store:tasks:reservations:start", (_e, taskId: string, cardId: string) =>
+    messageBus?.handleRequest({ cmd: "start_reservation", taskId, cardId, requesterId: undefined }),
+  );
+  ipcMain.handle("store:tasks:reservations:release", (_e, taskId: string, cardId: string) =>
+    messageBus?.handleRequest({ cmd: "release_reservation", taskId, cardId, requesterId: undefined }),
   );
   // RODADA 4 — criar task pela UI do quadro (coluna "a fazer"). NÃO passa
   // por message-bus/`create_task` de propósito: aquele caminho força
@@ -3748,6 +4015,72 @@ function createWindow() {
     return { locale, override: next, systemLocale };
   });
 
+  // ---- PERFIS LOCAIS (BACKEND_V1.md §3/§7.1) ------------------------------
+  // O registro e `profiles/` vivem na RAIZ (`BASE_USER_DATA`), não no perfil.
+  // Trocar NÃO copia nada: grava o padrão e relança com `--profile=<id>`; o
+  // bootstrap do topo do módulo reabre nele (§3).
+  ipcMain.handle("profiles:list", () => describeProfilesState(BASE_USER_DATA, activeProfileId));
+
+  ipcMain.handle("profiles:create", (_e, input: unknown) => {
+    const rec = (typeof input === "object" && input !== null ? input : {}) as { name?: unknown; kind?: unknown };
+    const state = () => describeProfilesState(BASE_USER_DATA, activeProfileId);
+    if (typeof rec.name !== "string" || !isValidProfileName(rec.name)) {
+      return { ok: false as const, reason: "invalid-name" as const, state: state() };
+    }
+    const kind = isProfileKind(rec.kind) ? rec.kind : "team";
+    const result = createProfile(BASE_USER_DATA, { name: rec.name, kind, now: Date.now(), generateId: randomUUID });
+    if (!result.ok) return { ok: false as const, reason: result.reason, state: state() };
+    return { ok: true as const, state: state() };
+  });
+
+  ipcMain.handle("profiles:rename", (_e, id: unknown, name: unknown) => {
+    const state = () => describeProfilesState(BASE_USER_DATA, activeProfileId);
+    if (typeof id !== "string" || typeof name !== "string") {
+      return { ok: false as const, reason: "invalid-name" as const, state: state() };
+    }
+    const result = renameProfile(BASE_USER_DATA, { id, name });
+    if (!result.ok) return { ok: false as const, reason: result.reason, state: state() };
+    return { ok: true as const, state: state() };
+  });
+
+  ipcMain.handle("profiles:switch", (_e, id: unknown) => {
+    if (typeof id !== "string") return { ok: false as const, reason: "unknown-profile" as const };
+    const target = describeProfilesState(BASE_USER_DATA, activeProfileId).profiles.find((p) => p.id === id);
+    if (!target) return { ok: false as const, reason: "unknown-profile" as const };
+    // Perfil cujo diretório sumiu: recusa útil (não oferece vazio).
+    if (!target.openable) return { ok: false as const, reason: "missing-directory" as const };
+    const set = setDefaultProfile(BASE_USER_DATA, id);
+    if (!set.ok) return { ok: false as const, reason: set.reason ?? "unknown-profile" };
+    // Grava o padrão e relança com a flag explícita (remove flags antigas).
+    app.relaunch({ args: buildRelaunchArgs(process.argv.slice(1), id) });
+    app.exit(0);
+    return { ok: true as const };
+  });
+
+  // ---- CASA DAS CLIs POR PERFIL (A3c/P5) ----------------------------------
+  ipcMain.handle("profiles:home-status", () => profileHomeStatus());
+  ipcMain.handle("profiles:set-home-mode", (_e, id: unknown, mode: unknown) => {
+    if (typeof id !== "string" || !isProviderHomeMode(mode)) {
+      return { ok: false as const, reason: "invalid-home-mode" as const, home: profileHomeStatus() };
+    }
+    const res = setProfileHomeMode(BASE_USER_DATA, id, mode);
+    if (!res.ok) return { ok: false as const, reason: res.reason, home: profileHomeStatus() };
+    return { ok: true as const, state: describeProfilesState(BASE_USER_DATA, activeProfileId), home: profileHomeStatus() };
+  });
+
+  // ---- CONTA STELLAR (A2) -------------------------------------------------
+  // O login roda no main (listener loopback + safeStorage do perfil); o
+  // renderer só lê o estado e dispara a ação. `cloud:status-changed` é
+  // empurrado quando o estado muda (o login completa no navegador, depois).
+  ipcMain.handle("cloud:status", () => cloudStatusOrLoggedOut());
+  ipcMain.handle("cloud:login", (_e, provider: unknown, email: unknown) => {
+    if (!cloudAuth) return cloudStatusOrLoggedOut();
+    const p = provider === "email" ? "email" : "github";
+    return cloudAuth.beginLogin(p, typeof email === "string" && email.trim() !== "" ? email.trim() : undefined);
+  });
+  ipcMain.handle("cloud:cancel", () => cloudAuth?.cancel() ?? cloudStatusOrLoggedOut());
+  ipcMain.handle("cloud:logout", () => cloudAuth?.logout() ?? cloudStatusOrLoggedOut());
+
   ipcMain.handle(
     "chat:send",
     (
@@ -4003,42 +4336,47 @@ app.whenReady().then(async () => {
   // acbridge, servidor MCP) de rodar aqui numa corrida onde `ready` dispara
   // antes do quit terminar.
   if (!gotSingleInstanceLock) return;
+  if (profileBootstrapAborted) return;
 
-  // Identity migration (`agent-canvas` → `stellar`) must run after setName
-  // (so userData is the new path) and before openStore inside createWindow.
-  // Does not delete the legacy directory. Aborts start if a pre-migration
-  // instance is still holding the legacy sock — new lock key ≠ old key.
+  // `newUserData` agora é o diretório do PERFIL (o `setPath` do topo do
+  // módulo já apontou userData/sessionData) — ou a raiz, no boot adiado.
+  // Todo o boot daqui para baixo lê este caminho.
   const newUserData = app.getPath("userData");
-  const legacyDir = legacyUserDataDir(newUserData);
-  const legacyLive = await probeLegacyInstanceLive(join(legacyDir, SOCK_BASENAME));
-  const decision = decideUserDataMigration(readMigrationFsSnapshot(legacyDir, newUserData, legacyLive));
-  if (decision.action === "abort") {
-    const messages: Record<typeof decision.reason, string> = {
-      "legacy-instance-live":
-        `[stellar] Recusando start: instância legada ainda escuta em ${join(legacyDir, SOCK_BASENAME)}. ` +
-        `Feche todos os cards/processos agent-canvas antes de abrir o Stellar com a identidade nova.`,
-      "partial-interrupted":
-        `[stellar] Migração incompleta em ${newUserData} (marcador ${join(newUserData, ".migration-in-progress")}). ` +
-        `Remova o destino parcial à mão se for seguro, ou restaure a partir de ${legacyDir} — não apague o legado sem confirmação.`,
-      "target-conflict":
-        `[stellar] ${newUserData} já tem agent-canvas.db sem marcador de migração. ` +
-        `Não vou sobrescrever. Resolva o conflito antes de abrir.`,
-    };
-    console.error(messages[decision.reason]);
-    app.quit();
-    return;
-  }
-  if (decision.action === "migrate") {
-    const result = applyUserDataMigration(legacyDir, newUserData);
-    if (!result.ok) {
-      console.error(`[stellar] Migração de userData falhou: ${result.error}`);
+
+  if (legacyMigrationDeferred) {
+    // Só no caso adiado a migração de identidade assíncrona roda aqui: o probe
+    // real do sock decide. Este boot roda SEM perfil; o próximo (raiz já
+    // povoada) faz a migração de perfis. Nada é perdido.
+    const legacyLive = await probeLegacyInstanceLive(legacySock);
+    const decision = decideUserDataMigration(readMigrationFsSnapshot(legacyDir, newUserData, legacyLive));
+    if (decision.action === "abort") {
+      const messages: Record<typeof decision.reason, string> = {
+        "legacy-instance-live":
+          `[stellar] Recusando start: instância legada ainda escuta em ${legacySock}. ` +
+          `Feche todos os cards/processos agent-canvas antes de abrir o Stellar com a identidade nova.`,
+        "partial-interrupted":
+          `[stellar] Migração incompleta em ${newUserData} (marcador ${join(newUserData, ".migration-in-progress")}). ` +
+          `Remova o destino parcial à mão se for seguro, ou restaure a partir de ${legacyDir} — não apague o legado sem confirmação.`,
+        "target-conflict":
+          `[stellar] ${newUserData} já tem agent-canvas.db sem marcador de migração. ` +
+          `Não vou sobrescrever. Resolva o conflito antes de abrir.`,
+      };
+      console.error(messages[decision.reason]);
       app.quit();
       return;
     }
-    console.info(
-      `[stellar] Migração agent-canvas → stellar: copiados [${result.copied.join(", ")}] de ${legacyDir}. ` +
-        `Diretório legado intacto (reversível).`,
-    );
+    if (decision.action === "migrate") {
+      const result = applyUserDataMigration(legacyDir, newUserData);
+      if (!result.ok) {
+        console.error(`[stellar] Migração de userData falhou: ${result.error}`);
+        app.quit();
+        return;
+      }
+      console.info(
+        `[stellar] Migração agent-canvas → stellar: copiados [${result.copied.join(", ")}] de ${legacyDir}. ` +
+          `Diretório legado intacto (reversível).`,
+      );
+    }
   }
 
   // GATILHO do hot-reload (task 510df7b9): a leitura do boot vira a LINHA DE
@@ -4604,7 +4942,29 @@ app.whenReady().then(async () => {
     return { ok: true, view: providersPageView() };
   });
 
+  // Login na conta (A2): criado depois de `newUserData` existir e antes de
+  // createWindow, que registra os handlers que o usam. `safeStorage` já está
+  // disponível aqui (app pronto). A renovação proativa roda a cada 60s.
+  cloudAuth = createCloudAuth({
+    apiBaseUrl: resolveCloudApiBaseUrl(process.env),
+    dataDir: newUserData,
+    identity: readCloudIdentity,
+    openUrl: openCloudUrl,
+    deviceLabel: hostname(),
+    autoRenewMs: 60_000,
+  });
+  app.once("will-quit", () => cloudAuth?.dispose());
+
   createWindow();
+
+  // Empurra o estado da conta quando muda (login fecha no navegador depois) e
+  // tenta restaurar a sessão guardada, para a Home já abrir logada.
+  if (cloudAuth) {
+    cloudAuth.onStatusChanged((status) => {
+      if (mainWindow) safeSend(mainWindow, "cloud:status-changed", status);
+    });
+    void cloudAuth.restore();
+  }
   void refreshUserEnv().then(() => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) safeSend(win, "agents:availability-stale", userEnvSnapshot().source);

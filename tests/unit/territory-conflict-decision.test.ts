@@ -95,3 +95,60 @@ describe("decideTerritoryConflict", () => {
     expect(decision.ok).toBe(true);
   });
 });
+
+/**
+ * DEFEITO MEDIDO (2026-10-04, board 64, raiz /home/lucas/Workplace/Projects):
+ * o board tem tasks de dois repos ao mesmo tempo (Stellar e StellarPage). A
+ * comparação usava só a string do caminho relativo, ignorando a pasta de
+ * trabalho da task — `tests/unit/**` de um repo "colidia" com
+ * `tests/unit/x.test.ts` do outro. Cada entrada RELATIVA resolve contra o
+ * `cwd` da PRÓPRIA task (senão a raiz do board); entrada absoluta fica como
+ * está.
+ */
+describe("decideTerritoryConflict — resolução por cwd da própria task", () => {
+  it("(a) relativo com cwd A vs relativo com cwd B (mesmo sufixo, repos diferentes): SEM conflito", () => {
+    const decision = decideTerritoryConflict({
+      taskId: "t1",
+      territory: ["tests/unit/**"],
+      cwd: "/repoA",
+      activeTasks: [{ taskId: "t2", territory: ["tests/unit/x.test.ts"], cwd: "/repoB" }],
+    });
+    expect(decision.ok).toBe(true);
+  });
+
+  it("(b) mesmo par com o MESMO cwd: conflito (comportamento de hoje preservado)", () => {
+    const decision = decideTerritoryConflict({
+      taskId: "t1",
+      territory: ["tests/unit/**"],
+      cwd: "/repoA",
+      activeTasks: [{ taskId: "t2", territory: ["tests/unit/x.test.ts"], cwd: "/repoA" }],
+    });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.conflictingTaskId).toBe("t2");
+      expect(decision.mineResolved).toBe("/repoA/tests/unit/**");
+      expect(decision.theirsResolved).toBe("/repoA/tests/unit/x.test.ts");
+      expect(decision.error).toContain("/repoA/tests/unit/x.test.ts");
+    }
+  });
+
+  it("(c) relativo com cwd A vs absoluto DENTRO de A: conflito", () => {
+    const decision = decideTerritoryConflict({
+      taskId: "t1",
+      territory: ["tests/unit/**"],
+      cwd: "/repoA",
+      activeTasks: [{ taskId: "t2", territory: ["/repoA/tests/unit/x.test.ts"], cwd: "/repoB" }],
+    });
+    expect(decision.ok).toBe(false);
+  });
+
+  it("(d) relativo vs absoluto em OUTRO repo: SEM conflito", () => {
+    const decision = decideTerritoryConflict({
+      taskId: "t1",
+      territory: ["tests/unit/**"],
+      cwd: "/repoA",
+      activeTasks: [{ taskId: "t2", territory: ["/repoB/tests/unit/x.test.ts"], cwd: "/repoA" }],
+    });
+    expect(decision.ok).toBe(true);
+  });
+});

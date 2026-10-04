@@ -198,7 +198,7 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
       ) as Parameters<typeof createMessageBus>[1];
     }
 
-    it("view=summary usa o statement summary; sem view e view=full continuam no caminho largo", async () => {
+    it("view=summary usa o statement summary; sem view o default TAMBÉM é summary (task 6266d3e7); view=full é largo", async () => {
       dir = mkdtempSync(join(tmpdir(), "stellar-list-tasks-summary-wiring-"));
       const store = openStore(dir);
       const counts = { listTasks: 0, listTasksByBoard: 0, listTasksSummary: 0, listTasksSummaryByBoard: 0 };
@@ -235,23 +235,23 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
         expect(counts.listTasksByBoard).toBe(0);
         expect(counts.listTasks).toBe(0);
 
-        // Contrato do default intacto: sem `view`, caminho largo.
+        // Novo contrato (task 6266d3e7): sem `view`, o default é SUMMARY.
         const def = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
           ok: boolean;
           tasks: { id: string; prompt?: unknown }[];
         };
         expect(def.ok).toBe(true);
-        expect(counts.listTasks).toBe(1);
-        expect(counts.listTasksSummary).toBe(1);
+        expect(counts.listTasksSummary).toBe(2);
+        expect(counts.listTasks).toBe(0);
 
-        // E `view:"full"` explícito também continua largo.
+        // E `view:"full"` explícito continua largo.
         const full = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
           ok: boolean;
           tasks: { id: string; prompt?: unknown }[];
         };
         expect(full.ok).toBe(true);
-        expect(counts.listTasks).toBe(2);
-        expect(counts.listTasksSummary).toBe(1);
+        expect(counts.listTasks).toBe(1);
+        expect(counts.listTasksSummary).toBe(2);
         // O `full` de verdade continua trazendo o prompt — a prova de que a
         // economia do summary não vazou pro caminho largo.
         expect(full.tasks.find((t) => t.id === "t1")?.prompt).toBe("prompt secreto");

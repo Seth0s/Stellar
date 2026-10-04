@@ -80,6 +80,7 @@ import {
 } from "./providers";
 import builtinProvidersJson from "./data/providers.builtin.json";
 import type { ReadinessProbe } from "./provider-readiness-decision";
+import { parseConfigHomeDecl, type ConfigHomeDecl } from "./config-home-decision";
 import {
   SQL_IDENTIFIER_RE,
   type FileReadSpec,
@@ -136,6 +137,12 @@ export type DynamicProviderSpec = {
    * a UI não inventa texto de comando.
    */
   readiness?: ReadinessProbe | null;
+  /**
+   * A3c (P5) — o mecanismo que muda a pasta de config/login desta CLI
+   * (`{ env }` ou `{ flag }`); ausente = não separa por perfil. Vira
+   * `ProviderDef.configHome` no registro.
+   */
+  configHome?: ConfigHomeDecl;
   /**
    * Args FIXOS do binário — "flags que esta CLI sempre precisa", declaradas
    * uma vez e presentes em TODO spawn deste provider (2026-09-20, task
@@ -954,6 +961,16 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     baseArgs = parsedBaseArgs.args;
   }
 
+  // A3c (P5): o mecanismo de pasta por perfil, como DADO do spec.
+  const parsedConfigHome = parseConfigHomeDecl(value.configHome);
+  if (!parsedConfigHome.ok) {
+    return {
+      ok: false,
+      reason: refusal("configHome", 'an object like { "env": "CLAUDE_CONFIG_DIR" } or { "flag": "--config" }', value.configHome),
+    };
+  }
+  const configHome = parsedConfigHome.decl;
+
   // O efeito declarado sobre essas flags (ver o campo em
   // `DynamicProviderSpec`): booleano opcional, ausente é o caminho normal.
   // A PRONTIDÃO DECLARADA (task 1777060e). Sem ela, o app só sabe "o binário
@@ -1419,6 +1436,7 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
       installCommand,
       ...(readiness !== null ? { readiness } : {}),
       ...(baseArgs !== undefined ? { baseArgs } : {}),
+      ...(configHome !== null ? { configHome } : {}),
       ...(bypassesPermissionPrompts !== undefined ? { bypassesPermissionPrompts } : {}),
       capacity: {
         role,
@@ -2596,6 +2614,7 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
     // (provider-readiness-decision.ts). Sem probe, o def carrega `null` e a
     // resposta honesta é `unknown`.
     readiness: spec.readiness ? { ...spec.readiness, args: [...spec.readiness.args] } : null,
+    ...(spec.configHome ? { configHome: spec.configHome } : {}),
     capacity: {
       role: declared.role,
       systemPrompt:

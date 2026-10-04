@@ -102,6 +102,7 @@ describe("message-bus: link_task_card", () => {
       ["impl", "rev"].map((id) => ({ id, kind: "terminal", provider: "claude", cwd: "", label: null }));
     const upserted: TaskRow[] = [];
     const linked: Array<{ taskId: string; cardId: string; role: string }> = [];
+    const reserved: Array<{ taskId: string; cardId: string }> = [];
     const writes = opts.writes ?? [];
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
@@ -113,6 +114,11 @@ describe("message-bus: link_task_card", () => {
           return applied(t.status);
         },
         linkTaskCard: (taskId: string, cardId: string, role: string) => linked.push({ taskId, cardId, role }),
+        // RESERVA (task 377a6029): o caminho reservado grava SEM entregar.
+        reserveTaskCard: (taskId: string, cardId: string) => {
+          reserved.push({ taskId, cardId });
+          return 1;
+        },
         // Autorização de papel (05055482): requesterId presente no caminho
         // acbridge é a marca do board — é o fluxo que o teste exercita.
         getBoardOrchestratorCardId: (() => "orch") as never,
@@ -148,7 +154,7 @@ describe("message-bus: link_task_card", () => {
       requesterId: "orch",
       ...req,
     } as BusRequest)) as Record<string, unknown>;
-    return { res, upserted, linked, writes };
+    return { res, upserted, linked, reserved, writes };
   }
 
   function bodies(writes: Array<[string, string]>): Array<[string, string]> {
@@ -167,12 +173,36 @@ describe("message-bus: link_task_card", () => {
   it("implementer (default quando omitido): vira card_id principal via linkImplementerToTask", async () => {
     const { res, upserted, linked } = await run({ taskId: "t-link", cardId: "rev" });
     await flushDelivery();
-    expect(res).toEqual({ ok: true, taskId: "t-link", cardId: "rev", role: "implementer", notice: "queued" });
+    expect(res).toEqual({ ok: true, taskId: "t-link", cardId: "rev", role: "implementer", mode: "deliver", notice: "queued" });
     expect(upserted).toHaveLength(1);
     expect(upserted[0].card_id).toBe("rev");
     expect(upserted[0].status).toBe("pending");
     expect(upserted[0].statusProposed).toBe(true);
     expect(upserted[0].actor).toBe("agent");
+    expect(linked).toEqual([{ taskId: "t-link", cardId: "rev", role: "implementer" }]);
+  });
+
+  it("DEP PENDENTE (sem mode): RESERVA — grava a fila e NÃO entrega nada (fecha E7/E9b)", async () => {
+    const { res, linked, reserved, upserted, writes } = await run(
+      { taskId: "t-link", cardId: "rev" },
+      { existing: task({ deps_json: JSON.stringify(["dep1"]) }) },
+    );
+    await flushDelivery();
+    expect(res).toMatchObject({ ok: true, mode: "reserve" });
+    expect(linked).toEqual([]); // nada entregue
+    expect(upserted).toEqual([]); // não virou principal cardId
+    expect(reserved).toEqual([{ taskId: "t-link", cardId: "rev" }]);
+    expect(String(res.notice)).toContain("reserved");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("mode:'deliver' explícito força a entrega mesmo com dep pendente", async () => {
+    const { res, linked } = await run(
+      { taskId: "t-link", cardId: "rev", mode: "deliver" },
+      { existing: task({ deps_json: JSON.stringify(["dep1"]) }) },
+    );
+    await flushDelivery();
+    expect(res).toMatchObject({ ok: true, mode: "deliver" });
     expect(linked).toEqual([{ taskId: "t-link", cardId: "rev", role: "implementer" }]);
   });
 

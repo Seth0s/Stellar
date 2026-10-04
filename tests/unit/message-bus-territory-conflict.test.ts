@@ -164,6 +164,85 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
     expect(spawnParams).toHaveLength(1);
   });
 
+  it("(e) task sem cwd resolve contra a RAIZ DO BOARD — relativo casa absoluto dentro da raiz", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-territory-board-root-"));
+    const spawnParams: Array<Record<string, unknown>> = [];
+    const candidate = baseTask({ id: "candidate", cwd: null, territory_json: JSON.stringify(["tests/unit/**"]) });
+    const activeSibling = baseTask({
+      id: "active-sibling",
+      card_id: "777",
+      cwd: null,
+      territory_json: JSON.stringify(["/tmp/tests/unit/x.test.ts"]),
+    });
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: (id: string) => (id === "candidate" ? candidate : id === "active-sibling" ? activeSibling : undefined),
+        listTasks: () => [candidate, activeSibling],
+        isCardAlive: (id: string) => id === "777",
+        getTaskCards: () => [],
+        listTaskCardsForCard: () => [],
+        getBoardCwd: () => "/tmp", // raiz declarada do board
+        onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+          spawnParams.push(params);
+        },
+      }),
+    );
+
+    const res = (await bus.handleRequest({
+      cmd: "spawn_agent",
+      provider: "claude",
+      taskId: "candidate",
+      reason: "test",
+      requesterId: "orch",
+    } as BusRequest)) as { ok: boolean; error?: string };
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("active-sibling");
+    expect(res.error).toContain("ACTIVE");
+    expect(spawnParams).toHaveLength(0);
+  });
+
+  it("(f) CONTRACT CROSSING no brief NÃO lista task de outro repo — cwd por task", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-territory-crossing-"));
+    const spawned: Array<Record<string, unknown>> = [];
+    const candidate = baseTask({ id: "candidate", cwd: "/repoA", territory_json: JSON.stringify(["src/**"]) });
+    const sameRepoInactive = baseTask({ id: "same-repo-task", cwd: "/repoA", territory_json: JSON.stringify(["src/main/x.ts"]) });
+    const otherRepoInactive = baseTask({ id: "other-repo-task", cwd: "/repoB", territory_json: JSON.stringify(["src/main/y.ts"]) });
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: (id: string) =>
+          id === "candidate" ? candidate : id === "same-repo-task" ? sameRepoInactive : id === "other-repo-task" ? otherRepoInactive : undefined,
+        listTasks: () => [candidate, sameRepoInactive, otherRepoInactive],
+        isCardAlive: (id: string) => id === "spawned-card",
+        getTaskCards: () => [],
+        listTaskCardsForCard: () => [],
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+          spawned.push(params);
+          bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
+        },
+      }),
+    );
+
+    const res = (await bus.handleRequest({
+      cmd: "spawn_agent",
+      provider: "claude",
+      taskId: "candidate",
+      reason: "test",
+      requesterId: "orch",
+    } as BusRequest)) as { ok: boolean; error?: string };
+
+    expect(res.ok).toBe(true);
+    expect(spawned).toHaveLength(1);
+    const brief = String(spawned[0].brief ?? "");
+    expect(brief).toContain("same-repo-task");
+    expect(brief).not.toContain("other-repo-task");
+  });
+
   it("reviewer não é bloqueado por território — revisão lê, não escreve", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-territory-spawn-reviewer-"));
     const spawnParams: Array<Record<string, unknown>> = [];
@@ -195,6 +274,46 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
       provider: "claude",
       taskId: "candidate",
       role: "reviewer",
+      reason: "test",
+      requesterId: "orch",
+    } as BusRequest)) as { ok: boolean; error?: string };
+
+    expect(res.ok).toBe(true);
+    expect(spawnParams).toHaveLength(1);
+  });
+
+  it("RESERVA não é execução: task só reservada (implementer `reserved`) NÃO bloqueia o spawn", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-territory-spawn-reserved-"));
+    const spawnParams: Array<Record<string, unknown>> = [];
+    const candidate = baseTask({ id: "candidate", territory_json: JSON.stringify(["vhosts/Backend/app/**"]) });
+    const reservedSibling = baseTask({
+      id: "reserved-sibling",
+      card_id: "777",
+      territory_json: JSON.stringify(["vhosts/Backend/app/**"]),
+    });
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: (id: string) => (id === "candidate" ? candidate : id === "reserved-sibling" ? reservedSibling : undefined),
+        listTasks: () => [candidate, reservedSibling],
+        isCardAlive: (id: string) => id === "777" || id === "spawned-card",
+        getTaskCards: () => [],
+        listTaskCardsForCard: () => [],
+        // O ÚNICO vínculo do irmão é uma RESERVA — nada foi entregue ainda.
+        listLiveImplementersForTask: (taskId: string) => (taskId === "reserved-sibling" ? [{ card_id: "777", reservation_state: "reserved" }] : []),
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+          spawnParams.push(params);
+          bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
+        },
+      }),
+    );
+
+    const res = (await bus.handleRequest({
+      cmd: "spawn_agent",
+      provider: "claude",
+      taskId: "candidate",
       reason: "test",
       requesterId: "orch",
     } as BusRequest)) as { ok: boolean; error?: string };

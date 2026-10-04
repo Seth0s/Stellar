@@ -206,7 +206,7 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
  * AGENT-FACING — ENGLISH ONLY, not i18n'd (agents have no locale).
  * See `src/shared/i18n/agent-facing.ts`. */
 export function describeStatusHeldWarning(authoritativeStatus: string, proposedStatus: string): string {
-  return `[de: stellar] update_task asked for status "${proposedStatus}" but the human status "${authoritativeStatus}" prevails — divergence flagged on the Fila board. To ask for the change (the human decides on the board), use request_task_status.`;
+  return `[de: stellar] update_task asked for status "${proposedStatus}" but the human status "${authoritativeStatus}" prevails — divergence flagged on the Queue board. To ask for the change (the human decides on the board), use request_task_status.`;
 }
 
 /** Answer 3 — a proposed status the WRITTEN domain does not keep. The one
@@ -346,7 +346,7 @@ export function retainStatusAsk(input: {
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd. Immediate return of request_task_status. */
 export function describeStatusAskParked(requestedStatus: string, authoritativeStatus: string): string {
-  return `[de: stellar] status request "${requestedStatus}" recorded — the human status "${authoritativeStatus}" stands until someone decides on the Fila board.`;
+  return `[de: stellar] status request "${requestedStatus}" recorded — the human status "${authoritativeStatus}" stands until someone decides on the Queue board.`;
 }
 
 export function describeStatusAskAlready(status: string): string {

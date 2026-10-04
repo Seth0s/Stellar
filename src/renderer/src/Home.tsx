@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { CloudAccount } from "./CloudAccount";
 import { ConstellationBg } from "./ConstellationBg";
 import { Icon } from "./icons";
+import { ProfileSelector } from "./ProfileSelector";
 import { SessionModal } from "./SessionModal";
 import { StellarMark } from "./StellarMark";
 import { groupByProject, type Board, type BoardCounts } from "./sessions";
@@ -85,9 +87,13 @@ export function Home({
           <StellarMark size={22} />
           {rootName}
         </h1>
-        <button className="primary" onClick={() => setModal({ mode: "create" })}>
-          {t("home.newSession")}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          <CloudAccount />
+          <ProfileSelector />
+          <button className="primary" onClick={() => setModal({ mode: "create" })}>
+            {t("home.newSession")}
+          </button>
+        </div>
       </div>
       {/* item 2 (DESIGN-BACKLOG.md) — the session list used to have no
           scroll container of its own, so a long list scrolled `.home`

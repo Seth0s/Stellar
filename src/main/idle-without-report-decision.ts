@@ -203,8 +203,9 @@ export type IdleWithoutReportDecision =
  *   - `parked` — o texto foi digitado e ficou na fila mid-turn do DESTINO, ou
  *     seja, está no card de quem dirige e vai ser lido quando o turno terminar.
  *     O autor já fez a parte dele; cobrar a resposta dele seria cobrar o que já
- *     foi entregue (ver `send-settle-decision.ts`, que chama isso de "já está
- *     lá, não reenvie").
+ *     foi entregue ("já está lá, não reenvie" — o assetamento tardio ao
+ *     remetente foi removido na task d42c119a, mas o veredito de ENTREGA aqui
+ *     continua valendo).
  *
  * Fora: `queued` (não foi digitado ainda), `failed` e `cancelled` (não chegou),
  * e `unconfirmed` — sem evidência não se afirma resposta, do mesmo jeito que

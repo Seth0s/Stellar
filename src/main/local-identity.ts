@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   decideLocalIdentity,
+  inspectIdentityFile,
   LOCAL_IDENTITY_FILENAME,
   LOCAL_IDENTITY_QUARANTINE_PREFIX,
   LOCAL_IDENTITY_SCHEMA_VERSION,
@@ -43,13 +44,61 @@ export type ResolvedLocalIdentity = {
    * pediu escrita OU quando a quarantena falhou e a escrita foi
    * cancelada para não destruir bytes sem preservar. */
   fileWritten: boolean;
+  /** A canônica da MÁQUINA foi criada nesta chamada (primeiro run). */
+  canonicalWritten: boolean;
+  /** Caminho da canônica, `null` quando nenhum diretório de máquina foi
+   * configurado (testes que resolvem um diretório solto). */
+  canonicalPath: string | null;
   /** Diagnóstico extra da casca (falha de quarantena/escrita), vazio
    * quando tudo correu como a decisão pediu. */
   note: string;
 };
 
+/**
+ * Identidade canônica da MÁQUINA (raiz do userData). `user_id`/`install_id`
+ * são da PESSOA e da MÁQUINA, não do perfil: este arquivo é a fonte que
+ * mantém os ids iguais em todos os perfis (BACKEND_V1.md §3, item 5). Cada
+ * perfil tem a sua cópia em `profiles/<id>/local-identity.json`, adotada
+ * daqui quando falta. Sem diretório configurado, a casca se comporta como
+ * antes (a identidade nasce/serve o próprio diretório passado).
+ */
+let machineIdentityDir: string | null = null;
+
+export function setMachineIdentityDir(dir: string | null): void {
+  machineIdentityDir = dir;
+}
+
+export function getMachineIdentityDir(): string | null {
+  return machineIdentityDir;
+}
+
+export function canonicalIdentityFilePath(dir: string): string {
+  return join(dir, LOCAL_IDENTITY_FILENAME);
+}
+
 export function identityFilePath(userDataDir: string): string {
   return join(userDataDir, LOCAL_IDENTITY_FILENAME);
+}
+
+/**
+ * Lê a identidade de um diretório SEM efeito colateral — não cria arquivo, não
+ * quarentena, não escreve espelho. É o que o login (A2) usa para mandar
+ * `user_id`/`install_id` (BACKEND_V1.md §3): ler para entrar não pode disparar
+ * escrita de identidade. `null` = arquivo ausente/ilegível/inutilizável.
+ */
+export function readLocalIdentityFile(userDataDir: string): LocalIdentity | null {
+  const path = identityFilePath(userDataDir);
+  if (!existsSync(path)) return null;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const finding = inspectIdentityFile(raw);
+  if (finding.kind === "valid") return finding.identity;
+  if (finding.kind === "future" && finding.identity) return finding.identity;
+  return null;
 }
 
 /**
@@ -70,6 +119,18 @@ export function resolveLocalIdentity(
   const now = opts.now ?? Date.now();
   const generateId = opts.generateId ?? randomUUID;
 
+  // A canônica da MÁQUINA (raiz), quando configurada. `null` = nenhum
+  // diretório de máquina (testes) → comportamento antigo, sem adoção.
+  const canonicalPath = machineIdentityDir ? canonicalIdentityFilePath(machineIdentityDir) : null;
+  let canonicalRaw: string | null = null;
+  if (canonicalPath && existsSync(canonicalPath)) {
+    try {
+      canonicalRaw = readFileSync(canonicalPath, "utf-8");
+    } catch {
+      canonicalRaw = "";
+    }
+  }
+
   let raw: string | null = null;
   if (existsSync(path)) {
     try {
@@ -84,6 +145,7 @@ export function resolveLocalIdentity(
   const decision = decideLocalIdentity({
     raw,
     dbMirror: opts.dbMirror ?? null,
+    canonicalRaw,
     generateId,
     now,
   });
@@ -91,6 +153,7 @@ export function resolveLocalIdentity(
   let quarantinePath: string | null = null;
   let note = "";
   let fileWritten = false;
+  let canonicalWritten = false;
 
   const fileThere = existsSync(path);
   let mayWrite = decision.writeFile;
@@ -107,22 +170,40 @@ export function resolveLocalIdentity(
     }
   }
 
-  if (mayWrite) {
+  function atomicWrite(target: string, identity: LocalIdentity): boolean {
     const payload = JSON.stringify({
       schema_version: LOCAL_IDENTITY_SCHEMA_VERSION,
-      user_id: decision.identity.user_id,
-      install_id: decision.identity.install_id,
-      created_at: decision.identity.created_at,
+      user_id: identity.user_id,
+      install_id: identity.install_id,
+      created_at: identity.created_at,
     });
-    const tmpPath = `${path}.tmp`;
+    const tmpPath = `${target}.tmp`;
+    writeFileSync(tmpPath, payload);
+    renameSync(tmpPath, target);
+    return true;
+  }
+
+  if (mayWrite) {
     try {
-      writeFileSync(tmpPath, payload);
-      renameSync(tmpPath, path);
-      fileWritten = true;
+      fileWritten = atomicWrite(path, decision.identity);
     } catch (e) {
       note = `escrita atômica falhou (${e instanceof Error ? e.message : String(e)}); identidade adotada em memória, arquivo pendente`;
     }
   }
 
-  return { identity: decision.identity, decision, quarantinePath, fileWritten, note };
+  // Estabelece a canônica da máquina no primeiro run (nenhuma existia): é o
+  // que faz os PRÓXIMOS perfis adotarem os mesmos ids. Nunca sobrescreve uma
+  // canônica existente; e quando o diretório resolvido É a canônica, não
+  // grava duas vezes o mesmo arquivo.
+  if (canonicalPath && canonicalRaw === null && canonicalPath !== path) {
+    try {
+      canonicalWritten = atomicWrite(canonicalPath, decision.identity);
+    } catch (e) {
+      note = note
+        ? `${note}; canônica da máquina não gravada (${e instanceof Error ? e.message : String(e)})`
+        : `canônica da máquina não gravada (${e instanceof Error ? e.message : String(e)})`;
+    }
+  }
+
+  return { identity: decision.identity, decision, quarantinePath, fileWritten, canonicalWritten, canonicalPath, note };
 }
