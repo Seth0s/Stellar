@@ -78,7 +78,10 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // BUMP 8→9 (task 23bed0fb): `send` ganhou `--link-task`/`--link-role`, ou seja
 // a FORMA do request mudou — um bus na 8 descartaria os campos em silêncio.
 // O número mora em DOIS lugares: aqui e em `src/main/acbridge-protocol-decision.ts`.
-const ACBRIDGE_PROTOCOL = 9;
+// BUMP 9→10 (task ff24b36d): cmds novos (`run_locked`, `gate_lock_status`) e
+// `gates` passa a aceitar `{cmd, exclusive}` além de string. Mesmo literal em
+// src/main/acbridge-protocol-decision.ts — o vitest trava os dois.
+const ACBRIDGE_PROTOCOL = 10;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -126,6 +129,7 @@ const USAGE =
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | unreported-work [limit] | " +
+  "gate-lock [--scope repo|machine] [--timeout <ms>] -- <command...> | " +
   "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] [--reason <text>] [--idempotency-key <key>] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
@@ -593,6 +597,39 @@ if (cmd === "version") {
   }
   if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> [--timeout <ms>] <js...>");
   request = { cmd: "browser_eval", target, js: jsParts.join(" "), timeoutMs };
+} else if (cmd === "gate-lock") {
+  // GATE-LOCK (task ff24b36d) — roda um comando PESADO sob o MESMO lock do
+  // gate-runner. Forma: `acbridge gate-lock [--scope repo|machine] [--timeout <ms>] -- <comando...>`.
+  const sep = rest.indexOf("--");
+  const flags = sep === -1 ? rest : rest.slice(0, sep);
+  const commandParts = sep === -1 ? [] : rest.slice(sep + 1);
+  let scope;
+  let timeoutMs;
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] === "--scope") {
+      scope = flags[i + 1];
+      i++;
+    } else if (flags[i] === "--timeout") {
+      timeoutMs = Number(flags[i + 1]);
+      i++;
+    } else {
+      fail("usage: acbridge gate-lock [--scope repo|machine] [--timeout <ms>] -- <command...>");
+    }
+  }
+  if (commandParts.length === 0) fail("usage: acbridge gate-lock [--scope repo|machine] [--timeout <ms>] -- <command...>");
+  if (scope !== undefined && scope !== "repo" && scope !== "machine") fail('gate-lock: --scope must be "repo" or "machine"');
+  request = {
+    cmd: "run_locked",
+    command: commandParts.join(" "),
+    cwd: process.cwd(),
+    scope,
+    timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+    // NÃO manda taskId: `ownTaskId` do env pode estar velho (um shell aninhado
+    // herda o de outro card) e o bus recusaria a chamada inteira por "no such
+    // task". O holder é derivado do VÍNCULO do card no bus, que é o dono da
+    // verdade.
+    requesterId: ownCardId,
+  };
 } else {
   fail(`${USAGE}\n${BASH_CARD_NOTE}`);
 }
@@ -601,22 +638,52 @@ if (cmd === "version") {
 // lembrar. O bus tira a chave antes do dispatch.
 request = { ...request, protocol: ACBRIDGE_PROTOCOL };
 
-const socket = net.connect({ path: sockPath }, () => {
-  socket.end(JSON.stringify(request) + "\n");
-});
+/** Uma conexão de ida-e-volta (uma linha de request, uma de resposta). */
+function sendOnce(req) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ path: sockPath }, () => {
+      socket.end(JSON.stringify(req) + "\n");
+    });
+    let buf = "";
+    socket.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+    });
+    socket.on("error", (err) => reject(err));
+    socket.on("close", () => {
+      const line = (buf.split("\n")[0] ?? "").trim();
+      try {
+        resolve(JSON.parse(line));
+      } catch {
+        reject(new Error("bad response from agent-canvas"));
+      }
+    });
+  });
+}
 
-let buf = "";
-socket.on("data", (chunk) => {
-  buf += chunk.toString("utf8");
-});
-socket.on("error", (err) => fail(err.message));
-socket.on("close", () => {
-  const line = (buf.split("\n")[0] ?? "").trim();
+async function main() {
+  // PREFLIGHT de fila (task ff24b36d, só no gate-lock): se o lock relevante já
+  // estiver ocupado, DIZ quem segura e quantos estão à frente ANTES de o
+  // comando bloquear. É cortesia — falhar aqui não impede o comando.
+  if (cmd === "gate-lock") {
+    try {
+      const status = await sendOnce({ cmd: "gate_lock_status", protocol: ACBRIDGE_PROTOCOL, cwd: process.cwd(), scope: request.scope });
+      const rel = status && status.relevant;
+      const holder = rel && rel.running && rel.running.holder;
+      const ahead = (rel && Array.isArray(rel.queue) ? rel.queue.length : 0) + (holder ? 1 : 0);
+      if (rel && ahead > 0) {
+        const who = holder ? `${holder.label}${holder.cardId ? ` (card ${holder.cardId})` : ""}` : "another caller";
+        process.stderr.write(`acbridge: gate-lock queued behind ${who} — ${ahead} ahead in the ${rel.scope} lock\n`);
+      }
+    } catch {
+      // cortesia
+    }
+  }
+
   let res;
   try {
-    res = JSON.parse(line);
-  } catch {
-    fail("bad response from agent-canvas");
+    res = await sendOnce(request);
+  } catch (err) {
+    fail(err.message);
     return;
   }
   if (!res.ok) {
@@ -636,6 +703,7 @@ socket.on("close", () => {
   // mas o agente precisa VER que está num acbridge atrasado — stderr, que
   // aparece na saída da tool junto com o resultado.
   if (typeof res.warning === "string" && res.warning) process.stderr.write(`acbridge: ${res.warning}\n`);
+  let exitCode = 0;
   if (cmd === "version") {
     const busProtocol = res.protocol;
     const verdict = busProtocol === ACBRIDGE_PROTOCOL ? "match" : "MISMATCH";
@@ -758,6 +826,18 @@ socket.on("close", () => {
   } else if (cmd === "browser-eval") {
     console.log(res.result);
     if (res.truncated) process.stderr.write("acbridge: eval result truncated\n");
+  } else if (cmd === "gate-lock") {
+    // A saída do comando como ela veio; o exit code REAL vira o exit code do
+    // acbridge (o agente pode encadear `&&`). Timeout → 124.
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
+    if (typeof res.waitedMs === "number" && res.waitedMs > 0) {
+      const h = res.holderWhileWaiting;
+      process.stderr.write(`acbridge: waited ${res.waitedMs}ms for the ${res.scope} lock${h ? ` behind ${h.label}` : ""}\n`);
+    }
+    exitCode = typeof res.exitCode === "number" ? res.exitCode : res.timedOut ? 124 : 1;
   }
-  finish(0);
-});
+  finish(exitCode);
+}
+
+await main();

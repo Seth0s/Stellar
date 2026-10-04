@@ -64,6 +64,29 @@ describe("decideContractCrossing", () => {
     });
     expect(got).toHaveLength(1);
   });
+
+  it("(f) território relativo de repos DIFERENTES não cruza — resolve contra o cwd de cada task", () => {
+    const got = decideContractCrossing({
+      taskId: "stellar",
+      territory: ["src/**"],
+      cwd: "/Projects/Stellar",
+      others: [
+        { taskId: "stellarpage", territory: ["src/**"], cwd: "/Projects/StellarPage" },
+        { taskId: "same-repo", territory: ["src/main/x.ts"], cwd: "/Projects/Stellar" },
+      ],
+    });
+    expect(got.map((c) => c.taskId)).toEqual(["same-repo"]);
+  });
+
+  it("a base passada pelo chamador (raiz do board, quando a task não tem cwd) ancora o relativo", () => {
+    const got = decideContractCrossing({
+      taskId: "eu",
+      territory: ["src/**"],
+      cwd: "/tmp",
+      others: [{ taskId: "outro", territory: ["/tmp/src/main/x.ts"], cwd: "/other" }],
+    });
+    expect(got.map((c) => c.taskId)).toEqual(["outro"]);
+  });
 });
 
 describe("describeContractCrossing — o LEMBRETE (nunca um gate)", () => {

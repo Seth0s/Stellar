@@ -531,6 +531,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process. A callerCardId supplied in the request body is never trusted to establish identity when that URL stamp is absent, so a raw external client remains anonymous and cannot inherit an autonomous board's consent.",
     );
 
+  /** UM gate declarado (task ff24b36d): a string de sempre, OU
+   * `{ cmd, exclusive: "machine" }` — este roda por ÚLTIMO, sob o lock global
+   * da máquina (nunca concorre com outro comando pesado). */
+  const GATE_SCHEMA = z.union([
+    z.string(),
+    z.object({ cmd: z.string(), exclusive: z.literal("machine") }),
+  ]);
+
   function buildServer(urlCardId?: string): McpServer {
     // Ver `caller-identity.ts` (achado crítico de escalada de privilégio,
     // card 337, 2026-09-11) pro modelo completo e o porquê da
@@ -560,7 +568,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "send_to_card",
       {
         description:
-          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO) — that immediacy is a MEASURED invariant (2026-09-13: a send that waited got retried by the MCP client and typed the same text twice). SILENCE MEANS DELIVERED: you will be told only if it does NOT land. When the item settles as anything other than a clean delivery (not confirmed, failed, cancelled, or parked in the target mid-turn queue without the agent seeing it), the SENDER (your card) receives a short one-line notice saying so, with the delivery id; a clean delivery produces NO extra line, so the common path adds nothing to your context. You can still poll get_delivery with the id yourself. The settled verdict: The settled verdict: The settled verdict: settled verdict: \"delivered\" = the agent has the text (turn started or mid-turn steer injected it); \"parked\" = a provider mid-turn queue accepted it (cursor follow-ups) and the agent has NOT seen it yet — distinct from FIFO queued; \"failed\" = still in the composer after every Enter retry, cleared — resend; \"unconfirmed\" = no evidence — read_card; \"cancelled\" = author exited/closed before typing started. On providers that declare a mid-turn queue, steer (default true) presses that provider's steer key once after a park so a correction reaches the live turn; pass steer:false to leave the text parked until the turn ends. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO. A single origin card may enqueue at most 5 deliveries to the same target within 10 seconds — further sends return ok:false (loop guard). When the author card's process exits, its not-yet-started queued sends are cancelled automatically.",
+          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO) — that immediacy is a MEASURED invariant (2026-09-13: a send that waited got retried by the MCP client and typed the same text twice). NO LATER NOTICE IS SENT (owner decision, 2026-10-04): the app does NOT message you afterwards about how the item settled. To read the settled verdict, poll get_delivery(id) — or list_deliveries — yourself. The settled verdict: \"delivered\" = the agent has the text (turn started or mid-turn steer injected it); \"parked\" = a provider mid-turn queue accepted it (cursor follow-ups) and the agent has NOT seen it yet — distinct from FIFO queued; \"failed\" = still in the composer after every Enter retry, cleared — resend; \"unconfirmed\" = no evidence — read_card; \"cancelled\" = author exited/closed before typing started. On providers that declare a mid-turn queue, steer (default true) presses that provider's steer key once after a park so a correction reaches the live turn; pass steer:false to leave the text parked until the turn ends. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO. A single origin card may enqueue at most 5 deliveries to the same target within 10 seconds — further sends return ok:false (loop guard). When the author card's process exits, its not-yet-started queued sends are cancelled automatically.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
@@ -826,11 +834,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           reason: z.string().optional().describe("Why you want this closed — shown to the human in the approval dialog"),
+          moveReservationsTo: z
+            .string()
+            .optional()
+            .describe("If this card holds RESERVED tasks (see list_reservations), move its whole queue to this other open card instead of dropping it. Without it, closing a card with reservations is REFUSED naming the tasks."),
+          releaseReservations: z
+            .boolean()
+            .optional()
+            .describe("If this card holds RESERVED tasks, drop (release) them when closing. Without it (and without moveReservationsTo), closing is REFUSED naming the tasks."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — used to check whether YOUR board is in autonomous mode."),
         },
       },
-      async ({ target, reason, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "close_card", target, reason, requesterId: caller(callerCardId) });
+      async ({ target, reason, moveReservationsTo, releaseReservations, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "close_card", target, reason, moveReservationsTo, releaseReservations, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -934,10 +950,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .number()
             .optional()
             .describe("Only accept a report with seq strictly greater than this (the `seq` from a previous read_report call) — otherwise you get the same already-seen report back"),
+          taskId: z
+            .string()
+            .optional()
+            .describe(
+              "Read the LAST report of a TASK by its id or a UNIQUE prefix (>= 8) — the task is the axis that survives card recycling, so prefer this when you know the task. Returns `round`/`totalRounds`, the reporting card/role/verdict, and the app-measured `gateRun` summary. Combine with `round` to walk the task's report history.",
+            ),
+          round: z
+            .number()
+            .optional()
+            .describe("With `taskId`: which report of the task's history (1-based, chronological across all its cards). Omit for the latest. Out of range is refused, naming the total."),
         },
       },
-      async ({ target, seq, wait, timeoutMs, afterSeq }) => {
-        const res = await opts.handleRequest({ cmd: "get_report", target, seq, wait, timeoutMs, afterSeq });
+      async ({ target, seq, wait, timeoutMs, afterSeq, taskId, round }) => {
+        const res = await opts.handleRequest({ cmd: "get_report", target, seq, wait, timeoutMs, afterSeq, taskId, round });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -981,7 +1007,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(TASK_PURPOSES)
             .optional()
             .describe(
-              "What kind of work this task IS, declared once here and shown as a chip on the board's task queue (Fila). 'investigate' = find out / diagnose, the deliverable is knowledge, not a change; 'implement' = build something new; 'measure' = collect numbers or evidence about the current state; 'fix' = correct a defect in something that already exists; 'integrate' = the deliverable is a VERIFIED CONVERGENCE of a batch of streams — declare deps on the batch ids and the task's own gate runs over the already-converged tree (the Fila chip renders 'implementation → integration' from those deps on its own). WRITE-ONCE: update_task has no purpose field and cannot relabel it — a wrong value means a new task, not an edit, so decide it now. Omit when you genuinely cannot say: absence is a normal state (the chip stays empty) and is better than a guess; nothing infers it from the prompt text. Any value outside the five is REFUSED and the task is not created. This is about the TASK, not about a card — which card implements or reviews it is `role` on spawn_agent / link_task_card, a separate thing.",
+              "What kind of work this task IS, declared once here and shown as a chip on the board's task queue (the Queue). 'investigate' = find out / diagnose, the deliverable is knowledge, not a change; 'implement' = build something new; 'measure' = collect numbers or evidence about the current state; 'fix' = correct a defect in something that already exists; 'integrate' = the deliverable is a VERIFIED CONVERGENCE of a batch of streams — declare deps on the batch ids and the task's own gate runs over the already-converged tree (the Queue chip renders 'implementation → integration' from those deps on its own). WRITE-ONCE: update_task has no purpose field and cannot relabel it — a wrong value means a new task, not an edit, so decide it now. Omit when you genuinely cannot say: absence is a normal state (the chip stays empty) and is better than a guess; nothing infers it from the prompt text. Any value outside the five is REFUSED and the task is not created. This is about the TASK, not about a card — which card implements or reviews it is `role` on spawn_agent / link_task_card, a separate thing.",
             ),
           review: z
             .enum(TASK_REVIEW_VALUES)
@@ -996,10 +1022,10 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "File paths/globs this task may touch — structured, not a paragraph. Declared once on the task; appended to the delivered brief. The app never derives this from the filesystem. Omit = undeclared (NORMAL).",
             ),
           gates: z
-            .array(z.string())
+            .array(GATE_SCHEMA)
             .optional()
             .describe(
-              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared. AUTHORSHIP: on a board with an orchestrator mark, ONLY the marked card may set or change this set — any other caller is REFUSED naming `gates` (clearing the set is authorship too). On a board with no mark, today's behavior is kept and the fact is recorded.",
+              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Each entry is a plain string, OR `{ cmd: \"...\", exclusive: \"machine\" }` for a command that must NOT run concurrently with anything else on the machine (Lighthouse/e2e): exclusive gates run LAST, under the machine-wide lock. For a heavy command you run YOURSELF (not a declared gate), use `acbridge gate-lock -- <cmd>` / the `run_locked` tool — same lock, so your run never races the app's gate. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared. AUTHORSHIP: on a board with an orchestrator mark, ONLY the marked card may set or change this set — any other caller is REFUSED naming `gates` (clearing the set is authorship too). On a board with no mark, today's behavior is kept and the fact is recorded.",
             ),
           allowCommit: z
             .boolean()
@@ -1071,7 +1097,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session. THE RESPONSE CARRIES THE STATUS THAT WAS STORED whenever you propose one: `status:\"running\"` is accepted and never stored (the row keeps `pending`, and the response says so in `warning`) — whether a card is on the task right now is a separate fact (`cardAlive`), read from get_task/list_tasks, never a status you can write.",
         inputSchema: {
-          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports; an ambiguous prefix is refused, naming the candidates"),
           // Fechado por ENUM (task b41ac547): `status` era `z.string()` livre, e
           // foi por essa porta que 4 linhas `cancelled` nasceram de agentes
           // (não estão em {done, failed}, e a leitura as achatava em
@@ -1092,7 +1118,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
                 .array(
                   z.object({
                     id: z.string().describe("Stable id you will get back in the answer"),
-                    label: z.string().describe("Human-readable choice shown on the Fila card"),
+                    label: z.string().describe("Human-readable choice shown on the Queue card"),
                     description: z.string().optional().describe("Optional one-line elaboration"),
                   }),
                 )
@@ -1101,7 +1127,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             })
             .optional()
             .describe(
-              "Structured question carried by status \"blocked\" (text + at least two options), rendered on the Fila task card so the HUMAN answers directly — and readable/answerable by an agent via get_task / answer_blocked_task. Required when status is \"blocked\"; when you move OUT of blocked it is cleared. The answer comes back into your terminal through the same delivery path as send_to_card.",
+              "Structured question carried by status \"blocked\" (text + at least two options), rendered on the Queue task card so the HUMAN answers directly — and readable/answerable by an agent via get_task / answer_blocked_task. Required when status is \"blocked\"; when you move OUT of blocked it is cleared. The answer comes back into your terminal through the same delivery path as send_to_card.",
             ),
           cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
           cwd: z
@@ -1138,11 +1164,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .optional()
             .describe("Set/clear task territory (paths). null clears; omit leaves unchanged. See create_task."),
           gates: z
-            .array(z.string())
+            .array(GATE_SCHEMA)
             .nullable()
             .optional()
             .describe(
-              "Set/clear gates list. null clears; omit leaves unchanged. On a board with an orchestrator mark, ONLY that marked card may change the set (clearing included) — any other caller is REFUSED naming `gates`; on a board with no mark, today's behavior is kept and the fact is recorded.",
+              "Set/clear gates list (string or `{ cmd, exclusive: \"machine\" }`). null clears; omit leaves unchanged. On a board with an orchestrator mark, ONLY that marked card may change the set (clearing included) — any other caller is REFUSED naming `gates`; on a board with no mark, today's behavior is kept and the fact is recorded.",
             ),
           allowCommit: z
             .boolean()
@@ -1204,14 +1230,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "request_task_status",
       {
         description:
-          "Ask the human (or an outsider/reviewer who can write judgment) to change a task's status. Returns immediately — this does NOT block like spawn_agent/open_url/close_card. The ask (with your reason) appears on the Fila task-detail modal; the human Allow/Deny there. Does not write status itself. This is the path for an implementer linked to the task: update_task of done/failed is refused for that role. Unlike spawn_agent, autonomous mode does NOT auto-approve: a human-locked status stays locked until a human clicks. If the task is already at the requested status, returns pending:false / already:true.",
+          "Ask the human (or an outsider/reviewer who can write judgment) to change a task's status. Returns immediately — this does NOT block like spawn_agent/open_url/close_card. The ask (with your reason) appears on the Queue task-detail modal; the human Allow/Deny there. Does not write status itself. This is the path for an implementer linked to the task: update_task of done/failed is refused for that role. Unlike spawn_agent, autonomous mode does NOT auto-approve: a human-locked status stays locked until a human clicks. If the task is already at the requested status, returns pending:false / already:true.",
         inputSchema: {
-          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports; an ambiguous prefix is refused, naming the candidates"),
           status: z.string().describe("Status you want the human to accept — e.g. 'done', 'failed', 'running'"),
           reason: z
             .string()
             .optional()
-            .describe("Why the change should happen — shown on the Fila modal, same as spawn_agent/open_url's reason"),
+            .describe("Why the change should happen — shown on the Queue modal, same as spawn_agent/open_url's reason"),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
@@ -1231,9 +1257,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "answer_blocked_task",
       {
         description:
-          "Answer the structured question of a task in status `blocked` (read it with get_task — `blockedQuestion`). Clears the question, returns the status to `pending`, and DELIVERS your answer into the task's card through the same path as send_to_card. Use this as the orchestrator to unblock an agent that asked a decision; a human answers the same question directly on the Fila task card. Refused when the task is not blocked on a question, or when `optionId` is not one of the offered options — nothing is invented.",
+          "Answer the structured question of a task in status `blocked` (read it with get_task — `blockedQuestion`). Clears the question, returns the status to `pending`, and DELIVERS your answer into the task's card through the same path as send_to_card. Use this as the orchestrator to unblock an agent that asked a decision; a human answers the same question directly on the Queue task card. Refused when the task is not blocked on a question, or when `optionId` is not one of the offered options — nothing is invented.",
         inputSchema: {
-          taskId: z.string().describe("The blocked task's id (get_task shows its `blockedQuestion`)"),
+          taskId: z.string().describe("The blocked task's id, or a UNIQUE prefix (>= 8) — get_task shows its `blockedQuestion`"),
           optionId: z.string().optional().describe("The id of the chosen option — MUST be one of the question's options"),
           note: z
             .string()
@@ -1291,11 +1317,40 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Read one task's current record by id — also includes its full status-transition trail (`transitions`), every card linked to it with a role (`cards`, e.g. one implementing + one reviewing, each with the recorded execution profile provider/model/effort and session identity requestedResumeId/sessionId when known — use sessionId ?? requestedResumeId as spawn_agent resumeId to reopen THAT participation's session after the card closed), contract fields (territory/gates/allowCommit/reportSchema), and its append-only verdict history (`verdicts`: one entry per participation round, `{cardId, role, verdict, at, storedVerdict, rule, declaredTaskId, roundLinks}`) — unlike list_tasks which stays lean. READ THE TWO VERDICT FIELDS TOGETHER: before 7315c53 a `report`'s verdict was stamped on EVERY live link of the card, so 420 of the stored verdicts (77%) name a task the report never declared. `verdict` is the value you may attribute to THIS task; `storedVerdict` is what the column says (they differ only on those mis-stamps), and `rule` says why: `declared_this_task` and `sole_link` (the round stamped a single link) are real; `declared_other_task` means the round's report named another task — `declaredTaskId` — so the stored value is not this task's; `undeclared_round` means the round stamped `roundLinks` (>1) links and the report named none of them, so exactly one is real and there is NO way to tell which — unknown is the answer, never a guess; `no_verdict` is a round that ended without a verdict. Read-only: no tool writes to this history directly, it's derived from `report` calls and unreported exits, and nothing is ever backfilled or rewritten. sessionId is null for providers that cannot resume (bash, antigravity, …) — honest absence, not a fake id. TWO FACTS, TWO FIELDS (task b41ac547): `status` is what the DATABASE says — `pending` until a judgment is written, never `running` because a process exists; whether a card is on this task right now is `cardAlive`. Read both: a live card is not evidence of work (a parked TUI repaints), so `pending` + `cardAlive: true` means \"has an owner, outcome unknown\", not \"working\".",
         inputSchema: {
-          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports. An ambiguous prefix is refused, naming the candidates"),
+          includePromptHistory: z
+            .boolean()
+            .optional()
+            .describe(
+              "false (default) keeps `transitions` lean: prompt-transition rows carry fromLength/toLength + fromHash/toHash instead of the whole from/to text (a real prompt is paragraphs). true returns the full from/to text — ask for it only when you are auditing the prompt history.",
+            ),
         },
       },
-      async ({ taskId }) => {
-        const res = await opts.handleRequest({ cmd: "get_task", taskId });
+      async ({ taskId, includePromptHistory }) => {
+        const res = await opts.handleRequest({ cmd: "get_task", taskId, includePromptHistory });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "run_locked",
+      {
+        description:
+          "Run a HEAVY shell command under the SAME lock the app serializes its own gates with (task ff24b36d). Use this for anything resource-heavy you run yourself — `npm run e2e`, the full test suite, Lighthouse — so it never races another heavy command. Measured 2026-10-04: a Lighthouse run against a page gave performance 0.72 / CLS 0.14 while racing, against 1.0 / 0.005 alone — a false red that cost investigation rounds. SCOPES: `repo` (default) serializes against every other lock on the SAME repository (gate-runner's lock — same key); `machine` uses ONE global lock, serializing across repositories (use it for anything that measures performance). While it waits, the response's `waitedMs`/`holderWhileWaiting` say what it waited behind; the app runs your command in `cwd` (defaults to your card's cwd) and returns the REAL exit code plus stdout/stderr tails. This is NOT a sandbox: the command is yours (you already have a shell) — the app adds the queue, not confinement. Requires a caller identity (call it from a card); an anonymous connection is refused.",
+        inputSchema: {
+          command: z.string().describe("The shell command to run (its own process; output is captured)"),
+          cwd: z.string().optional().describe("Directory to run in. Omit to use the calling card's cwd"),
+          scope: z
+            .enum(["repo", "machine"])
+            .optional()
+            .describe("'repo' (default): one lock per repository. 'machine': one global lock — for performance measurements that must not share the machine"),
+          timeoutMs: z.number().optional().describe("Wall-clock ceiling (default 15 minutes); the process group is killed on timeout"),
+          taskId: z.string().optional().describe("Your task (id or UNIQUE >=8 prefix) — recorded as the lock holder so the Queue shows who holds it. Omit to derive it from your card's implementer link"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ command, cwd, scope, timeoutMs, taskId, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "run_locked", command, cwd, scope, timeoutMs, taskId, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1308,9 +1363,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "link_task_card",
       {
         description:
-          "Record what an EXISTING open card does on a task — its role. Use this when you reuse a card that is already alive (e.g. a running agent you now want to review a task) instead of spawning a new one; to spawn a new card already linked, pass `taskId` + `role` to spawn_agent instead. role 'reviewer' = this card judges the work: it only adds the role row; the task's principal card (cardId) is left as it is, so the reviewer's own report {ok:false} is a verdict, not the task failing, and its rounds show up in get_task's `verdicts` with role reviewer (the Fila's ' ↔ review' chip derives from this). role 'implementer' (the default when omitted) = this card does the work: it ALSO becomes the task's principal cardId (same link spawn_agent/auto-dispatch write), status untouched. A card that is currently the task's principal cardId cannot be linked as reviewer — detach it first (update_task cardId: null). Re-linking the same card changes its role (one role per card per task). No consent needed: structural bookkeeping, nothing is spawned or typed. Unknown task, unknown card, or a role outside implementer/reviewer is REFUSED — nothing is written.",
+          "Record what an EXISTING open card does on a task — its role. Use this when you reuse a card that is already alive (e.g. a running agent you now want to review a task) instead of spawning a new one; to spawn a new card already linked, pass `taskId` + `role` to spawn_agent instead. role 'reviewer' = this card judges the work: it only adds the role row; the task's principal card (cardId) is left as it is, so the reviewer's own report {ok:false} is a verdict, not the task failing, and its rounds show up in get_task's `verdicts` with role reviewer (the Queue's ' ↔ review' chip derives from this). role 'implementer' (the default when omitted) = this card does the work: it ALSO becomes the task's principal cardId (same link spawn_agent/auto-dispatch write), status untouched. A card that is currently the task's principal cardId cannot be linked as reviewer — detach it first (update_task cardId: null). Re-linking the same card changes its role (one role per card per task). No consent needed: structural bookkeeping, nothing is spawned or typed. Unknown task, unknown card, or a role outside implementer/reviewer is REFUSED — nothing is written.",
         inputSchema: {
-          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports; an ambiguous prefix is refused, naming the candidates"),
           cardId: z.string().describe("The existing card's id (see list_cards). Must be open on the current board."),
           role: z
             .enum(TASK_CARD_ROLES)
@@ -1318,11 +1373,48 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "'implementer' (default when omitted) = this card does the task's work and becomes its principal cardId. 'reviewer' = this card judges the work; principal cardId is untouched. Any other value is refused.",
             ),
+          mode: z
+            .enum(["reserve", "deliver"])
+            .optional()
+            .describe(
+              "implementer only. 'reserve' = put the task on this card's queue WITHOUT delivering anything (starts by itself when its deps are done and the card is free); 'deliver' = hand the contract over now. OMIT = default decided by the DEPS: any dep not done yet reserves, all done (or no deps) delivers. Ignored for role 'reviewer'.",
+            ),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ taskId, cardId, role, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "link_task_card", taskId, cardId, role, requesterId: caller(callerCardId) });
+      async ({ taskId, cardId, role, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "link_task_card", taskId, cardId, role, mode, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "list_reservations",
+      {
+        description:
+          "The card's OWN queue of RESERVED tasks, in order — what this card will do after the current work. Each item carries the task id, its title, its status, and its deps with their statuses. A reservation is a task put on the card's queue without delivering anything yet (see link_task_card's `mode`): it starts by itself when its deps are done and the card is free. Use reorder_reservations to change the order.",
+        inputSchema: {
+          cardId: z.string().describe("The terminal card whose reserved-task queue to read (see list_cards)"),
+        },
+      },
+      async ({ cardId }) => {
+        const res = await opts.handleRequest({ cmd: "list_reservations", cardId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "reorder_reservations",
+      {
+        description:
+          "Reorder a card's reserved-task queue. `taskIds` must be an EXACT permutation of the card's current reservations — reordering can never add, drop or duplicate a reservation. Refused otherwise, naming the offending id.",
+        inputSchema: {
+          cardId: z.string().describe("The terminal card whose queue to reorder"),
+          taskIds: z.array(z.string()).describe("The card's reserved task ids (id or UNIQUE >=8 prefix), in the NEW order (exact permutation of the current queue)"),
+        },
+      },
+      async ({ cardId, taskIds }) => {
+        const res = await opts.handleRequest({ cmd: "reorder_reservations", cardId, taskIds });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1763,7 +1855,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(TASK_CARD_ROLES)
             .optional()
             .describe(
-              "What the NEW card does on `taskId` — only meaningful with `taskId`; passing it without one is refused. Omit (or 'implementer') = the card does the task's work: it becomes the task's principal cardId, its brief is the task's stored prompt, and its report {ok:false} counts against the task's retry budget — exactly today's behavior, so nothing changes if you never pass this. 'reviewer' = the card judges someone else's work on this task: it is recorded with role reviewer (get_task `cards`/`verdicts`, the Fila's ' ↔ review' chip), the principal cardId is left on the implementer, and its brief is your free `brief` (the review order — what to check, where the diff is, how to report a verdict); the task prompt is NOT delivered, because a reviewer handed the work statement would start implementing. A reviewer spawned without `brief` opens linked but mute — send the order with send_to_card. To make an already-open card a reviewer instead, use link_task_card. Any value outside implementer/reviewer is REFUSED (no spawn).",
+              "What the NEW card does on `taskId` — only meaningful with `taskId`; passing it without one is refused. Omit (or 'implementer') = the card does the task's work: it becomes the task's principal cardId, its brief is the task's stored prompt, and its report {ok:false} counts against the task's retry budget — exactly today's behavior, so nothing changes if you never pass this. 'reviewer' = the card judges someone else's work on this task: it is recorded with role reviewer (get_task `cards`/`verdicts`, the Queue's ' ↔ review' chip), the principal cardId is left on the implementer, and its brief is your free `brief` (the review order — what to check, where the diff is, how to report a verdict); the task prompt is NOT delivered, because a reviewer handed the work statement would start implementing. A reviewer spawned without `brief` opens linked but mute — send the order with send_to_card. To make an already-open card a reviewer instead, use link_task_card. Any value outside implementer/reviewer is REFUSED (no spawn).",
             ),
           idempotencyKey: z
             .string()

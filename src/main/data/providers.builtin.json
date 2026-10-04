@@ -9,6 +9,7 @@
         "windows": "npm install -g cline"
       },
       "baseArgs": ["--tui"],
+      "configHome": { "flag": "--config" },
       "capacity": {
         "role": "agent",
         "session": {
@@ -129,6 +130,7 @@
       "id": "opencode",
       "label": "OpenCode",
       "binaryNames": ["opencode"],
+      "configHome": { "env": "OPENCODE_CONFIG_DIR" },
       "installCommand": {
         "posix": "npm install -g opencode-ai",
         "windows": "npm install -g opencode-ai"

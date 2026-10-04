@@ -69,7 +69,7 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
 
     const got = (await bus!.handleRequest({ cmd: "get_task", taskId: res.taskId } as BusRequest)) as { task: { purpose: unknown } };
     expect(got.task.purpose).toBe("investigate");
-    const listed = (await bus!.handleRequest({ cmd: "list_tasks" } as BusRequest)) as { tasks: Array<{ id: string; purpose: unknown }> };
+    const listed = (await bus!.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as { tasks: Array<{ id: string; purpose: unknown }> };
     expect(listed.tasks.find((t) => t.id === res.taskId)!.purpose).toBe("investigate");
   });
 

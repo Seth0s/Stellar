@@ -50,6 +50,14 @@ import {
   describeSprintCounts,
   sprintLabel,
   snapshotTaskToBoardItem,
+  deriveTaskPhaseForBoardItem,
+  filterTasksByAwaitingReview,
+  countAwaitingReview,
+  PHASE_LABEL_KEY,
+  PHASE_TONE,
+  TASK_HOVER_EVENT,
+  type TaskPhase,
+  type PhaseTone,
   type TaskColumn,
   type MetaPillKind,
   type SprintView,
@@ -203,6 +211,26 @@ const PILL_CLASS: Record<MetaPillKind, string> = {
   rejection: styles.pillRejection,
 };
 
+/** Chip de FASE (task 6266d3e7) — o tom vem de `PHASE_TONE`
+ * (`task-board-model.ts`); aqui só o token do design system. Dado estático de
+ * apresentação, mesmo tratamento de `PILL_CLASS`/`COLUMN_COLOR`. */
+const PHASE_CLASS: Record<PhaseTone, string> = {
+  muted: styles.phaseMuted,
+  foam: styles.phaseFoam,
+  violet: styles.phaseViolet,
+  good: styles.phaseGood,
+  danger: styles.phaseDanger,
+  warn: styles.phaseWarn,
+};
+
+function PhaseChip({ phase }: { phase: TaskPhase }) {
+  return (
+    <span className={`${styles.phaseChip} ${PHASE_CLASS[PHASE_TONE[phase]]}`} data-part="phase-chip" data-phase={phase}>
+      {t(PHASE_LABEL_KEY[phase])}
+    </span>
+  );
+}
+
 /** Um item do quadro — DESIGN-BACKLOG.md §2.1 peça 4, "anatomia da task
  * conforme o protótipo v5": alça de arraste + rank, id curto, idade, selo
  * de origem, pílulas coloridas, chips de card, trilha de etapa
@@ -217,11 +245,15 @@ function TaskItem({
   task,
   now,
   rank,
+  hovered,
   onApproveCompletion,
   onDragPointerDown,
 }: {
   task: TaskBoardItem;
   now: number;
+  /** HOVER da GAVETA (task 6266d3e7) — o item fica em destaque enquanto o
+   * ponteiro está no item correspondente da gaveta de QUALQUER card. */
+  hovered?: boolean;
   /** Delta 1 — o NÚMERO da posição na coluna, o que torna a prioridade
    * legível sem contar linhas. Só a posição no array já ordenado
    * (`groupTasksByColumn`) — 1-based, calculada por quem itera (`i+1`),
@@ -238,6 +270,9 @@ function TaskItem({
   onDragPointerDown: (e: React.PointerEvent) => void;
 }) {
   const badge = originBadge(task.lastActor);
+  // FASE (task 6266d3e7) — mesma derivação do filtro rápido do card (uma só
+  // regra: `deriveTaskPhase` no módulo puro).
+  const phase = deriveTaskPhaseForBoardItem(task);
   const cardRoles = task.cards.map((c) => c.role);
   const purposeChip = derivePurposeChip(task.purpose, task.deps, task.depPurposes, cardRoles);
   const stage = deriveStage(task, task.report !== null);
@@ -303,7 +338,12 @@ function TaskItem({
     void window.tasks.answerBlocked(task.id, optionId, null).finally(() => setAnswering(false));
   };
   return (
-    <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
+    <div
+      className={`${styles.item}${hovered ? ` ${styles.itemHovered}` : ""}`}
+      data-task-item-id={task.id}
+      data-hovered={hovered ? "true" : undefined}
+      onPointerDown={onDragPointerDown}
+    >
       <div className={styles.itemTop}>
         <span className={styles.dragHandle} data-part="drag-handle" aria-hidden="true">
           <Icon name="grip" size={12} />
@@ -323,6 +363,7 @@ function TaskItem({
           {formatTaskAge(task.createdAt, now)}
         </span>
       </div>
+      <PhaseChip phase={phase} />
       {/* No purpose → no chip. Absence is NORMAL; do not invent a label. */}
       {purposeChip && (
         <div className={styles.purposeChip} data-part="purpose-chip">
@@ -1459,6 +1500,15 @@ function TaskCardInner({
   panY?: number;
 }) {
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  // FILTRO RÁPIDO (task 6266d3e7) — "aguardando revisão". Estado SÓ de UI: some
+  // ao reabrir o card. Clicar filtra; clicar de novo limpa (mesmo botão).
+  const [awaitingReviewOnly, setAwaitingReviewOnly] = useState(false);
+  // HOVER da gaveta (task 6266d3e7): a ReservationDrawer (de QUALQUER card)
+  // emite `stellar:task-hover` no window; aqui o item correspondente acende.
+  const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+  // INDICADOR DE GATE (task ff24b36d) — quem segura/espera um lock de gate
+  // AGORA (app ou `acbridge gate-lock`). Vazio = nenhum comando pesado rodando.
+  const [gateLocks, setGateLocks] = useState<{ scope: "repo" | "machine"; label: string; cardId: string | null; queued: number }[]>([]);
   const [chartsOpen, setChartsOpen] = useState(false);
   const [sprintsOpen, setSprintsOpen] = useState(false);
   const [sprintsReloadKey, setSprintsReloadKey] = useState(0);
@@ -1487,7 +1537,12 @@ function TaskCardInner({
     }
     onOpenTaskHandled?.();
   }, [openTaskRequestId, boardTasks, onOpenTaskHandled]);
-  const groups = groupTasksByColumn(boardTasks);
+  // FILTRO RÁPIDO (task 6266d3e7): a MESMA derivação de fase alimenta o
+  // contador e o filtro. O filtro é de APRESENTAÇÃO (as colunas mostram só o
+  // subconjunto) — o modal de detalhe continua achando a task em `boardTasks`.
+  const awaitingReviewCount = countAwaitingReview(boardTasks);
+  const visibleBoardTasks = filterTasksByAwaitingReview(boardTasks, awaitingReviewOnly);
+  const groups = groupTasksByColumn(visibleBoardTasks);
   // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
   // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push
   // de `task:changed` re-renderizar este componente NO MEIO de um arraste
@@ -1506,6 +1561,47 @@ function TaskCardInner({
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 15_000);
     return () => window.clearInterval(id);
+  }, []);
+  // HOVER da gaveta (task 6266d3e7) — listener único no card inteiro; o
+  // destaque é por `taskId` (o mesmo item é procurado em qualquer coluna).
+  useEffect(() => {
+    const onHover = (e: Event) => {
+      const taskId = (e as CustomEvent<{ taskId: string | null }>).detail?.taskId ?? null;
+      setHoveredTaskId(taskId);
+    };
+    window.addEventListener(TASK_HOVER_EVENT, onHover);
+    return () => window.removeEventListener(TASK_HOVER_EVENT, onHover);
+  }, []);
+  // INDICADOR DE GATE (task ff24b36d): poll de 3s no lock de gate. É LEITURA
+  // passiva (nenhum consent), some quando nada roda, e falha em silêncio — um
+  // indicador que derruba o quadro seria pior que indicador nenhum.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      const api = window.bus?.gateLockStatus;
+      if (typeof api !== "function") return;
+      void api()
+        .then((res) => {
+          if (cancelled || !res?.ok) return;
+          setGateLocks(
+            (res.locks ?? [])
+              .filter((l) => l.running)
+              .map((l) => ({
+                scope: l.scope,
+                label: l.running!.holder.label,
+                cardId: l.running!.holder.cardId,
+                queued: l.queue.length,
+              })),
+          );
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const id = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, []);
   // DESIGN-BACKLOG.md §2.3, peça 6 — "painel escondido por padrão":
   // `false` na montagem, `ChartsPanel` só monta (e só então busca as
@@ -1851,6 +1947,42 @@ function TaskCardInner({
           </button>
         </div>
       )}
+      {/* FILTRO RÁPIDO (task 6266d3e7) — "aguardando revisão" com contador.
+          Clicar filtra; clicar de novo limpa. Sem resultado → as colunas ficam
+          vazias e o próprio botão diz que o filtro está ligado (o contador
+          mostra 0), nunca um vazio mudo. */}
+      <div className={styles.phaseFilterBar} data-part="phase-filter">
+        <button
+          type="button"
+          className={`${styles.phaseFilterBtn} ${awaitingReviewOnly ? styles.phaseFilterActive : ""}`}
+          aria-pressed={awaitingReviewOnly}
+          onClick={() => setAwaitingReviewOnly((v) => !v)}
+        >
+          {t("task.filter.awaitingReview")}
+          <span className={styles.phaseFilterCount} data-part="phase-filter-count">
+            {awaitingReviewCount}
+          </span>
+        </button>
+      </div>
+      {/* INDICADOR DE GATE (task ff24b36d) — discreto: só aparece quando um
+          comando pesado (gate do app ou `acbridge gate-lock`) está rodando, e
+          diz QUEM segura (task/card). Ausente = nada rodando (nunca um "0"). */}
+      {gateLocks.length > 0 && (
+        <div className={styles.gateLockBar} data-part="gate-lock-indicator">
+          {gateLocks.map((lock, i) => (
+            <span
+              key={`${lock.scope}-${lock.label}-${i}`}
+              className={styles.gateLockItem}
+              data-scope={lock.scope}
+              title={lock.scope === "machine" ? "gate pesado exclusivo da máquina" : "gate pesado do repositório"}
+            >
+              {lock.scope === "machine" ? "⛭" : "⧗"} {lock.label}
+              {lock.cardId ? ` · ${lock.cardId}` : ""}
+              {lock.queued > 0 ? ` +${lock.queued}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
       <div className={styles.board} data-sprint-frozen={viewingFrozen ? "true" : "false"}>
         {COLUMN_ORDER.map((col) => (
           <div key={col} className={styles.column}>
@@ -1900,6 +2032,7 @@ function TaskCardInner({
                           task={task}
                           now={now}
                           rank={i + 1}
+                          hovered={task.id === hoveredTaskId}
                           onApproveCompletion={viewingFrozen ? () => {} : onApproveCompletion}
                           onDragPointerDown={(e) => beginTaskDrag(task, e)}
                         />

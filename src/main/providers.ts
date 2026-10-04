@@ -4,6 +4,7 @@ import { decideProviderReadiness, type ProviderReadinessState, type ReadinessPro
 import { readinessCache, runReadinessProbe } from "./provider-readiness-probe";
 import { MIN_CONTENT_BYTES, type SessionStore } from "./session-store-spec";
 import { CARD_MESSAGE_CONTENT_NOTICE } from "./pasted-content-decision";
+import type { ConfigHomeDecl } from "./config-home-decision";
 
 /**
  * Os SEIS providers nativos, como constantes nomeadas — o autocomplete
@@ -510,13 +511,48 @@ export type ProviderCapacity = {
       parkedPattern: RegExp;
       /**
        * Key that injects the selected parked item into the live turn.
-       * Measured cursor: bare Enter. At most ONE press after park — never
-       * the unsent-retry loop (owner 2026-09-11: 5× paste → exit 143).
+       * Measured cursor/cline: bare Enter. At most ONE press after park —
+       * never the unsent-retry loop (owner 2026-09-11: 5× paste → exit 143).
+       *
+       * AUSENTE = a fila do provider SE ENTREGA SOZINHA quando o turno
+       * termina (medido no commandcode, 2026-10-04: `Queued (N)` + `›`).
+       * Nesse caso NENHUMA tecla é pressionada depois do park — a regra do
+       * dono é nunca um Enter cego. Ver `midTurnQueueAutoDelivers`.
        */
-      steerKey: string;
+      steerKey?: string;
     };
   };
 };
+
+/**
+ * FILAS MID-TURN MEDIDAS que o catálogo embarcado não declara (2026-10-04,
+ * board 64). Os providers NATIVOS trazem a fila no próprio def (cursor) ou no
+ * dado (cline); um provider DINÂMICO cuja capacidade foi medida DEPOIS só
+ * ganharia a fila editando o JSON — e o JSON é a declaração do provider, não o
+ * lugar de um fato que o app mediu em runtime. Esta tabela é aplicada no
+ * REGISTRO (`registerDynamicProviders`), nunca no spec: o def vivo e o
+ * `providerCapacity` concordam, e o round-trip spec→def segue intacto.
+ *
+ * MEDIDO no commandcode: `send_to_card` para um card ocupado mostra
+ *   `Queued (N)` seguido de `› <início do texto>`
+ * e a fila SE ENTREGA SOZINHA quando o turno termina — por isso NÃO há
+ * `steerKey` (a ausência é o fato; nenhuma tecla é pressionada depois do park).
+ */
+const MEASURED_MID_TURN_QUEUES: Readonly<Record<ProviderId, NonNullable<ProviderCapacity["delivery"]["midTurnQueue"]>>> = {
+  commandcode: {
+    parkedPattern: /\bqueued\s*\(\d+\)[\s\S]*?›/i,
+  },
+};
+
+/**
+ * A fila do provider SE ENTREGA SOZINHA? Sim quando ele declara uma fila SEM
+ * `steerKey`: o provider a injeta no turno por conta própria quando ele termina,
+ * então não há tecla a pressionar (`commandcode`). Com `steerKey` (cursor,
+ * cline), quem decide injetar é o remetente via `steer:true`.
+ */
+export function midTurnQueueAutoDelivers(queue: ProviderCapacity["delivery"]["midTurnQueue"]): boolean {
+  return !!queue && !queue.steerKey;
+}
 
 /**
  * How an agent learns it must call `report` / `acbridge report`.
@@ -727,6 +763,14 @@ export type ProviderDef = {
    * hoje, e por isso aparecem como `unknown`.
    */
   readiness?: ReadinessProbe | null;
+  /**
+   * A3c (P5): o MECANISMO que muda a pasta de config/login desta CLI —
+   * `{ env }` ou `{ flag }` — para o Stellar apontá-la à pasta do PERFIL quando
+   * o perfil é `isolated` (BACKEND_V1.md §5.5). AUSENTE = o CLI não separa por
+   * perfil; nesse caso o card abre com as pastas do sistema e AVISA. É dado da
+   * declaração, nunca um `if (provider === …)`.
+   */
+  configHome?: ConfigHomeDecl;
 };
 
 /**
@@ -769,6 +813,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
+    // MEDIDO (A3c, 2026-10-04): CLAUDE_CONFIG_DIR aparece 80× no binário
+    // v2.1.289 e é o que muda a pasta de config/login do Claude.
+    configHome: { env: "CLAUDE_CONFIG_DIR" },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "append-system-prompt" },
@@ -909,6 +956,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binaryNames: ["codex"],
+    // CODEX_HOME é o env documentado do Codex para a pasta de config/login
+    // (o binário instalado é um wrapper node; a doc é a medição).
+    configHome: { env: "CODEX_HOME" },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "developer_instructions" },
@@ -1316,9 +1366,20 @@ export function registerDynamicProviders(
       continue;
     }
     nextIds.add(def.id);
+    // Fila de mid-turn MEDIDA pelo app (Ver MEASURED_MID_TURN_QUEUES): entra
+    // no REGISTRO, não no spec — o def vivo e `providerCapacity` concordam, e
+    // um override do usuário que já declare a fila dele nunca é sobrescrito.
+    const measured = MEASURED_MID_TURN_QUEUES[def.id];
+    const resolved =
+      measured && !def.capacity.delivery.midTurnQueue
+        ? {
+            ...def,
+            capacity: { ...def.capacity, delivery: { ...def.capacity.delivery, midTurnQueue: measured } },
+          }
+        : def;
     const existing = PROVIDERS.findIndex((p) => p.id === def.id);
-    if (existing >= 0) PROVIDERS[existing] = def;
-    else PROVIDERS.push(def);
+    if (existing >= 0) PROVIDERS[existing] = resolved;
+    else PROVIDERS.push(resolved);
     registered.push(def.id);
   }
 

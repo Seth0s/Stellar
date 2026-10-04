@@ -44,7 +44,10 @@
 // FORMA do request mudou, e um bus na 8 descartaria os dois campos em silêncio
 // (exatamente o que o carimbo existe para impedir). O número mora em DOIS
 // lugares: aqui e em `resources/bin/acbridge` (a constante `ACBRIDGE_PROTOCOL`).
-export const ACBRIDGE_PROTOCOL = 9;
+// BUMP 9→10 (task ff24b36d): `run_locked`/`gate_lock_status` são cmds NOVOS e
+// a FORMA de `gates` mudou (aceita `{cmd, exclusive}` além de string) — um bus
+// na 9 recusaria o objeto e não conheceria os cmds.
+export const ACBRIDGE_PROTOCOL = 10;
 
 /** Chave carimbada pelo acbridge no JSON do request. Removida antes do
  * dispatch — nenhum cmd do bus a vê. */

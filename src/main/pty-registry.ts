@@ -3,7 +3,7 @@ import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, providerById, shouldImposeSessionId, type SpawnOpts } from "./providers";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
-import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
+import { watchForSession, claimSessionId, releaseSessionId, spawnWatchReservation, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import {
   IMPOSITION_GRACE_MS,
   applyImpositionVerification,
@@ -644,6 +644,12 @@ export function createPtyRegistry(registryOpts: {
    * scrollback emitido em `onData`. */
   onExit: (id: string, exitCode: number, quotaDeath?: QuotaDeathEvidence) => void;
   onSessionFound: (id: string, sessionId: string) => void;
+  /** NÃO-SILÊNCIO (task ea71065e, 2026-10-04) — o watcher de sessão viu
+   * candidatos mas não conseguiu atribuir nenhum a este card
+   * (`ambiguous`/`not-ours`); ele fica sem `session_id` e, ao restaurar,
+   * voltaria sem contexto. Nunca chamado para "nada ainda"/"aguardando input".
+   * Opcional e source-compatible. */
+  onSessionWatchStuck?: (id: string, reason: "ambiguous" | "not-ours") => void;
   /** Review adversarial (2026-09-11), achado 4 — o primeiro conserto daqui
    * escrevia o aviso direto em `onData` (bytes injetados no próprio pty).
    * PROVADO ruim: TUIs em tela cheia (claude, opencode) mandam clear/redraw
@@ -695,6 +701,17 @@ export function createPtyRegistry(registryOpts: {
    * `onExit`) does not re-fire.
    */
   onLivenessChanged?: (id: string, alive: boolean) => void;
+  /**
+   * A3c (P5) — a casa de config/login por PERFIL para este provider: env e/ou
+   * argv a injetar apontando para a pasta do perfil, ou `notice: true` quando o
+   * CLI NÃO separa por perfil (usa o sistema e o card avisa). `null` = sem
+   * opinião (perfil `system`, ou provider de casca como `bash`).
+   */
+  resolveProviderHome?: (providerId: string) => { env: Record<string, string>; argv: string[]; notice: boolean } | null;
+  /** A3c — o card caiu nas pastas do sistema porque a CLI não separa por
+   *  perfil. Canal SEPARADO da saída (uma TUI em tela cheia redesenha por cima
+   *  de bytes no pty). */
+  onHomeNotice?: (id: string, providerId: string) => void;
   /** Path to the acbridge Unix socket, and the dir it lives in — injected into every spawned provider's env/PATH. */
   sockPath: string;
   binDir: string;
@@ -960,6 +977,12 @@ export function createPtyRegistry(registryOpts: {
       };
     }
 
+    // A3c (P5): a casa de config/login por perfil. `system`/`bash` → null;
+    // `isolated` com suporte → env/argv; `isolated` sem suporte → notice (o
+    // card avisa que esta CLI não separa por perfil).
+    const homePlan = registryOpts.resolveProviderHome?.(providerId) ?? null;
+    const spawnArgs = homePlan && homePlan.argv.length > 0 ? [...resolved.args, ...homePlan.argv] : resolved.args;
+
     const inheritedEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value === undefined || isInheritedClaudeSessionEnvKey(key)) continue;
@@ -973,6 +996,9 @@ export function createPtyRegistry(registryOpts: {
       // LC_ALL unset actually removes the key instead of leaving the
       // inherited C / POSIX / US-ASCII lock in place.
       ...applyEffectiveLocaleEnv(inheritedEnv),
+      // A3c (P5): a pasta do perfil VENCE qualquer config-home herdado do
+      // ambiente do main (é o ponto de "as pastas são do perfil").
+      ...(homePlan?.env ?? {}),
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
       AGENT_CANVAS_CARD_ID: id,
       // NOME DO PROCESSO por agente (task 817daa3e). O shim/stub é NOSSO mas
@@ -1040,7 +1066,7 @@ export function createPtyRegistry(registryOpts: {
 
     let proc: pty.IPty;
     try {
-      proc = pty.spawn(resolved.binary, resolved.args, {
+      proc = pty.spawn(resolved.binary, spawnArgs, {
         name: "xterm-256color",
         cols,
         rows,
@@ -1050,6 +1076,10 @@ export function createPtyRegistry(registryOpts: {
     } catch {
       return { error: "spawn_failed", providerId };
     }
+
+    // A3c (P5): avisa que este card NÃO separa por perfil (canal separado da
+    // saída — sobrevive a redraw de TUI).
+    if (homePlan?.notice) registryOpts.onHomeNotice?.(id, providerId);
 
     // RODADA 6, achado 2 (nome atualizado na RODADA 7 — ver `scanFloorMs`
     // no `Entry`) — capturado UMA vez e reaproveitado tanto no piso
@@ -1153,6 +1183,11 @@ export function createPtyRegistry(registryOpts: {
     // quando a imposição não pegava o card ficava sem NENHUM canal — apontando
     // para uma sessão que não existe.
     const armWatcher = (): void => {
+      // Reserva de posse ANCORADA NO SPAWN (task ea71065e): sem ela, vários
+      // cards do mesmo provider no MESMO cwd veem vários `<id>` e o claim vira
+      // `ambiguous` para sempre (o brief vai por argv — nenhum `write()` gera a
+      // reserva de rearm). Derivada da declaração; antigravity/opencode seguem
+      // SEM reserva aqui de propósito (nascem depois de input real).
       entry.stopWatch = watchForSession(
         providerId,
         cwd,
@@ -1169,6 +1204,10 @@ export function createPtyRegistry(registryOpts: {
         () => {
           entry.stopWatch = null;
           entry.awaitingResumeAnyInput = false;
+        },
+        {
+          ...(spawnWatchReservation(providerId, id, spawnedAtMs) ?? {}),
+          onStuck: (reason) => registryOpts.onSessionWatchStuck?.(id, reason),
         },
       );
     };
@@ -1410,6 +1449,7 @@ export function createPtyRegistry(registryOpts: {
         // brand-new attempt uses `rearmAtMs` (= floorMs when nothing
         // was in flight).
         matchStartMs: floorMs,
+        onStuck: (reason) => registryOpts.onSessionWatchStuck?.(id, reason),
       },
     );
   }

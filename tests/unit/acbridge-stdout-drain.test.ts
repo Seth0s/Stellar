@@ -64,7 +64,7 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
         "bash",
         [
           "-c",
-          'node "$ACBRIDGE" list-tasks 2>"$ERRFILE" | wc -c',
+          'node "$ACBRIDGE" list-tasks --view full 2>"$ERRFILE" | wc -c',
         ],
         {
           env: {
@@ -130,7 +130,7 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
     bus = createMessageBus(sockPath, callbacks);
 
     // Expected size = what the bus itself would serialize (no pipe).
-    const direct = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as { ok: boolean; tasks: unknown[] };
+    const direct = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as { ok: boolean; tasks: unknown[] };
     expect(direct.ok).toBe(true);
     const expected = Buffer.from(JSON.stringify(direct.tasks) + "\n", "utf8");
     expect(expected.length).toBeGreaterThan(PIPE_CAP);
@@ -162,7 +162,10 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
     const source = readFileSync(ACBRIDGE_PATH, "utf8");
     expect(source).toMatch(/function finish\(/);
     expect(source).toMatch(/stream\.end\(one\)/);
-    expect(source).toMatch(/finish\(0\);/);
+    // `finish(exitCode)` (task ff24b36d): o gate-lock propaga o exit code REAL
+    // do comando; a saída continua saindo por `finish()` (drain), nunca por um
+    // `process.exit` cru.
+    expect(source).toMatch(/finish\(exitCode\);/);
     const afterHandlers = source.slice(source.lastIndexOf("browser-eval"));
     expect(afterHandlers).not.toMatch(/process\.exit\(0\)/);
   });

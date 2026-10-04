@@ -81,6 +81,9 @@ Os agentes em execução no Stellar podem interagir com o ambiente e coordenar o
 | `spawn_card` | Cria cards auxiliares (`files`, `changes`, `sticky`, `browser`) | Consentimento humano / Fila autônoma |
 | `report_task_status`| Atualiza status, resultado e desbloqueio de dependentes de uma tarefa | Estrutural |
 | `list_tasks` | Consulta tarefas registradas e seus grafos de dependência | Passivo (Sem prompt) |
+| `run_locked` | Roda um comando pesado do próprio agente sob o MESMO lock do gate-runner (scope `repo` ou `machine`) | Passivo — exige identidade de card |
+
+**Comando pesado vai pelo lock.** `e2e`, a suíte inteira, Lighthouse e afins concorrem por CPU/disco com o gate de outro card; rodar solto produz falso vermelho (medido 2026-10-04: Lighthouse 0.72/CLS 0.14 numa corrida contra 1.0/0.005 sozinho). Use `acbridge gate-lock [--scope repo|machine] -- <comando>` ou a tool `run_locked`: `repo` (default) serializa contra os gates do mesmo repositório; `machine` usa um lock global, para o que mede desempenho. Gates **declarados** com `{ "cmd": "...", "exclusive": "machine" }` rodam por último, sob o lock global. O lock é em memória (por processo do app) e é liberado quando o processo do comando morre.
 
 Coordenar mais de um agente por estas ferramentas tem mecânica própria — contrato de relatório, briefing por arquivo, polling e sticky como painel — no skill local `orchestrate-on-stellar-board`. A decisão de *o que* delegar (decomposição, modelo, esforço, concorrência) continua no `orchestrate-parallel-agents` do workspace.
 

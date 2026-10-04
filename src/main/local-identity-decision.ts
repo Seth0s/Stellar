@@ -175,8 +175,10 @@ export function inspectIdentityFile(raw: string | null | undefined): IdentityFil
 export type LocalIdentityDecision = {
   /** A identidade a adotar — sempre presente; toda saída é utilizável. */
   identity: LocalIdentity;
-  /** De onde ela veio. "fresh" = nasceu agora (randomUUID). */
-  origin: "file" | "future-file" | "mirror" | "fresh";
+  /** De onde ela veio. "fresh" = nasceu agora (randomUUID). "canonical" =
+   *  adotada do `local-identity.json` da MÁQUINA (raiz do userData): é o que
+   *  mantém `user_id`/`install_id` iguais em todos os perfis (§3). */
+  origin: "file" | "future-file" | "mirror" | "canonical" | "fresh";
   /** A casca deve (re)escrever `local-identity.json`. */
   writeFile: boolean;
   /** O chamador deve atualizar o espelho no banco. */
@@ -195,6 +197,12 @@ export type LocalIdentityDecision = {
  * casca passa `randomUUID` e `Date.now()`), o que torna "nascer uma
  * identidade" testável sem relógio nem entropia reais.
  *
+ * `canonicalRaw` é o conteúdo do `local-identity.json` da MÁQUINA (raiz do
+ * userData). Ele existe para que perfis diferentes NÃO caiam em identidades
+ * distintas: quando o arquivo do perfil está ausente/corrompido e não há
+ * espelho, a identidade da máquina é adotada em vez de nascer uma nova (§3,
+ * item 5 — `user_id`/`install_id` iguais em todos os perfis).
+ *
  * `generateId` que devolve valor não-opaco LANÇA — um gerador
  * quebrado não pode cunhar em silêncio um id que viole a regra de
  * anonimato (§4). Melhor falhar o boot que nascer identificável.
@@ -204,11 +212,34 @@ export function decideLocalIdentity(input: {
   raw: string | null | undefined;
   /** Linha do espelho no banco (qualquer forma — validada aqui). */
   dbMirror: unknown;
+  /** Conteúdo cru do `local-identity.json` da máquina, `null` se ausente. */
+  canonicalRaw?: string | null;
   generateId: () => string;
   now: number;
 }): LocalIdentityDecision {
   const finding = inspectIdentityFile(input.raw);
   const mirror = parseLocalIdentity(input.dbMirror);
+  // A canônica só vale se for um arquivo utilizável (versão atual OU futura
+  // com os dois ids legíveis) — nunca lixo.
+  const canonicalFinding = inspectIdentityFile(input.canonicalRaw ?? null);
+  const canonical =
+    canonicalFinding.kind === "valid"
+      ? canonicalFinding.identity
+      : canonicalFinding.kind === "future"
+        ? canonicalFinding.identity
+        : null;
+
+  function adoptCanonical(reason: string, quarantine: boolean): LocalIdentityDecision | null {
+    if (!canonical) return null;
+    return {
+      identity: canonical,
+      origin: "canonical",
+      writeFile: true,
+      writeMirror: true,
+      quarantine,
+      reason: `${reason}; identidade da máquina (canônica) adotada para manter os ids iguais entre perfis`,
+    };
+  }
 
   function fresh(reason: string, quarantine: boolean): LocalIdentityDecision {
     const user_id = input.generateId();
@@ -224,6 +255,12 @@ export function decideLocalIdentity(input: {
       quarantine,
       reason,
     };
+  }
+
+  /** Sem arquivo nem espelho reutilizáveis: adota a canônica se houver,
+   *  senão nasce uma identidade nova (e a casca a grava como canônica). */
+  function newIdentity(reason: string, quarantine: boolean): LocalIdentityDecision {
+    return adoptCanonical(reason, quarantine) ?? fresh(reason, quarantine);
   }
 
   switch (finding.kind) {
@@ -255,7 +292,7 @@ export function decideLocalIdentity(input: {
           reason: `arquivo é de versão futura (v${finding.version}) mas os ids são legíveis — usado read-only, nunca reescrito`,
         };
       }
-      return fresh(
+      return newIdentity(
         `arquivo de versão futura (v${finding.version}) sem ids legíveis — quarantena e identidade nova`,
         true,
       );
@@ -271,7 +308,7 @@ export function decideLocalIdentity(input: {
           reason: `arquivo inválido (${finding.reason}); espelho do banco intacto restaura a identidade — arquivo corrompido vai para quarantena e é reescrito`,
         };
       }
-      return fresh(`arquivo inválido (${finding.reason}) e sem espelho utilizável — quarantena e identidade nova`, true);
+      return newIdentity(`arquivo inválido (${finding.reason}) e sem espelho utilizável — quarantena e identidade nova`, true);
     }
     case "absent": {
       if (mirror) {
@@ -284,7 +321,7 @@ export function decideLocalIdentity(input: {
           reason: "arquivo ausente; espelho do banco restaura a identidade e o arquivo é recriado",
         };
       }
-      return fresh("primeiro run — nada em disco nem no banco; identidade nova (randomUUID)", false);
+      return newIdentity("primeiro run — nada em disco nem no banco; identidade nova (randomUUID)", false);
     }
   }
 }

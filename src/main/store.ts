@@ -567,6 +567,14 @@ export type TaskCardRow = {
    */
   requested_resume_id?: string | null;
   session_id?: string | null;
+  /**
+   * RESERVA DE TASKS POR CARD (task 377a6029). `"reserved"` = a task espera na
+   * fila DESTE card e NÃO foi entregue; `null`/ausente = vínculo ACTIVE (o de
+   * sempre). `reserved_order` é a posição na fila do card (menor = primeiro).
+   * A reserva é um implementer link como qualquer outro — só o estado muda.
+   */
+  reservation_state?: string | null;
+  reserved_order?: number | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
@@ -1143,6 +1151,18 @@ function migrate(db: Database.Database) {
   // Session identity on the participation — survives card DELETE.
   // Additive, nullable, no backfill (legacy rows stay null).
   for (const col of ["requested_resume_id TEXT", "session_id TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE task_cards ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
+  // RESERVA DE TASKS POR CARD (task 377a6029) — `reservation_state` 'reserved'
+  // = a task ESPERANDO na fila do card (não entregue); NULL = vínculo ACTIVE
+  // (comportamento de sempre). `reserved_order` = posição na fila daquele card.
+  // ADITIVA e IDEMPOTENTE: sem default nas linhas existentes (NULL = active),
+  // nenhum dado é reescrito. Ver task-reservation-decision.ts.
+  for (const col of ["reservation_state TEXT", "reserved_order INTEGER"]) {
     try {
       db.exec(`ALTER TABLE task_cards ADD COLUMN ${col}`);
     } catch (e) {
@@ -2673,6 +2693,42 @@ export function openStore(userDataDir: string) {
   const listTaskCardsStmt = db.prepare(
     "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, released_at, released_reason, released_by FROM task_cards WHERE task_id = ?",
   );
+  // ---- RESERVA DE TASKS POR CARD (task 377a6029) ---------------------------
+  // Um vínculo implementer com `reservation_state = 'reserved'` é uma task
+  // ESPERANDO na fila do card — nada entregue. `reserved_order` dá a posição.
+  const nextReservedOrderStmt = db.prepare(
+    "SELECT COALESCE(MAX(reserved_order), 0) + 1 AS n FROM task_cards WHERE card_id = ? AND role = 'implementer' AND released_at IS NULL AND reservation_state = 'reserved'",
+  );
+  const reserveTaskCardStmt = db.prepare(`
+    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, reservation_state, reserved_order)
+    VALUES (@task_id, @card_id, 'implementer', @linked_at, @provider, @model, @effort, @requested_resume_id, @session_id, 'reserved', @reserved_order)
+    ON CONFLICT(task_id, card_id) DO UPDATE SET
+      role = 'implementer',
+      linked_at = excluded.linked_at,
+      provider = COALESCE(excluded.provider, task_cards.provider),
+      model = COALESCE(excluded.model, task_cards.model),
+      effort = COALESCE(excluded.effort, task_cards.effort),
+      requested_resume_id = COALESCE(excluded.requested_resume_id, task_cards.requested_resume_id),
+      session_id = COALESCE(excluded.session_id, task_cards.session_id),
+      reservation_state = 'reserved',
+      reserved_order = COALESCE(task_cards.reserved_order, excluded.reserved_order),
+      released_at = NULL,
+      released_reason = NULL,
+      released_by = NULL
+  `);
+  const listReservationsForCardStmt = db.prepare(
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, reservation_state, reserved_order, released_at, released_reason, released_by FROM task_cards WHERE card_id = ? AND role = 'implementer' AND released_at IS NULL AND reservation_state = 'reserved' ORDER BY reserved_order ASC, linked_at ASC, rowid ASC",
+  );
+  const activateReservedTaskCardStmt = db.prepare(
+    "UPDATE task_cards SET reservation_state = NULL, reserved_order = NULL WHERE task_id = @task_id AND card_id = @card_id AND released_at IS NULL",
+  );
+  const setReservedOrderStmt = db.prepare(
+    "UPDATE task_cards SET reserved_order = @reserved_order WHERE task_id = @task_id AND card_id = @card_id AND released_at IS NULL AND reservation_state = 'reserved'",
+  );
+  const listLiveImplementersForTaskStmt = db.prepare(
+    "SELECT task_id, card_id, role, reservation_state FROM task_cards WHERE task_id = ? AND role = 'implementer' AND released_at IS NULL",
+  );
+  const deleteTaskCardStmt = db.prepare("DELETE FROM task_cards WHERE task_id = ? AND card_id = ?");
   // "Histórico de veredito por participação" — o outro lado da mesma
   // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
   // tudo que o choke point tem à mão — `report`/`resolveCardExit` falam
@@ -3666,6 +3722,80 @@ export function openStore(userDataDir: string) {
         session_id: profile?.sessionId ?? null,
       }),
     /**
+     * RESERVA (task 377a6029): cria/atualiza o vínculo implementer como
+     * RESERVADO — nada é entregue. `reserved_order` = fim da fila deste card.
+     * Idempotente por (task, card): re-reservar mantém a posição já existente.
+     */
+    reserveTaskCard: (
+      taskId: string,
+      cardId: string,
+      profile?: {
+        provider?: string | null;
+        model?: string | null;
+        effort?: string | null;
+        requestedResumeId?: string | null;
+        sessionId?: string | null;
+      },
+    ): number => {
+      const at = Date.now();
+      return db.transaction(() => {
+        const next = (nextReservedOrderStmt.get(cardId) as { n: number }).n;
+        return reserveTaskCardStmt.run({
+          task_id: taskId,
+          card_id: cardId,
+          linked_at: at,
+          provider: profile?.provider ?? null,
+          model: profile?.model ?? null,
+          effort: profile?.effort ?? null,
+          requested_resume_id: profile?.requestedResumeId ?? null,
+          session_id: profile?.sessionId ?? null,
+          reserved_order: next,
+        }).changes;
+      })();
+    },
+    /** A FILA de reservas de um card, em ordem (menor `reserved_order` 1º). */
+    listReservationsForCard: (cardId: string): TaskCardRow[] =>
+      listReservationsForCardStmt.all(cardId) as TaskCardRow[],
+    /** Promove uma reserva a vínculo ACTIVE (a entrega aconteceu). */
+    activateReservedTaskCard: (taskId: string, cardId: string): number =>
+      activateReservedTaskCardStmt.run({ task_id: taskId, card_id: cardId }).changes,
+    /** Reordena a fila de um card; ids já validados como permutação exata. */
+    reorderReservedTaskCards: (cardId: string, taskIds: readonly string[]): void => {
+      db.transaction(() => {
+        taskIds.forEach((taskId, index) =>
+          setReservedOrderStmt.run({ task_id: taskId, card_id: cardId, reserved_order: index }),
+        );
+      })();
+    },
+    /** Implementer links VIVOS de uma task (reservado OU active) — o guard de
+     * duplicação do auto-dispatch e a checagem de "já tem dono". */
+    listLiveImplementersForTask: (taskId: string): { card_id: string; reservation_state: string | null }[] =>
+      listLiveImplementersForTaskStmt.all(taskId) as { card_id: string; reservation_state: string | null }[],
+    /** Move TODA a fila de reservas de um card para outro, preservando a ordem
+     * (append no fim da fila de destino). Devolve quantas moveu. */
+    moveReservedTaskCards: (fromCardId: string, toCardId: string): number =>
+      db.transaction(() => {
+        const rows = listReservationsForCardStmt.all(fromCardId) as TaskCardRow[];
+        let next = (nextReservedOrderStmt.get(toCardId) as { n: number }).n;
+        let moved = 0;
+        for (const r of rows) {
+          deleteTaskCardStmt.run(r.task_id, fromCardId);
+          reserveTaskCardStmt.run({
+            task_id: r.task_id,
+            card_id: toCardId,
+            linked_at: Date.now(),
+            provider: r.provider ?? null,
+            model: r.model ?? null,
+            effort: r.effort ?? null,
+            requested_resume_id: r.requested_resume_id ?? null,
+            session_id: r.session_id ?? null,
+            reserved_order: next++,
+          });
+          moved++;
+        }
+        return moved;
+      })(),
+    /**
      * Write discovered/imposed session id onto participations for this
      * card. Returns how many rows changed. Safe after cards DELETE.
      */
@@ -3673,7 +3803,6 @@ export function openStore(userDataDir: string) {
       const r = setParticipationSessionIdStmt.run({ card_id: cardId, session_id: sessionId });
       return r.changes;
     },
-    // Ver o comentário grande de `recordParticipationRound` acima
     // (definida antes do `return`, junto dos prepared statements) —
     // exposta aqui como método do store, mesma convenção de
     // `applyColumnDrop` logo acima dela.

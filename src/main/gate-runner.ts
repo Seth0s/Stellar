@@ -100,6 +100,9 @@ import { delimiter, join, resolve } from "node:path";
 import { effectivePath } from "./user-env";
 import { buildSandboxedBashArgs, findSandboxBinary } from "./sandbox";
 import { describeTaskCwdOutsideRootExecution, isPathInsideRoot } from "./task-dispatch-decision";
+import { MACHINE_LOCK_KEY, acquireGateLock, type GateLockHolder } from "./gate-lock";
+import { gateCommandOf, isExclusiveGate, type GateSpec } from "./gate-declaration";
+import { shortTaskId } from "./task-id-prefix-decision";
 
 /** Chave do record de gate carimbado pelo app em `tasks.result_json`.
  * Mesmo lugar (e mesma classe de dono) de `failureKind`: o app observa,
@@ -140,30 +143,28 @@ export function lockKeyFor(gitRoot: string | null, cwd: string): string {
   return gitRoot ?? resolve(cwd);
 }
 
-const repoGates = new Map<string, Promise<void>>();
+/** Holder anônimo para chamadas que não informam quem é (compat com o uso
+ * antigo de `withRepoGateLock`, que não passa holder). */
+const ANON_GATE_HOLDER: GateLockHolder = { taskId: null, cardId: null, label: "gate" };
 
 /**
- * Fila FIFO por chave (raiz do repositório). O `fn` de cada chamador roda
- * depois que o `fn` anterior ASSENTOU — sucesso ou falha, porque um gate
- * que falhou não pode travar os próximos (`prev.then(fn, fn)`).
+ * Fila FIFO por chave (raiz do repositório), DELEGADA ao lock compartilhado
+ * (`gate-lock.ts`) — o MESMO que o `run_locked` de um agente usa (task
+ * ff24b36d). Assim um gate do app e um comando pesado de agente no mesmo
+ * repositório se serializam de verdade, em vez de dois locks paralelos.
  *
- * O `tail` guardado no Map engole a rejeição de propósito: quem espera na
- * fila não herda o erro do vizinho, e o retorno de cada chamada ainda é
- * o `run` real, com o erro real, para quem pediu. A entrada some quando o
- * último da fila assenta, para o Map não crescer por repositório visto.
+ * O `fn` de cada chamador roda depois que o anterior LIBEROU — sucesso ou
+ * falha, porque um gate que falhou não pode travar os próximos. `holder` é
+ * opcional (nomeia quem segura, para a Fila); sem ele, um holder anônimo.
  */
-export function withRepoGateLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = repoGates.get(key) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  repoGates.set(key, tail);
-  void tail.then(() => {
-    if (repoGates.get(key) === tail) repoGates.delete(key);
+export function withRepoGateLock<T>(key: string, fn: () => Promise<T>, holder: GateLockHolder = ANON_GATE_HOLDER): Promise<T> {
+  return acquireGateLock(key, holder).then(async ({ release }) => {
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   });
-  return run;
 }
 
 /**
@@ -244,8 +245,13 @@ export type GateSpawn = (file: string, args: string[], options: SpawnOptions) =>
 
 export type RunTaskGatesInput = {
   taskId: string;
+  /** Card implementer da task — vai no holder do lock (a Fila mostra quem
+   * segura). Ausente = holder sem card. */
+  cardId?: string | null;
   cwd: string;
-  gates: string[];
+  /** Gates declarados (task ff24b36d): string OU `{cmd, exclusive:"machine"}`.
+   * Os exclusivos rodam por ÚLTIMO, sob o lock GLOBAL da máquina. */
+  gates: GateSpec[];
   timeoutMs?: number;
   /** Seam de teste — a produção passa o `spawn` real. */
   spawnFn?: GateSpawn;
@@ -749,62 +755,93 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   // mesmo que a tool `bash` do chat usa). Sem ele, NADA roda — ver abaixo.
   const sandboxBinary = input.sandboxBinary !== undefined ? input.sandboxBinary : findSandboxBinary();
 
-  return withRepoGateLock(lockKeyFor(gitRoot, requestedCwd), async () => {
-    // Dentro do lock de propósito: fora dele, `startedAt` seria o instante
-    // do PEDIDO e `finishedAt - startedAt` incluiria a espera na fila do
-    // repositório — um gate de 4s atrás de outro de 10min pareceria ter
-    // durado 10min. Os tempos por comando sempre foram reais.
-    const startedAt = Date.now();
-    const commands: GateCommandEvidence[] = [];
-    // CONFINAMENTO DO `cwd` (2026-09-21) — o gate roda no `cwd` da task, e o
-    // `cwd` DECIDE ONDE. Um caminho fora da raiz declarada do board é recusa
-    // POR COMANDO, pela mesma razão do sandbox logo abaixo: a evidência diz
-    // qual comando deixou de rodar, em vez de rodá-lo em outro lugar.
-    const declaredRoot =
-      typeof input.declaredRoot === "string" && input.declaredRoot.trim().length > 0 ? input.declaredRoot : null;
-    if (declaredRoot === null) {
-      // SEM RAIZ DECLARADA NÃO SE EXECUTA (decisão do dono, 2026-09-21). Este
-      // ramo é o que fecha o resíduo legado: antes, raiz ausente significava
-      // "sem limite" e os gates de uma task sem board rodavam mesmo assim.
-      const reason = describeNoDeclaredRoot();
-      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
-    } else if (!isPathInsideRoot(requestedCwd, declaredRoot)) {
-      const reason = describeTaskCwdOutsideRootExecution({ where: "gate", cwd: requestedCwd, root: declaredRoot });
-      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
-    } else if (!sandboxBinary) {
-      // Sem bwrap não existe fallback para execução direta: rodar o shell
-      // do agente sem confinamento é exatamente o defeito que este caminho
-      // deixa de fazer. A recusa é POR COMANDO, para a evidência nomear
-      // cada gate que deixou de rodar.
-      const reason = describeSandboxUnavailable();
-      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
-    } else {
-      for (const command of input.gates) {
-        // Um wrapper MORTO (`rtk proxy <cmd>`, cujo binário o sandbox não
-        // alcança) é removido para o gate rodar a INTENÇÃO declarada — e a
-        // remoção fica registrada em `normalizedCommand`, nunca em silêncio.
-        const { command: ranCommand } = normalizeGateCommand(command, reachable);
-        commands.push(await runOne(command, ranCommand, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary }));
-      }
-    }
-    // O diff é capturado DEPOIS dos gates e dentro do mesmo lock: é a
-    // observação do app sobre o que mudou nesta janela, ao lado do contrato
-    // declarado (ver `DiffCaptureEvidence` para o que isto não é).
-    const diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
-    const ok = commands.length > 0 && commands.every((c) => c.exitCode === 0);
-    return {
-      taskId: input.taskId,
-      requestedCwd,
-      gitRoot,
-      startedAt,
-      finishedAt: Date.now(),
-      ok,
-      commands,
-      diff,
-      // O rótulo do veredito, ao lado do veredito (c73fcd79).
-      window: labelGateWindow(diff, ok),
+  // HOLDER (task ff24b36d) — quem segura o lock, para a Fila e para o aviso de
+  // fila do `gate-lock`. Nomeia a TASK (id curto) e o card implementer.
+  const holder: GateLockHolder = { taskId: input.taskId, cardId: input.cardId ?? null, label: shortTaskId(input.taskId) };
+  // EXCLUSIVOS POR ÚLTIMO (task ff24b36d): os comuns rodam na ordem declarada,
+  // sob o lock do repositório; os `exclusive:"machine"` rodam depois, sob o
+  // lock GLOBAL da máquina — nunca concorrendo com outro comando de máquina.
+  const commonGates = input.gates.filter((g) => !isExclusiveGate(g));
+  const machineGates = input.gates.filter((g) => isExclusiveGate(g));
+
+  // CONFINAMENTO DO `cwd` (2026-09-21) — o gate roda no `cwd` da task, e o
+  // `cwd` DECIDE ONDE. Um caminho fora da raiz declarada do board é recusa
+  // POR COMANDO, pela mesma razão do sandbox: a evidência diz qual comando
+  // deixou de rodar, em vez de rodá-lo em outro lugar.
+  const declaredRoot =
+    typeof input.declaredRoot === "string" && input.declaredRoot.trim().length > 0 ? input.declaredRoot : null;
+  let refusalReason: string | null = null;
+  if (declaredRoot === null) {
+    // SEM RAIZ DECLARADA NÃO SE EXECUTA (decisão do dono, 2026-09-21): raiz
+    // ausente significava "sem limite" e os gates de uma task sem board rodavam
+    // mesmo assim.
+    refusalReason = describeNoDeclaredRoot();
+  } else if (!isPathInsideRoot(requestedCwd, declaredRoot)) {
+    refusalReason = describeTaskCwdOutsideRootExecution({ where: "gate", cwd: requestedCwd, root: declaredRoot });
+  } else if (!sandboxBinary) {
+    // Sem bwrap não existe fallback para execução direta.
+    refusalReason = describeSandboxUnavailable();
+  }
+
+  let startedAt = Date.now();
+  let finishedAt = startedAt;
+  let diff: DiffCaptureEvidence | null = null;
+  const commands: GateCommandEvidence[] = [];
+  if (refusalReason !== null || !sandboxBinary) {
+    // Recusa POR COMANDO, na ordem declarada — nenhum spawn.
+    const reason = refusalReason ?? describeSandboxUnavailable();
+    for (const spec of input.gates) commands.push(refusalEvidence(gateCommandOf(spec), reason));
+    diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
+    finishedAt = Date.now();
+  } else {
+    const sandbox = sandboxBinary;
+    const runSpec = async (spec: GateSpec): Promise<GateCommandEvidence> => {
+      const declared = gateCommandOf(spec);
+      // Um wrapper MORTO (`rtk proxy <cmd>`, cujo binário o sandbox não alcança)
+      // é removido para o gate rodar a INTENÇÃO declarada — e a remoção fica
+      // registrada em `normalizedCommand`, nunca em silêncio.
+      const { command: ranCommand } = normalizeGateCommand(declared, reachable);
+      return runOne(declared, ranCommand, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary: sandbox });
     };
-  });
+    await withRepoGateLock(lockKeyFor(gitRoot, requestedCwd), async () => {
+      // Dentro do lock de propósito: fora dele, `startedAt` incluiria a espera
+      // na fila do repositório — um gate de 4s atrás de outro de 10min
+      // pareceria ter durado 10min. Os tempos por comando sempre foram reais.
+      startedAt = Date.now();
+      for (const spec of commonGates) commands.push(await runSpec(spec));
+      // EXCLUSIVOS POR ÚLTIMO (task ff24b36d), sob o lock GLOBAL da máquina —
+      // DENTRO do lock do repo (não há ciclo: o lock de máquina é folha;
+      // ninguém que o segura espera um lock de repo). Assim um exclusivo nunca
+      // concorre com outro comando de máquina, nem com outro comando do repo.
+      for (const spec of machineGates) {
+        const acquisition = await acquireGateLock(MACHINE_LOCK_KEY, holder);
+        try {
+          commands.push(await runSpec(spec));
+        } finally {
+          acquisition.release();
+        }
+      }
+      // O diff é capturado DEPOIS de TODOS os gates, ainda dentro do lock: é a
+      // observação do app sobre o que mudou nesta janela, ao lado do contrato
+      // declarado (ver `DiffCaptureEvidence` para o que isto não é).
+      diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
+      finishedAt = Date.now();
+    }, holder);
+  }
+  const capturedDiff = diff ?? (await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn }));
+  const ok = commands.length > 0 && commands.every((c) => c.exitCode === 0);
+  return {
+    taskId: input.taskId,
+    requestedCwd,
+    gitRoot,
+    startedAt,
+    finishedAt,
+    ok,
+    commands,
+    diff: capturedDiff,
+    // O rótulo do veredito, ao lado do veredito (c73fcd79).
+    window: labelGateWindow(capturedDiff, ok),
+  };
 }
 
 function runOne(

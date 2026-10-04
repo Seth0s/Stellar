@@ -37,6 +37,73 @@ export function resolveTaskDispatchLabel(task: { id: string; prompt: string | nu
   return `task ${task.id.slice(0, 8)}`;
 }
 
+/**
+ * A ORIGEM do conector de um card AUTO-DESPACHADO (defeito medido 2026-10-04,
+ * board 64): uma task com `deps` despachada sozinha nascia SOLTA no board,
+ * enquanto o card que o orquestrador abre à mão com `spawn_agent` nasce com a
+ * seta de spawn saindo dele. O dono pediu a mesma ligação ("você deveria
+ * receber a conexão por ser o orquestrador", contrato de 2026-09-14).
+ *
+ * Precedência DECLARADA, nunca adivinhada:
+ *   1. o card MARCADO como orquestrador do board (`boards.orchestrator_card_id`),
+ *      se estiver VIVO;
+ *   2. senão, o card que CRIOU a task (ver `taskCreatorCardIdFromTransitions`),
+ *      se estiver VIVO;
+ *   3. senão, NENHUMA origem — ausência de origem é dado, e inventar uma
+ *      ligação seria pior que card solto (o `reason` fica para o log de despacho).
+ *
+ * `isAlive` é INJETADO (mesma disciplina do resto do bus): a decisão é pura e o
+ * teste não precisa de PTY nenhum para exercitá-la.
+ */
+export type DispatchConnectorOrigin =
+  | { action: "connect"; fromCardId: string }
+  | { action: "none"; reason: string };
+
+export function decideDispatchConnectorOrigin(input: {
+  orchestratorCardId: string | null | undefined;
+  creatorCardId: string | null | undefined;
+  isAlive: (cardId: string) => boolean;
+}): DispatchConnectorOrigin {
+  const orchestrator = normalizeTaskCwd(input.orchestratorCardId ?? null);
+  if (orchestrator && input.isAlive(orchestrator)) {
+    return { action: "connect", fromCardId: orchestrator };
+  }
+  const creator = normalizeTaskCwd(input.creatorCardId ?? null);
+  if (creator && input.isAlive(creator)) {
+    return { action: "connect", fromCardId: creator };
+  }
+  const missing: string[] = [];
+  missing.push(orchestrator ? `orchestrator card ${orchestrator} is not alive` : "board has no orchestrator mark");
+  missing.push(creator ? `task creator card ${creator} is not alive` : "task has no creator card");
+  return { action: "none", reason: missing.join(" and ") };
+}
+
+/** A trilha mínima de transição que a decisão acima consome — só os campos que
+ * dizem "esta task nasceu `pending`, e QUEM a criou". */
+export type TaskTransitionLike = {
+  kind: string;
+  to_value: string;
+  card_id: string | null;
+};
+
+/**
+ * O card que CRIOU a task: o `card_id` da PRIMEIRA transição de status que a
+ * levou a `pending` (em `create_task`, a escrita `from_value:null → "pending"`
+ * carimba o `requesterId` do chamador). Ausência (trilha vazia, primeira
+ * transição anônima, ou nenhuma `pending`) é ausência de criador — nunca se
+ * inventa um card.
+ */
+export function taskCreatorCardIdFromTransitions(
+  transitions: readonly TaskTransitionLike[] | null | undefined,
+): string | null {
+  if (!Array.isArray(transitions)) return null;
+  for (const transition of transitions) {
+    if (transition.kind !== "status" || transition.to_value !== "pending") continue;
+    return normalizeTaskCwd(transition.card_id ?? null);
+  }
+  return null;
+}
+
 export const PROVIDER_UNDECLARED_REASON = "provider não declarado";
 
 export type TaskDispatchProviderDecision =

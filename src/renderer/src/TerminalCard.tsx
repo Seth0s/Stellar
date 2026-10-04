@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { t } from "../../shared/i18n";
+import { ReservationDrawer } from "./ReservationDrawer";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
@@ -974,6 +975,7 @@ function TerminalCardInner({
           );
         })}
       </Popover>
+      <ReservationDrawer cardId={id} />
     </CardFrame>
   );
 }

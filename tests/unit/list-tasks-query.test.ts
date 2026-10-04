@@ -37,8 +37,8 @@ function task(partial: Partial<ListedTask> & Pick<ListedTask, "id" | "status">):
 }
 
 describe("parseListTasksQuery", () => {
-  it("omitido = full, sem filtros", () => {
-    expect(parseListTasksQuery({})).toEqual({ ok: true, view: "full" });
+  it("omitido = summary (task 6266d3e7), sem filtros", () => {
+    expect(parseListTasksQuery({})).toEqual({ ok: true, view: "summary" });
   });
 
   it("status aceita string ou lista; lista vazia é recusada", () => {
@@ -104,6 +104,7 @@ describe("filterListedTasks + projectListedTask", () => {
     const summary = projectListedTask(row, "summary");
     expect(summary).not.toHaveProperty("prompt");
     expect(summary).not.toHaveProperty("result");
-    expect(summary).toMatchObject({ id: "a", status: "pending", cardId: "10", boardId: "64" });
+    // Allowlist do summary (task 6266d3e7): sem boardId/provider etc.
+    expect(summary).toMatchObject({ id: "a", status: "pending", cardId: "10" });
   });
 });

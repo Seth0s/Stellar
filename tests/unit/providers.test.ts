@@ -244,8 +244,11 @@ describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () 
     // Task 7d3be060 — o catálogo embarcado entra no registro: `cline` TAMBÉM
     // declara a fila de mid-turn (medido, em providers.builtin.json). A
     // garantia do teste — "só declara quem foi medido" — segue de pé; o
-    // conjunto MEDIDO é {cursor, cline}, e é ele que fica explícito aqui.
-    const withMidTurnQueue = new Set(["cursor", "cline"]);
+    // conjunto MEDIDO é {cursor, cline, commandcode}, e é ele que fica
+    // explícito aqui. O commandcode entrou depois (2026-10-04, board 64): fila
+    // `Queued (N) ›` medida no app, SEM tecla de steer (a fila se entrega
+    // sozinha — a tabela MEASURED_MID_TURN_QUEUES de providers.ts).
+    const withMidTurnQueue = new Set(["cursor", "cline", "commandcode"]);
     for (const p of PROVIDERS) {
       if (withMidTurnQueue.has(p.id)) continue;
       expect(p.capacity.delivery.midTurnQueue, p.id).toBeUndefined();
