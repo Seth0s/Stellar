@@ -386,3 +386,154 @@
      sem colidir com nenhuma cor de coluna. */
   --accent-task: #6f8cff;
 }
+
+/* ----------------------------------------------------------------------------
+ * App v2 shell — the approved prototype's own palette and step ladder
+ * (docs/design/app-v2). The shared --ink/--panel/--space-* scales are a
+ * lighter, smaller set; these are additive and used only by the new shell
+ * screens (Boot, First run, Sessions, Profiles, Login, Invite, Work home).
+ * Chrome colors live here so no module has to hardcode a hex.
+ * ------------------------------------------------------------------------ */
+:root {
+  --v2-bg: #0b0d12;
+  --v2-titlebar: #090b0f;
+  --v2-sidebar: #0e1016;
+  --v2-card: #12151d;
+  --v2-card-hover: #151925;
+  --v2-field: #0f1218;
+  --v2-inset: #10131a;
+  --v2-elevated: #141823;
+  --v2-menu: #151924;
+  --v2-nav-hover: #161a24;
+  --v2-nav-active: #182037;
+  --v2-panel-left: #0f1220;
+  --v2-glow: #121829;
+  --v2-ctl-hover: #1a1e29;
+  --v2-icon-hover: #1c2130;
+
+  --v2-line: #1a1e28;
+  --v2-line-soft: #20242f;
+  --v2-line-mid: #232838;
+  --v2-line-card: #252a3a;
+  --v2-line-input: #2a2f3d;
+  --v2-line-strong: #2a3042;
+  --v2-dashed: #343b55;
+
+  --v2-text: #e8eaf0;
+  --v2-text-2: #c9cede;
+  --v2-text-2b: #d6dae4;
+  --v2-text-3: #a3aabb;
+  --v2-text-4: #9aa1b2;
+  --v2-text-5: #8d94a6;
+  --v2-text-6: #6f7790;
+  --v2-text-7: #5f677a;
+  --v2-bright: #ffffff;
+
+  --v2-primary: #4a5fe0;
+  --v2-primary-hover: #5770f0;
+  --v2-primary-focus: #6474e8;
+  --v2-primary-soft: #1e2546;
+  --v2-link: #a9b8ff;
+  --v2-accent: #7c8cff;
+  --v2-accent-3: #8f9cff;
+  --v2-accent-soft: #b9c4ff;
+  --v2-accent-soft2: #c7d0ff;
+  --v2-accent-bg: #1b2242;
+  --v2-accent-bg2: #232b52;
+
+  --v2-good: #5fd08a;
+  --v2-good-fg: #8ee6a8;
+  --v2-good-bg: #14301f;
+  --v2-warn: #f2c96a;
+  --v2-warn-bg: #3a2f12;
+  --v2-warn-bg2: #2c2412;
+  --v2-danger: #ff9b9b;
+  --v2-danger-bg: #3a1717;
+  --v2-info-bg: #1b2546;
+
+  --v2-team-bg: #123a35;
+  --v2-team-fg: #8ee6d8;
+  --v2-avatar-bg: #262d52;
+  --v2-avatar-bg2: #2a3150;
+  --v2-selected-bg: #141a2c;
+  --v2-selected-bg2: #161c30;
+  --v2-deco: #2c3768;
+
+  --v2-claude-bg: #2b1c10;
+  --v2-claude-fg: #ffa86b;
+  --v2-codex-bg: #22262c;
+  --v2-codex-fg: #dde2e8;
+  --v2-cursor-bg: #12301e;
+  --v2-cursor-fg: #7ce3a1;
+  --v2-antigravity-bg: #121d33;
+  --v2-antigravity-fg: #8fb4f0;
+
+  --v2-gh-bg: #f4f5f8;
+  --v2-gh-fg: #0d0f15;
+
+  --v2-seg-active: #1d2232;
+  --v2-choice-bg-hover: #151a28;
+  --v2-choice-border-hover: #4a5a9a;
+  --v2-choice-icon-alt: #1a1f2b;
+
+  /* Step ladder and type sizes and radii — the prototype's exact values. */
+  --v2-hair: 1px;
+  --v2-s1: 2px;
+  --v2-s1h: 3px;
+  --v2-s2: 4px;
+  --v2-s3: 6px;
+  --v2-s4: 8px;
+  --v2-s5: 10px;
+  --v2-s6: 12px;
+  --v2-s7: 14px;
+  --v2-s8: 16px;
+  --v2-s9: 18px;
+  --v2-s10: 20px;
+  --v2-s11: 22px;
+  --v2-s12: 24px;
+  --v2-s13: 26px;
+  --v2-s14: 28px;
+  --v2-s15: 30px;
+  --v2-s16: 32px;
+  --v2-s17: 36px;
+  --v2-s18: 40px;
+  --v2-s19: 48px;
+  --v2-s20: 56px;
+  --v2-s21: 64px;
+  --v2-s22: 88px;
+
+  --v2-f9: 9px;
+  --v2-f10: 10px;
+  --v2-f10h: 10.5px;
+  --v2-f11: 11px;
+  --v2-f11h: 11.5px;
+  --v2-f12: 12px;
+  --v2-f12h: 12.5px;
+  --v2-f13: 13px;
+  --v2-f13h: 13.5px;
+  --v2-f14: 14px;
+  --v2-f14h: 14.5px;
+  --v2-f15: 15px;
+  --v2-f15h: 15.5px;
+  --v2-f16: 16px;
+  --v2-f17: 17px;
+  --v2-f18: 18px;
+  --v2-f20: 20px;
+  --v2-f22: 22px;
+  --v2-f26: 26px;
+  --v2-f30: 30px;
+  --v2-f34: 34px;
+
+  --v2-r5: 5px;
+  --v2-r6: 6px;
+  --v2-r7: 7px;
+  --v2-r8: 8px;
+  --v2-r9: 9px;
+  --v2-r10: 10px;
+  --v2-r11: 11px;
+  --v2-r12: 12px;
+  --v2-r13: 13px;
+  --v2-r14: 14px;
+  --v2-r18: 18px;
+  --v2-r24: 24px;
+}

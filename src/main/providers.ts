@@ -733,10 +733,19 @@ type InstallCommand = { posix: string; windows: string };
 /** What `buildArgs` gets: every spawn option EXCEPT the brief. */
 export type ProviderFlagOpts = Omit<SpawnOpts, "brief">;
 
+/** A provider's declared trust dialog: the pattern that detects it and the
+ * input that confirms it. `confirmInput: null` means the app must NOT
+ * auto-confirm (a bare Enter can land on the cancel button), so the prompt is
+ * detected and reported but left for a human. */
+export type TrustPromptDecl = { pattern: RegExp; confirmInput: string | null };
+
 export type ProviderDef = {
   id: ProviderId;
   label: string;
   binaryNames: string[];
+  /** Declared trust dialog, read generically by pty-registry — never a
+   * per-provider branch. Absent = this provider has no such dialog. */
+  trustPrompt?: TrustPromptDecl;
   /**
    * Flags only — never the brief. `spawnArgv` appends the brief after
    * these, in the declared form, so the ORDER (brief last, behind `--`
@@ -816,6 +825,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     // MEDIDO (A3c, 2026-10-04): CLAUDE_CONFIG_DIR aparece 80× no binário
     // v2.1.289 e é o que muda a pasta de config/login do Claude.
     configHome: { env: "CLAUDE_CONFIG_DIR" },
+    // The dialog's default focus is Cancel, so a bare Enter cancels the launch
+    // (exit 1): detected, but never auto-confirmed.
+    trustPrompt: { pattern: /Quick safety check: Is this a project you created or one you trust\?/, confirmInput: null },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "append-system-prompt" },
@@ -851,7 +863,20 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       },
       delivery: {
         briefMechanism: "positional",
-        submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
+        // MEDIDO AO VIVO (2026-10-05, board do dono, Claude Code v2.1.289): a
+        // TUI fecha o rodapé com uma linha de SPINNER, e é ela o único sinal de
+        // "o turno começou". Amostras reais colhidas de um card claude trabalhando
+        // (`read_card`):
+        //   `✶ Drizzling… (6m 58s · ↓ 34.5k tokens)`
+        //   `✽ Drizzling… (7m 13s · ↓ 36.1k tokens)`
+        // O verbo é ALEATÓRIO (a lista antiga de verbos fixos — Working, Thinking,
+        // Swooping… — nunca cobria o que a TUI de hoje sorteia, e por isso o
+        // veredito caía em `unknown` para mensagem que chegou); o que é estável é
+        // o GLIFO de spinner + gerúndio + `…`. `esc to interrupt` e a lista de
+        // verbos MEDIDA antes continuam na união: versões/configurações que os
+        // mostram seguem casando, e a nova alternativa só ACRESCENTA recall — a
+        // polaridade (evidência positiva) não muda.
+        submitStartedPattern: /(?:esc to interrupt)|(?:[✢✣✤✥✦✧✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿]\s*[A-Z][a-z]+…)|(?:\b(?:Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering)\b)/i,
         // O hook `Stop` EFÊMERO que o `buildArgs` acima instala (`--settings`
         // → `acbridge turn-complete`): o sinal chega NOMEADO por IPC
         // (`pty:turn-complete`), não por leitura de tela.
@@ -1200,6 +1225,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     id: "antigravity",
     label: "Antigravity",
     binaryNames: ["agy"],
+    // A newly spawned card stops on this dialog before reading its brief; the
+    // default confirms on Enter.
+    trustPrompt: { pattern: /Do you trust the contents of this project\?/, confirmInput: "\r" },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
@@ -1477,6 +1505,11 @@ export function shouldImposeSessionId(
 
 export function providerById(id: string): ProviderDef | undefined {
   return PROVIDERS.find((p) => p.id === id);
+}
+
+/** The trust dialog this provider declares, or null when it declares none. */
+export function providerTrustPrompt(id: string): TrustPromptDecl | null {
+  return providerById(id)?.trustPrompt ?? null;
 }
 
 export function providerCapacity(id: string): ProviderCapacity | undefined {

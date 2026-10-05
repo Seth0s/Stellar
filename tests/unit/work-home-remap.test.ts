@@ -195,4 +195,14 @@ describe("discoverProjectClones (I/O em tmp)", () => {
     const found = discoverProjectClones([base]);
     expect(found.map((c) => c.normalizedRemote)).toEqual(["github.com/o/r"]);
   });
+
+  it("resolve worktree (.git arquivo) pelo config do repo principal", () => {
+    makeClone("main", "git@github.com:o/r.git");
+    const wt = join(base, "wt");
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(base, "main", ".git", "worktrees", "wt")}\n`);
+    const found = discoverProjectClones([base]);
+    const worktree = found.find((c) => c.root === wt);
+    expect(worktree?.normalizedRemote).toBe("github.com/o/r");
+  });
 });

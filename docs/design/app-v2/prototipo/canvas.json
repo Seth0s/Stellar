@@ -1,0 +1,268 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "FilaTeam.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "13 · Task do time na Fila do membro",
+      "w": 1440,
+      "x": 1520,
+      "y": 6500
+    },
+    "FirstRun.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "2 · Primeira abertura",
+      "w": 1440,
+      "x": 1520,
+      "y": 0
+    },
+    "Home.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "3 · Home de sessões",
+      "w": 1440,
+      "x": 0,
+      "y": 1300
+    },
+    "HomeEmpty.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "4 · Home vazia (perfil novo)",
+      "w": 1440,
+      "x": 1520,
+      "y": 1300
+    },
+    "Invite.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "7 · Convite de time",
+      "w": 1440,
+      "x": 3040,
+      "y": 2600
+    },
+    "Login.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "5 · Entrar",
+      "w": 1440,
+      "x": 0,
+      "y": 2600
+    },
+    "LoginWaiting.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "6 · Entrar passo a passo (com opção de não sincronizar)",
+      "w": 1440,
+      "x": 1520,
+      "y": 2600
+    },
+    "Main.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "1 · Cold start",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "Profiles.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "8 · Perfis: trocar e criar",
+      "w": 1440,
+      "x": 0,
+      "y": 3900
+    },
+    "TeamAdmin.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "10 · Painel do time (owner/admin)",
+      "w": 1440,
+      "x": 0,
+      "y": 5200
+    },
+    "TeamBoard.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "11 · Board do time e distribuição",
+      "w": 1440,
+      "x": 1520,
+      "y": 5200
+    },
+    "TeamMemberBoard.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "12 · Board do time visto pelo membro",
+      "w": 1440,
+      "x": 0,
+      "y": 6500
+    },
+    "WorkHome.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "title": "9 · Casa de trabalho (sync)",
+      "w": 1440,
+      "x": 1520,
+      "y": 3900
+    },
+    "CreateTask.dc.html": {
+      "x": 0,
+      "y": 7800,
+      "w": 1440,
+      "h": 900,
+      "title": "14 · Nova task (formulário completo)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "BoardQuickTask.dc.html": {
+      "x": 1520,
+      "y": 7800,
+      "w": 1440,
+      "h": 900,
+      "title": "15 · Criar pelo board: rápido e Ctrl K",
+      "expand": "fill"
+    },
+    "TaskDetail.dc.html": {
+      "x": 3040,
+      "y": 7800,
+      "w": 1440,
+      "h": 900,
+      "title": "16 · Detalhe, edição e ações da task",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "DeleteTask.dc.html": {
+      "x": 0,
+      "y": 9100,
+      "w": 1440,
+      "h": 900,
+      "title": "17 · Arquivar ou excluir",
+      "expand": "fill"
+    },
+    "Import.dc.html": {
+      "x": 1520,
+      "y": 9100,
+      "w": 1440,
+      "h": 900,
+      "title": "18 · Importar do Slack, Linear, Jira, GitHub",
+      "expand": "fill"
+    },
+    "Integrations.dc.html": {
+      "x": 3040,
+      "y": 9100,
+      "w": 1440,
+      "h": 900,
+      "title": "19 · Integrações do time",
+      "expand": "fill"
+    },
+    "Inbox.dc.html": {
+      "x": 0,
+      "y": 10400,
+      "w": 1440,
+      "h": 900,
+      "title": "20 · Aguardando você (central)",
+      "expand": "fill"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-05T12:10:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "t1": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Abertura",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "t2": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Home",
+      "w": 240,
+      "x": 0,
+      "y": 1000
+    },
+    "t3": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Conta",
+      "w": 240,
+      "x": 0,
+      "y": 2300
+    },
+    "t4": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Perfis e casa de trabalho",
+      "w": 240,
+      "x": 0,
+      "y": 3600
+    },
+    "t5": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Time",
+      "w": 240,
+      "x": 0,
+      "y": 4900
+    },
+    "t6": {
+      "x": 0,
+      "y": 7500,
+      "text": "Tasks: criar, editar, remover",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "t7": {
+      "x": 0,
+      "y": 8800,
+      "text": "Importar e integrar",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "t8": {
+      "x": 0,
+      "y": 10100,
+      "text": "Central",
+      "kind": "title1",
+      "maxW": 1440
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "FirstRun.dc.html",
+    "Home.dc.html",
+    "HomeEmpty.dc.html",
+    "Login.dc.html",
+    "LoginWaiting.dc.html",
+    "Invite.dc.html",
+    "Profiles.dc.html",
+    "WorkHome.dc.html",
+    "TeamAdmin.dc.html",
+    "TeamBoard.dc.html",
+    "TeamMemberBoard.dc.html",
+    "FilaTeam.dc.html",
+    "CreateTask.dc.html",
+    "BoardQuickTask.dc.html",
+    "TaskDetail.dc.html",
+    "DeleteTask.dc.html",
+    "Import.dc.html",
+    "Integrations.dc.html",
+    "Inbox.dc.html"
+  ],
+  "pages": [],
+  "title": "Stellar — Home, boot e conta"
+}

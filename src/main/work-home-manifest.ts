@@ -178,3 +178,108 @@ export function manifestByPath(manifest: WorkHomeManifest | null | undefined): M
   for (const entry of manifest.entries) map.set(entry.path, entry);
   return map;
 }
+
+/**
+ * Entrada do manifesto na FORMA DO BACKEND B6 (`{tool, path, sha256, size,
+ * mode, deleted?}`). `mode` é a STRING de modo do git ("100644"/"100755"), não
+ * os bits POSIX do manifesto local.
+ */
+export type RemoteManifestEntry = {
+  tool: WorkHomeTool;
+  path: string;
+  sha256: string;
+  size: number;
+  mode: string;
+  deleted?: boolean;
+};
+
+/** Bits POSIX → modo git (`100644` normal, `100755` executável). */
+export function gitModeString(modeBits: number): string {
+  return modeBits & 0o111 ? "100755" : "100644";
+}
+
+/** Modo git → bits POSIX. Desconhecido cai em `0o644` (o backend não valida). */
+export function parseGitModeString(mode: string): number {
+  const parsed = Number.parseInt(mode, 8);
+  return Number.isFinite(parsed) ? parsed & 0o777 : 0o644;
+}
+
+/**
+ * Manifesto local → entradas do backend. As REMOÇÕES entram como
+ * `deleted:true`, com os valores da entrada de BASE correspondente (o backend
+ * exige sha256 válido mesmo para remoção). Remoção sem base é DESCARTADA — não
+ * inventamos sha256 para apagar algo que não conhecemos.
+ */
+export function toRemoteEntries(
+  manifest: WorkHomeManifest,
+  base: WorkHomeManifest | null,
+): { entries: RemoteManifestEntry[]; droppedRemovals: string[] } {
+  const entries: RemoteManifestEntry[] = manifest.entries.map((entry) => ({
+    tool: entry.tool,
+    path: entry.path,
+    sha256: entry.sha256,
+    size: entry.size,
+    mode: gitModeString(entry.mode),
+  }));
+  const baseMap = manifestByPath(base);
+  const droppedRemovals: string[] = [];
+  for (const path of manifest.removals) {
+    const previous = baseMap.get(path);
+    if (!previous) {
+      droppedRemovals.push(path);
+      continue;
+    }
+    entries.push({
+      tool: previous.tool,
+      path,
+      sha256: previous.sha256,
+      size: previous.size,
+      mode: gitModeString(previous.mode),
+      deleted: true,
+    });
+  }
+  return { entries, droppedRemovals };
+}
+
+/** Entradas do backend → manifesto local (`deleted` vira `removals`). */
+export function fromRemoteEntries(entries: readonly RemoteManifestEntry[]): WorkHomeManifest {
+  const files: WorkHomeManifestEntry[] = [];
+  const removals: string[] = [];
+  for (const entry of entries) {
+    if (entry.deleted) {
+      removals.push(entry.path);
+      continue;
+    }
+    files.push({
+      tool: entry.tool,
+      path: entry.path,
+      sha256: entry.sha256,
+      size: entry.size,
+      mode: parseGitModeString(entry.mode),
+    });
+  }
+  return buildManifest(files, removals);
+}
+
+/** Valida uma entrada vinda do backend (stub de frontend do contrato B6). */
+export function parseRemoteManifestEntry(value: unknown): RemoteManifestEntry | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (!isWorkHomeTool(rec.tool)) return null;
+  if (typeof rec.path !== "string" || rec.path === "") return null;
+  if (typeof rec.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(rec.sha256)) return null;
+  if (typeof rec.size !== "number" || !Number.isFinite(rec.size) || rec.size < 0) return null;
+  const mode = typeof rec.mode === "string" && rec.mode !== "" ? rec.mode : "100644";
+  return { tool: rec.tool, path: rec.path, sha256: rec.sha256, size: rec.size, mode, deleted: rec.deleted === true };
+}
+
+/** Array cru do backend → manifesto. Entradas inválidas são DESCARTADAS. */
+export function parseRemoteManifest(raw: unknown): WorkHomeManifest | null {
+  if (!Array.isArray(raw)) return null;
+  const entries: RemoteManifestEntry[] = [];
+  for (const value of raw) {
+    const parsed = parseRemoteManifestEntry(value);
+    if (parsed) entries.push(parsed);
+  }
+  return fromRemoteEntries(entries);
+}

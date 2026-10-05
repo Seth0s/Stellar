@@ -258,6 +258,12 @@ export function useTerminal(
   const [resumeInvalidNotice, setResumeInvalidNotice] = useState<{ reason: "missing" | "empty"; staleResumeId: string } | null>(
     null,
   );
+  /** Aviso "esta CLI não separa por perfil" (task fb6542e6): chega por
+   * `pty:home-notice` quando o card abre, num perfil isolated, um provider
+   * SEM pasta de config própria (cursor/antigravity/commandcode) — o perfil
+   * isolado simplesmente não vale para ele. Transitório de propósito, como o
+   * `resumeInvalidNotice`: vale para a vida deste processo, não persiste. */
+  const [homeNotice, setHomeNotice] = useState<{ providerId: string } | null>(null);
   // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
   // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
   // carregando/processando o histórico, fora do controle deste app), e
@@ -497,6 +503,12 @@ export function useTerminal(
       // warning can be lost exactly during the boot race this channel fixes.
       if (eventId === id) setResumeInvalidNotice({ reason, staleResumeId });
     });
+    // Aviso de perfil (task fb6542e6) — pela MESMA razão do resume-invalid:
+    // o main emite durante o spawn, antes de o ptyId existir, então casa pelo
+    // id ESTÁVEL do card (o mesmo que vira AGENT_CANVAS_CARD_ID).
+    const offHomeNotice = window.pty.onHomeNotice((eventId, noticeProviderId) => {
+      if (eventId === id) setHomeNotice({ providerId: noticeProviderId });
+    });
 
     // Register every event listener before invoking spawn. Main can emit the
     // dedicated resume-invalid notification synchronously while it validates
@@ -528,6 +540,7 @@ export function useTerminal(
       offTurnInput();
       offSessionFound();
       offResumeInvalid();
+      offHomeNotice();
       clearIdleTimer();
       applyActivityRef.current = () => {};
       turnSignalSeenRef.current = false;
@@ -1073,5 +1086,5 @@ export function useTerminal(
     applyActivityRef.current("interrupt");
   }
 
-  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, homeNotice, hasReceivedOutput, isActive, fitNow, interrupt };
 }

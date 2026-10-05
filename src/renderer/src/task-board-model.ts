@@ -4,10 +4,10 @@ import { cardHasReviewer, normalizeTaskPurpose, type TaskPurpose } from "../../t
 // dependência nenhuma — o renderer não reimplementa a leitura do passado.
 // `import type` some no build; a função é uma linha pura e compartilhada.
 import { isRoundAttributableToTask, type TaskVerdictReadRule } from "../../main/task-verdict-read-decision";
-// A regra da FASE é UMA só, no main (`task-phase-decision.ts`) — o renderer não
-// reimplementa a precedência; monta os FATOS que o preview do board já carrega
-// e delega. Mesmo padrão do import de `task-verdict-read-decision` acima.
-import { deriveTaskPhase, type TaskPhase, type TaskPhaseFacts } from "../../main/task-phase-decision";
+// The phase is decided in the main process (`task-phase-decision.ts`); the
+// renderer only reads the `phase` carried by the board payload — it neither
+// reimplements the precedence nor assembles partial facts here.
+import { deriveBoardTaskPhase, type TaskPhase } from "../../main/task-phase-decision";
 
 export type { TaskPurpose };
 export type { TaskPhase };
@@ -1065,43 +1065,23 @@ export function describeSprintCounts(s: Pick<SprintView, "countTodo" | "countDoi
 }
 
 /**
- * FASE DERIVADA NA FILA (task 6266d3e7). O board JÁ carrega a maior parte dos
- * fatos; a fase é montada aqui e decidida pela MESMA função do main
- * (`deriveTaskPhase`), nunca por uma segunda regra. DUAS APROXIMAÇÕES
- * declaradas, porque o push do board NÃO carrega a reserva nem o instante da
- * entrega:
- *  - `hasReservedCard` fica `false` — o payload não tem `reservation_state`
- *    (a reserva vive na gaveta, que é outra leitura). Uma taskreservada
- *    aparece como `ready`, nunca como `reserved` inventado;
- *  - `implementerReportedSinceLastDelivery` é `report !== null` — há um
- *    relatório do card principal; sem o carimbo da última entrega, não dá para
- *    dizer se ele é DESTA entrega (documentado, não escondido).
- * Defeito nunca é mascarado: nos dois casos o resultado é a leitura HONESTA
- * possível com os fatos presentes.
+ * The board payload carries `phase` per task, decided in the main process by
+ * `deriveTaskPhase` from facts the renderer does not hold: the reserved link
+ * (`reservation_state`) and the instant of the last work grant. The renderer
+ * only reads it; it never assembles partial facts into a phase of its own.
  */
 export type BoardPhaseInput = {
-  status: string;
-  deps: readonly string[];
-  depStatuses: Readonly<Record<string, string>>;
-  cardAlive: boolean;
-  report: { verdict: string | null } | null;
-  verdicts: readonly { verdict: string | null }[];
+  /** Structural anchor: a `TaskBoardItem` has `status`, so a board item is
+   * assignable to this type (a type of only optional properties is weak and
+   * TypeScript rejects an object with no property in common). Not read. */
+  status?: string;
+  phase?: TaskPhase | null;
 };
 
-export function phaseFactsFromBoardItem(task: BoardPhaseInput): TaskPhaseFacts {
-  const lastVerdict = task.verdicts.length > 0 ? task.verdicts[task.verdicts.length - 1]!.verdict : null;
-  return {
-    status: task.status,
-    deps: task.deps.map((id) => ({ status: task.depStatuses[id] ?? null })),
-    hasActiveImplementer: task.cardAlive,
-    hasReservedCard: false,
-    implementerReportedSinceLastDelivery: task.report !== null,
-    reviewerChangesRequested: lastVerdict === "reprovado",
-  };
-}
-
 export function deriveTaskPhaseForBoardItem(task: BoardPhaseInput): TaskPhase {
-  return deriveTaskPhase(phaseFactsFromBoardItem(task));
+  // "ready" is `deriveTaskPhase`'s own no-signal value, used when a payload
+  // predates the field — never a second rule decided here.
+  return task.phase ?? "ready";
 }
 
 /** Chave i18n do chip, uma por fase (as chaves já existem em catalogs.ts). */
@@ -1213,6 +1193,7 @@ export function snapshotTaskToBoardItem(
   review: null;
   depPurposes: Record<string, TaskPurpose | null>;
   cardAlive: false;
+  phase: TaskPhase;
   statusTransitions: [];
   divergedStatus: null;
   divergedActor: null;
@@ -1249,6 +1230,14 @@ export function snapshotTaskToBoardItem(
     review: null,
     depPurposes: {},
     cardAlive: false,
+    phase: deriveBoardTaskPhase({
+      status: t.status,
+      depStatuses: [],
+      liveImplementers: [],
+      implementerReportAt: null,
+      implementerWorkGrantedAt: null,
+      reviewerChangesRequested: false,
+    }),
     statusTransitions: [],
     divergedStatus: null,
     divergedActor: null,

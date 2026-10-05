@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — sessões</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.nav{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:8px;color:#a3aabb;font-size:13.5px;cursor:pointer}
+.nav:hover{background:#161a24;color:#e8eaf0}
+.card{display:flex;flex-direction:column;gap:10px;padding:16px;border-radius:12px;background:#12151d;border:1px solid #20242f;color:#e8eaf0;text-align:left;cursor:pointer;font-family:inherit}
+.card:hover{border-color:#353c52;background:#151925}
+.ghost{height:36px;padding:0 14px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:36px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.primary:hover{background:#5770f0;color:#fff}
+.icon{width:30px;height:30px;border-radius:7px;border:0;background:transparent;color:#858da0;display:grid;place-items:center;cursor:pointer}
+.icon:hover{background:#1c2130;color:#e8eaf0}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Recarregar"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2M11.5 2.5v2.8H8.7"></path></svg></button>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
+      <a href="Profiles.dc.html" style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #141823; border: 1px solid #222838; color: #e8eaf0">
+        <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #262d52; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #c7d0ff">L</span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 14px; font-weight: 600">Pessoal</span>
+          <span style="font-size: 12px; color: #8d94a6">lucas · nesta máquina</span>
+        </span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg>
+      </a>
+
+      <nav style="display: flex; flex-direction: column; gap: 2px" aria-label="Seções">
+        <a class="nav" href="Home.dc.html" style="background: #182037; color: #ffffff" aria-current="page">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"></rect><rect x="9" y="2" width="5" height="5" rx="1.2"></rect><rect x="2" y="9" width="5" height="5" rx="1.2"></rect><rect x="9" y="9" width="5" height="5" rx="1.2"></rect></svg>
+          <span style="flex: 1">Sessões</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">4</span>
+        </a>
+        <a class="nav" href="Home.dc.html">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v3.2l2 1.3"></path></svg>
+          <span style="flex: 1">Aguardando você</span>
+          <span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: #3a2f12; color: #f2c96a; font-size: 11px; font-weight: 600; display: grid; place-items: center">2</span>
+        </a>
+        <a class="nav" href="WorkHome.dc.html">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8z"></path><path d="M6.3 13.8V9.6h3.4v4.2"></path></svg>
+          <span style="flex: 1">Casa de trabalho</span>
+          <span style="font-size: 11px; color: #8d94a6">local</span>
+        </a>
+        <a class="nav" href="Login.dc.html">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.8" cy="5.6" r="2.3"></circle><circle cx="11" cy="6.3" r="1.8"></circle><path d="M1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4"></path></svg>
+          <span style="flex: 1">Time</span>
+          <span style="font-size: 11px; color: #8d94a6">com conta</span>
+        </a>
+        <a class="nav" href="Home.dc.html">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5"></path></svg>
+          <span style="flex: 1">Estatísticas</span>
+        </a>
+      </nav>
+
+      <span style="flex: 1"></span>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: #12151d; border: 1px solid #20242f">
+        <div style="font-size: 13.5px; font-weight: 600">Leve sua casa junto</div>
+        <div style="font-size: 12.5px; line-height: 1.5; color: #9aa1b2">Regras, skills, memórias e agentes em qualquer máquina. Credenciais nunca saem daqui.</div>
+        <a class="primary" href="Login.dc.html" style="justify-content: center">Entrar no Stellar</a>
+      </div>
+      <a class="nav" href="Home.dc.html" style="margin-top: -12px">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"></path></svg>
+        <span style="flex: 1">Configurações</span>
+      </a>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; overflow: auto; padding: 30px 40px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px">
+        <div style="flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px">
+          <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Sessões</h1>
+          <div style="font-size: 13.5px; color: #9aa1b2">4 sessões em 2 pastas · 2 tasks esperando você</div>
+        </div>
+        <label style="position: relative; display: flex; align-items: center">
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar sessão</span>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true" style="position: absolute; left: 12px"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+          <input type="search" placeholder="Buscar sessão ou pasta" style="width: 300px; height: 36px; box-sizing: border-box; padding: 0 56px 0 36px; border-radius: 8px; border: 1px solid #262b39; background: #10131a; color: #e8eaf0; font: inherit; font-size: 13px; outline: none">
+          <span style="position: absolute; right: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6; border: 1px solid #2a2f3d; border-radius: 5px; padding: 1px 6px">Ctrl K</span>
+        </label>
+        <button class="primary"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Nova sessão</button>
+      </div>
+
+      <section style="display: flex; flex-wrap: wrap; gap: 16px" aria-label="Continuar">
+        <div style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px; border-radius: 14px; background: #12151d; border: 1px solid #252a3a">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .08em; color: #8f9cff">CONTINUAR</span>
+            <span style="font-size: 12px; color: #8d94a6">acessada agora</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <div style="font-size: 22px; font-weight: 600; letter-spacing: -0.01em">Maestro</div>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8d94a6">~/Workplace/Projects</div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px">
+            <span style="display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 13px; background: #191d28; font-size: 12px; color: #d6dae4"><span style="width: 7px; height: 7px; border-radius: 50%; background: #ff8c3d"></span>Claude</span>
+            <span style="display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 13px; background: #191d28; font-size: 12px; color: #d6dae4"><span style="width: 7px; height: 7px; border-radius: 50%; background: #e56aa6"></span>Command Code ×4</span>
+            <span style="display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 13px; background: #191d28; font-size: 12px; color: #d6dae4"><span style="width: 7px; height: 7px; border-radius: 50%; background: #5b8fe0"></span>Antigravity</span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 18px; font-size: 13px; color: #a3aabb">
+            <span>6 agentes</span>
+            <span>3 tasks rodando</span>
+            <span style="color: #f2c96a">2 aguardando revisão</span>
+            <span style="flex: 1"></span>
+            <button class="ghost">Ver tasks</button>
+            <button class="primary">Abrir sessão<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7h8M7.5 3.5L11 7l-3.5 3.5"></path></svg></button>
+          </div>
+        </div>
+        <div style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 18px; border-radius: 14px; background: #12151d; border: 1px solid #20242f">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 0 6px 8px">
+            <span style="font-size: 13.5px; font-weight: 600; flex: 1">Aguardando você</span>
+            <a href="Home.dc.html" style="font-size: 12px">ver todas</a>
+          </div>
+          <button class="card" style="padding: 10px 12px; gap: 4px; background: transparent; border-color: transparent">
+            <span style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f2c96a"></span>A3b · Sync da casa de trabalho</span>
+            <span style="font-size: 12px; color: #8d94a6; padding-left: 15px">relatório entregue · Maestro · há 4 min</span>
+          </button>
+          <button class="card" style="padding: 10px 12px; gap: 4px; background: transparent; border-color: transparent">
+            <span style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f2c96a"></span>close_card · testes do caminho real</span>
+            <span style="font-size: 12px; color: #8d94a6; padding-left: 15px">relatório entregue · Maestro · há 11 min</span>
+          </button>
+        </div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 18px" aria-label="Todas as sessões">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Todas as sessões</h2>
+          <button class="ghost" style="height: 32px">Recentes<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg></button>
+          <div style="display: flex; padding: 3px; border-radius: 8px; background: #10131a; border: 1px solid #222736">
+            <button class="icon" aria-label="Ver em grade" style="background: #1d2232; color: #e8eaf0"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9" width="5" height="5" rx="1"></rect><rect x="9" y="9" width="5" height="5" rx="1"></rect></svg></button>
+            <button class="icon" aria-label="Ver em lista"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"></path></svg></button>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: baseline; gap: 10px">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .08em; color: #a3aabb">PROJECTS</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6f7790">~/Workplace/Projects</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px">
+            <button class="card">
+              <span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1; font-size: 15px; font-weight: 600">Maestro</span><span style="font-size: 10.5px; font-weight: 600; letter-spacing: .04em; color: #c7d0ff; background: #232b52; border-radius: 5px; padding: 2px 7px">ATUAL</span></span>
+              <span style="display: flex; align-items: center; gap: 4px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ff8c3d"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #e56aa6"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #e56aa6"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #5b8fe0"></span><span style="font-size: 12.5px; color: #a3aabb; margin-left: 6px">6 agentes</span></span>
+              <span style="font-size: 12px; color: #8d94a6">agora · 3 tasks rodando</span>
+            </button>
+            <button class="card">
+              <span style="font-size: 15px; font-weight: 600">Idyplatform</span>
+              <span style="display: flex; align-items: center; gap: 4px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ff8c3d"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #2fb6a8"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #5b8fe0"></span><span style="font-size: 12.5px; color: #a3aabb; margin-left: 6px">8 agentes</span></span>
+              <span style="font-size: 12px; color: #8d94a6">há 3 dias</span>
+            </button>
+            <button class="card">
+              <span style="font-size: 15px; font-weight: 600">Curriculo</span>
+              <span style="display: flex; align-items: center; gap: 4px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ff8c3d"></span><span style="font-size: 12.5px; color: #a3aabb; margin-left: 6px">1 agente</span></span>
+              <span style="font-size: 12px; color: #8d94a6">há 12 dias</span>
+            </button>
+            <button class="card" style="align-items: center; justify-content: center; background: transparent; border-style: dashed; color: #9aa1b2; font-size: 13px">
+              <svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>
+              Nova sessão nesta pasta
+            </button>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: baseline; gap: 10px">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .08em; color: #a3aabb">ESTUDOS</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6f7790">~/Estudos</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px">
+            <button class="card">
+              <span style="font-size: 15px; font-weight: 600">Estudos</span>
+              <span style="display: flex; align-items: center; gap: 4px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ff8c3d"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #cdd3d9"></span><span style="font-size: 12.5px; color: #a3aabb; margin-left: 6px">3 agentes</span></span>
+              <span style="font-size: 12px; color: #8d94a6">há 16 dias</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

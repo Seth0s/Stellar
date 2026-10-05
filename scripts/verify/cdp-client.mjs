@@ -508,7 +508,35 @@ export async function connectPageRaw(cdpPort) {
 export async function connectPage(cdpPort) {
   const page = await connectPageRaw(cdpPort);
   await assertAppDocument(page.evalJs);
+  await settleHome(page.evalJs);
   return page;
+}
+
+/**
+ * Waits out the cold-start screen and passes the first-run gate.
+ *
+ * A fresh profile now boots through a loading screen and, on the first open,
+ * a welcome screen with two paths. Every smoke that needs to act on the
+ * sessions screen would otherwise have to repeat both steps, so the harness
+ * does it once here: it waits for the loading screen to leave, then clicks
+ * "use this machine only" if the welcome screen is up. A profile that already
+ * made the choice is untouched.
+ */
+export async function settleHome(evalJs, { timeoutMs = 12_000 } = {}) {
+  const bootDeadline = Date.now() + timeoutMs;
+  while (Date.now() < bootDeadline) {
+    if (!(await evalJs(`!!document.querySelector('[data-boot]')`))) break;
+    await delay(150);
+  }
+  const firstRun = await evalJs(
+    `(() => { const b = document.querySelector('[data-role="firstrun-local"]'); if (!b) return false; b.click(); return true; })()`,
+  );
+  if (!firstRun) return;
+  const choiceDeadline = Date.now() + 5_000;
+  while (Date.now() < choiceDeadline) {
+    if (!(await evalJs(`!!document.querySelector('[data-role="firstrun-local"]')`))) break;
+    await delay(150);
+  }
 }
 
 /** DESIGN-BACKLOG.md item 8 — the app now always boots to the Home screen

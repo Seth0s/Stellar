@@ -25,14 +25,18 @@ import {
  *
  * A REGRA: todo campo DECLARADO chega ao def vivo, com o mesmo valor. As
  * normalizações conhecidas são as FONTES de regex que o JSON não carrega:
- * `delivery.turnEnd.pattern` (task 0dd5c145) e `delivery.midTurnQueue.parkedPattern`
- * (task 9c28adde, compilado com flag `i` — screen chrome varia em caixa).
+ * `delivery.turnEnd.pattern` (task 0dd5c145), `delivery.midTurnQueue.parkedPattern`
+ * (task 9c28adde, compilado com flag `i` — screen chrome varia em caixa) e
+ * `delivery.submitStartedPattern` (2026-10-05, idem `i`).
  */
 
 /** O `capacity` esperado no REGISTRO VIVO, a partir do declarado. */
 function liveCapacity(capacity: DynamicProviderSpec["capacity"]): unknown {
   const copy = structuredClone(capacity) as unknown as Record<string, unknown>;
   const delivery = copy.delivery as Record<string, unknown>;
+  if (typeof delivery.submitStartedPattern === "string") {
+    delivery.submitStartedPattern = new RegExp(delivery.submitStartedPattern, "i");
+  }
   const turnEnd = delivery.turnEnd as { mechanism: string; pattern?: string } | undefined;
   if (turnEnd?.mechanism === "screen" && turnEnd.pattern !== undefined) {
     delivery.turnEnd = { mechanism: "screen", pattern: new RegExp(turnEnd.pattern) };
@@ -71,6 +75,22 @@ describe("round-trip spec declarado → registro vivo", () => {
     }
   });
 
+  it("o início de turno do commandcode chega COMPILADO e casa a tela REAL de um turno", () => {
+    const pattern = dynamicProviderDef(commandcodeSpec()).capacity.delivery.submitStartedPattern;
+    if (!pattern) throw new Error("commandcode deveria declarar `submitStartedPattern`");
+    // Amostras REAIS (read_card, 2026-10-05, Command Code v1.74.1) — a linha de
+    // spinner enquanto o turno roda:
+    //   `○ Crystallizing…  esc to interrupt • 6m 18s • ↓ 141.7k`
+    for (const sample of [
+      "○ Crystallizing…  esc to interrupt • 6m 18s • ↓ 141.7k",
+      "○ Reflecting…  esc to interrupt • 6m 2s • ↓ 81.9k",
+    ]) {
+      expect(pattern.test(sample), sample).toBe(true);
+    }
+    // O que NÃO é início de turno: o card parado no composer.
+    expect(pattern.test("❯ Ask your question...")).toBe(false);
+  });
+
   it("a declaração sobrevive à IDA E VOLTA pelo disco (o arquivo é JSON)", () => {
     // O caminho real: o app reescreve `appProviders` a cada boot e o loader
     // relê. Se o spec carregasse `RegExp`, a serialização o tornaria `{}` e a
@@ -87,6 +107,10 @@ describe("round-trip spec declarado → registro vivo", () => {
       mechanism: "screen",
       pattern: "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)",
     });
+    // A fonte do início de turno volta como TEXTO (não vira `{}` no disco).
+    expect(reparsed.specs.find((s) => s.id === "commandcode")?.capacity.delivery.submitStartedPattern).toBe(
+      "(?:esc to interrupt)|(?:[●○✻✽✳]\\s*[A-Z][a-z]+…)",
+    );
   });
 });
 

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — perfis</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.row{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;color:#e8eaf0;cursor:pointer;border:0;background:transparent;font:inherit;text-align:left;width:100%}
+.row:hover{background:#1a1f2c}
+.ghost{height:40px;padding:0 16px;border-radius:9px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:13.5px;cursor:pointer}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:40px;padding:0 18px;border-radius:9px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.opt{display:flex;gap:12px;padding:14px;border-radius:12px;border:1px solid #262b3a;background:#0f1218;cursor:pointer}
+.field{height:42px;box-sizing:border-box;padding:0 14px;border-radius:9px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:14px;outline:none;width:100%}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex; position: relative">
+    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
+      <button style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #182037; border: 1px solid #3a4680; color: #e8eaf0; font: inherit; text-align: left" aria-expanded="true">
+        <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #262d52; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #c7d0ff">L</span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Pessoal</span><span style="font-size: 12px; color: #8d94a6">lucas · pastas do sistema</span></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9cede" stroke-width="1.5" aria-hidden="true"><path d="M4 8.5l3-3 3 3"></path></svg>
+      </button>
+      <div style="display: flex; flex-direction: column; gap: 8px; opacity: .35">
+        <div style="height: 36px; border-radius: 8px; background: #161a24"></div>
+        <div style="height: 36px; border-radius: 8px; background: #12151d"></div>
+        <div style="height: 36px; border-radius: 8px; background: #12151d"></div>
+        <div style="height: 36px; border-radius: 8px; background: #12151d"></div>
+      </div>
+    </aside>
+    <main style="flex: 1; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px"></main>
+
+    <div style="position: absolute; inset: 0; background: rgba(5,6,10,.62)"></div>
+
+    <div role="menu" aria-label="Perfis" style="position: absolute; left: 14px; top: 76px; width: 300px; display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: 14px; background: #151924; border: 1px solid #2a3042; box-shadow: 0 24px 60px rgba(0,0,0,.55)">
+      <div style="padding: 6px 10px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8d94a6">PERFIS DESTA MÁQUINA</div>
+      <button class="row" role="menuitemradio" aria-checked="true">
+        <span style="width: 30px; height: 30px; flex: none; border-radius: 8px; background: #262d52; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: #c7d0ff">L</span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13.5px; font-weight: 600">Pessoal</span><span style="font-size: 11.5px; color: #8d94a6">4 sessões · pastas do sistema</span></span>
+        <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="#8f9cff" stroke-width="1.7" aria-hidden="true"><path d="M3 7.2l2.6 2.6L11 4.4"></path></svg>
+      </button>
+      <button class="row" role="menuitemradio" aria-checked="false">
+        <span style="width: 30px; height: 30px; flex: none; border-radius: 8px; background: #123a35; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: #8ee6d8">I</span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13.5px; font-weight: 600">Idy Platform</span><span style="font-size: 11.5px; color: #8d94a6">time · 9 sessões · pastas próprias</span></span>
+      </button>
+      <div style="height: 1px; background: #232838; margin: 6px 4px"></div>
+      <button class="row" style="color: #c9cede; font-size: 13.5px"><svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" style="margin: 0 7px"><path d="M7 2.5v9M2.5 7h9"></path></svg>Novo perfil</button>
+      <button class="row" style="color: #c9cede; font-size: 13.5px"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true" style="margin: 0 7px"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6"></path></svg>Gerenciar perfis</button>
+      <div style="padding: 8px 10px 4px; font-size: 11.5px; line-height: 1.45; color: #8d94a6">Trocar de perfil reabre o Stellar. Sessões e casas não se misturam.</div>
+    </div>
+
+    <div role="dialog" aria-labelledby="np-t" style="position: absolute; left: 50%; top: 50%; transform: translate(-36%, -50%); width: 560px; display: flex; flex-direction: column; gap: 20px; padding: 28px; border-radius: 18px; background: #12151d; border: 1px solid #2a3042; box-shadow: 0 30px 80px rgba(0,0,0,.55)">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h2 id="np-t" style="margin: 0; font-size: 20px; font-weight: 600">Novo perfil</h2>
+        <p style="margin: 0; font-size: 13.5px; color: #a3aabb">Um perfil é um Stellar à parte: sessões, casa de trabalho e login das CLIs próprios.</p>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <label for="pn" style="font-size: 13px; color: #c9cede">Nome</label>
+        <input id="pn" class="field" type="text" value="Cliente Acme">
+      </div>
+      <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px">
+        <legend style="font-size: 13px; color: #c9cede; margin-bottom: 8px">Tipo</legend>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+          <label class="opt"><input type="radio" name="kind"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13.5px; font-weight: 600">Pessoal</span><span style="font-size: 12px; color: #a3aabb">Só você, nesta conta</span></span></label>
+          <label class="opt" style="border-color: #4a5bb0; background: #141a2c"><input type="radio" name="kind" checked><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13.5px; font-weight: 600">Empresa ou time</span><span style="font-size: 12px; color: #a3aabb">Liga a um time da conta</span></span></label>
+        </div>
+      </fieldset>
+      <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px">
+        <legend style="font-size: 13px; color: #c9cede; margin-bottom: 8px">Pastas das CLIs</legend>
+        <label class="opt" style="border-color: #4a5bb0; background: #141a2c"><input type="radio" name="home" checked><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13.5px; font-weight: 600">Próprias deste perfil <span style="font-size: 11px; color: #8ee6a8; font-weight: 500">recomendado para empresa</span></span><span style="font-size: 12px; line-height: 1.45; color: #a3aabb">Regras, skills, memórias e login das CLIs separados do pessoal.</span></span></label>
+        <label class="opt"><input type="radio" name="home"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13.5px; font-weight: 600">As do sistema</span><span style="font-size: 12px; color: #a3aabb">Usa ~/.claude, ~/.codex e as outras, como hoje.</span></span></label>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; font-size: 11.5px">
+          <span style="padding: 3px 8px; border-radius: 6px; background: #14301f; color: #8ee6a8">Claude</span>
+          <span style="padding: 3px 8px; border-radius: 6px; background: #14301f; color: #8ee6a8">Codex</span>
+          <span style="padding: 3px 8px; border-radius: 6px; background: #14301f; color: #8ee6a8">OpenCode</span>
+          <span style="padding: 3px 8px; border-radius: 6px; background: #14301f; color: #8ee6a8">Cline</span>
+          <span style="padding: 3px 8px; border-radius: 6px; background: #2c2412; color: #f2c96a">Cursor, Antigravity e Command Code usam as pastas do sistema</span>
+        </div>
+      </fieldset>
+      <div style="display: flex; justify-content: flex-end; gap: 10px">
+        <button class="ghost">Cancelar</button>
+        <button class="primary">Criar e abrir</button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

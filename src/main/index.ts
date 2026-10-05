@@ -55,6 +55,7 @@ import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
+import { deriveBoardTaskPhase, type TaskPhase } from "./task-phase-decision";
 import { checkAgentAvailability, providerById, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
 import { getProviderUsage } from "./provider-usage";
 import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
@@ -173,6 +174,9 @@ import { isProviderHomeMode, planConfigHome, workHomeToolForProvider } from "./c
 import { buildRelaunchArgs, isProfileKind, isValidProfileName, parseProfileArg } from "./profiles-decision";
 import { readLocalIdentityFile, setMachineIdentityDir } from "./local-identity";
 import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth";
+import { registerWorkHomeIpc } from "./work-home-ipc";
+import { registerTeamIpc } from "./team-ipc";
+import { parseDeepLink } from "./team-decision";
 import { resolveCloudApiBaseUrl } from "./cloud-auth-decision";
 import { hostname } from "node:os";
 import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
@@ -539,6 +543,18 @@ function cloudStatusOrLoggedOut(): CloudStatus {
   return cloudAuth?.getStatus() ?? { state: "logged-out", apiBaseUrl: resolveCloudApiBaseUrl(process.env), lastError: null };
 }
 
+/** The ACTIVE profile from the registry with its directory and house mode;
+ *  `null` on a deferred boot or with an unreadable registry. Shared by the work
+ *  home and the team surfaces so the two reads cannot diverge. */
+function activeProfileEntry() {
+  if (!activeProfileId) return null;
+  const finding = readProfilesRegistry(BASE_USER_DATA);
+  if (finding.kind !== "valid") return null;
+  const profile = finding.registry.profiles.find((p) => p.id === activeProfileId);
+  if (!profile) return null;
+  return { id: profile.id, dir: profileDirectory(BASE_USER_DATA, profile.id), homeMode: profile.homeMode };
+}
+
 /**
  * A3c (P5) — a casa de config/login do provider no PERFIL ativo. `null` = nada
  * a injetar (perfil `system`, sem perfil, ou casca sem agente).
@@ -699,6 +715,54 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
     }
   }
 }
+
+// ---------------------------------------------------------------------
+// DEEP LINK `stellar://invite?token=...`
+//
+// The invite arrives as a link that opens the app (`stellar://invite?...`) —
+// on macOS through the `open-url` event, on Linux/Windows as a command-line
+// argument (first instance OR `second-instance`). We keep the token and tell
+// the renderer; the UI asks to accept (`team:accept-invite`), which creates the
+// local profile only if the backend ACCEPTS. The scheme is registered with the
+// OS here; the packaged build needs a `protocols` entry in the builder config.
+// ---------------------------------------------------------------------
+let pendingInviteToken: string | null = null;
+
+function focusMainWindow(): void {
+  const win = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function handleDeepLink(url: string): void {
+  const link = parseDeepLink(url);
+  if (!link) return;
+  pendingInviteToken = link.token;
+  focusMainWindow();
+  if (mainWindow) safeSend(mainWindow, "team:invite", { token: link.token });
+}
+
+/** Scans the command line for a `stellar:...` link (first instance or 2nd). */
+function handleDeepLinksInArgv(argv: readonly string[]): void {
+  for (const arg of argv) {
+    if (typeof arg === "string" && arg.startsWith("stellar:")) handleDeepLink(arg);
+  }
+}
+
+try {
+  // Registers the app as the handler for `stellar://`. Idempotent; without a
+  // .desktop entry (dev) it is best-effort — the link still arrives via argv.
+  if (!app.isDefaultProtocolClient("stellar")) app.setAsDefaultProtocolClient("stellar");
+} catch (err) {
+  console.warn("[deep-link] could not register the stellar:// scheme:", err);
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
 
 /**
  * `acbridge snapshot` — an agent asking to *see* a specific part of the
@@ -1520,6 +1584,23 @@ function createWindow() {
     onHomeNotice: (id, providerId) => {
       safeSend(win, "pty:home-notice", id, providerId);
     },
+    // The board's declared root bounds the trust-prompt auto-confirm: inside it
+    // the registry answers the dialog, outside it reports instead.
+    resolveTrustPromptRoot: (id) => {
+      const card = store.getCard(id);
+      return card?.board_id ? store.getBoard(card.board_id)?.cwd || null : null;
+    },
+    // Routed through the bus so the notice waits for a human mid-line on the
+    // orchestrator card and confirms the submit, like every other notice.
+    onTrustPromptUnconfirmed: (id, _providerId, message) => {
+      messageBus?.notifyTrustPromptUnconfirmed(id, message);
+    },
+    // The main process detects screen turn-ends for providers without a hook,
+    // so hand the card to the bus: the reservation engine re-evaluates even
+    // when no board is mounted (the renderer is not the only detector).
+    onTurnEnd: (id) => {
+      messageBus?.onTurnEnd(id);
+    },
     onExit: (id, exitCode) => {
       safeSend(win, "pty:exit", id, exitCode);
       remoteServer?.broadcastPtyExit(id, exitCode);
@@ -1843,6 +1924,10 @@ function createWindow() {
     review: "wanted" | null;
     depPurposes: Record<string, TaskPurpose | null>;
     cardAlive: boolean;
+    /** Flow phase, decided here from the real facts (reservation links, report
+     * after the last work grant, reviewer verdict) so the renderer only reads
+     * it and never approximates it. */
+    phase: TaskPhase;
     statusTransitions: { toValue: string; at: number }[];
     /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência.
      * Ambos null = sem divergência. Espelha `tasks.diverged_status` /
@@ -1991,6 +2076,23 @@ function createWindow() {
       }
       const cardAlive = t.card_id ? registry.isAlive(t.card_id) : false;
       const lastActor = lastActorByTask.get(t.id) ?? null;
+      const liveImplementers = store.listLiveImplementersForTask(t.id);
+      const implementerCardId =
+        t.card_id ?? liveImplementers.find((l) => l.reservation_state == null)?.card_id ?? null;
+      const implementerReportAt = implementerCardId ? reportByCardId.get(implementerCardId)?.updated_at ?? null : null;
+      const implementerWorkGrantedAt = implementerCardId ? registry.getLastWorkGrantedAt(implementerCardId) : null;
+      const taskVerdicts = verdictsByTask.get(t.id) ?? [];
+      const lastVerdict = taskVerdicts.length > 0 ? taskVerdicts[taskVerdicts.length - 1]! : null;
+      const reviewerChangesRequested =
+        lastVerdict?.verdict === "reprovado" && (implementerReportAt === null || lastVerdict.at >= implementerReportAt);
+      const phase = deriveBoardTaskPhase({
+        status: t.status,
+        depStatuses: deps.map((depId) => depStatuses[depId] ?? null),
+        liveImplementers,
+        implementerReportAt,
+        implementerWorkGrantedAt,
+        reviewerChangesRequested,
+      });
       // CAMADA 4 (task b41ac547) — mesmo par de fatos que o MCP publica:
       // `status` é o que o BANCO diz (nem um `running` legado é
       // autoritativo), e `cardAlive` é o segundo fato, projetado abaixo com
@@ -2032,6 +2134,7 @@ function createWindow() {
         // real pra uma leitura de PTY de verdade, não pra uma checagem de
         // Map). `false` quando não há card vinculado.
         cardAlive,
+        phase,
         statusTransitions: transitionsByTask.get(t.id) ?? [],
         // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo no push
         // `task:changed` (canal do quadro; o aviso ao agente vai por
@@ -2293,6 +2396,9 @@ function createWindow() {
     // fato — o push continua sendo só UI.
     getCardTurnEndedAt: (cardId) => registry.getTurnFacts(cardId)?.turnEndedAt ?? null,
     getCardLastWorkGrantedAt: (cardId) => registry.getLastWorkGrantedAt(cardId),
+    // Retained output tail of a card, so the bus can tell a report written to
+    // the screen from a normal idle without a renderer round-trip.
+    getCardRecentOutput: (cardId) => registry.getRecentOutput(cardId),
     markCardTurnComplete: (cardId) => registry.markTurnComplete(cardId),
     // Activity bar — send_to_card writes the body from main, outside
     // the renderer's xterm onData hook. Same channel shape as
@@ -3074,6 +3180,40 @@ function createWindow() {
       Object.entries(store.cardCounts()).map(([boardId, counts]) => [boardId, { agents: counts.agents }]),
     ),
   );
+  /**
+   * Home aggregate, one entry per saved board: the provider mix of its
+   * terminal cards, and its tasks split by the derived phase. The phase comes
+   * from the same `buildTaskBoard` the Fila uses, so this projection cannot
+   * drift into a second rule.
+   */
+  ipcMain.handle("store:board-summaries", () => {
+    const out: Record<
+      string,
+      {
+        providers: { provider: string; count: number }[];
+        tasksRunning: number;
+        tasksAwaitingReview: number;
+        awaitingReview: { taskId: string; title: string; updatedAt: number }[];
+      }
+    > = {};
+    for (const board of store.listBoards()) {
+      const items = buildTaskBoard(board.id);
+      const awaiting = items.filter((t) => t.phase === "awaiting_review");
+      const tally = new Map<string, number>();
+      for (const card of store.listCards(board.id)) {
+        if (card.kind === "terminal" && card.provider !== "bash") {
+          tally.set(card.provider, (tally.get(card.provider) ?? 0) + 1);
+        }
+      }
+      out[board.id] = {
+        providers: [...tally.entries()].map(([provider, count]) => ({ provider, count })),
+        tasksRunning: items.reduce((n, t) => n + (t.phase === "running" ? 1 : 0), 0),
+        tasksAwaitingReview: awaiting.length,
+        awaitingReview: awaiting.map((t) => ({ taskId: t.id, title: t.prompt ?? "", updatedAt: t.updatedAt })),
+      };
+    }
+    return out;
+  });
   // O dropdown de agentes do Topbar (task 49de95ce) — gesto de abrir, nunca
   // push: a lista de papéis muda com o quadro, e quem a pede é a tela.
   ipcMain.handle("store:board-agent-roles", (_e, boardId: string) => buildBoardAgentRoles(boardId));
@@ -4081,6 +4221,45 @@ function createWindow() {
   ipcMain.handle("cloud:cancel", () => cloudAuth?.cancel() ?? cloudStatusOrLoggedOut());
   ipcMain.handle("cloud:logout", () => cloudAuth?.logout() ?? cloudStatusOrLoggedOut());
 
+  // ---- CASA DE TRABALHO: sync (A3b) + copiar do sistema -------------------
+  registerWorkHomeIpc({
+    activeProfile: activeProfileEntry,
+    homeDir: () => app.getPath("home"),
+    agentProviders: () =>
+      PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => ({
+        id: p.id,
+        supportsConfigHome: p.configHome !== undefined,
+      })),
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+    now: () => Date.now(),
+  });
+
+  // ---- TEAMS IN THE APP ---------------------------------------------------
+  // The logic lives in `team.ts`/`team-decision.ts`; here there is only the
+  // wiring. The token is the account one (renewed before it expires) and the
+  // ACTIVE profile is the house the base is published from.
+  registerTeamIpc({
+    baseUserDataDir: () => BASE_USER_DATA,
+    activeProfile: activeProfileEntry,
+    homeDir: () => app.getPath("home"),
+    agentProviders: () =>
+      PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => ({
+        id: p.id,
+        supportsConfigHome: p.configHome !== undefined,
+      })),
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+    now: () => Date.now(),
+    generateId: () => randomUUID(),
+  });
+
+  // An invite that already arrived (`stellar://invite?...` on boot) is kept for
+  // the UI that mounts later; without this the token of a link boot would be lost.
+  ipcMain.handle("team:pending-invite", () => ({ token: pendingInviteToken }));
+
   ipcMain.handle(
     "chat:send",
     (
@@ -4321,12 +4500,15 @@ function createWindow() {
 // dela própria — só a instância que DETÉM o lock recebe este evento
 // (Electron: emitido no processo original quando uma 2ª tentativa é
 // barrada pelo `requestSingleInstanceLock()` acima).
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   const win = BrowserWindow.getAllWindows()[0];
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  // The second instance brought the invite link (`stellar://invite?...`).
+  handleDeepLinksInArgv(argv);
 });
 
 app.whenReady().then(async () => {
@@ -4956,6 +5138,11 @@ app.whenReady().then(async () => {
   app.once("will-quit", () => cloudAuth?.dispose());
 
   createWindow();
+
+  // Boot deep link (first instance): the invite link may have come on the
+  // command line (`stellar://invite?...`). The token is kept and the UI fetches
+  // it via `team:pending-invite`; the push covers an already-mounted window.
+  handleDeepLinksInArgv(process.argv);
 
   // Empurra o estado da conta quando muda (login fecha no navegador depois) e
   // tenta restaurar a sessão guardada, para a Home já abrir logada.

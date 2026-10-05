@@ -245,6 +245,46 @@ export function decideDeliveryOutcome(
   return "unconfirmed";
 }
 
+/**
+ * A PROMOÇÃO BARATA de `unknown` (2026-10-05, defeito do composer "Sem
+ * confirmação · Master: unknown").
+ *
+ * `decideSubmitCheck` só declara `sent` com evidência POSITIVA na TELA
+ * (e256d946). Isso é correto, mas deixa um buraco: quando o provider não
+ * declara `submitStartedPattern` (ou o padrão não casa a TUI daquele instante),
+ * o laço de confirmação — que dura poucos segundos — não vê a evidência e fecha
+ * em `unknown`. A mensagem CHEGOU, mas o veredito não sabe.
+ *
+ * O sinal que falta é de FORA da tela, e já existe no registry: `turnEndedAt`
+ * (o card DECLAROU o fim de um turno) e `lastWorkGrantedAt` (novo trabalho
+ * concedido). Qualquer um DELES datado DEPOIS do laço ter dado o veredito prova
+ * que o card fez algo depois da entrega — e uma entrega que o laço largou não
+ * volta a fazer o card trabalhar. Promove `unconfirmed` → `delivered`, no mesmo
+ * espírito da promoção `parked` → `delivered` por `turnEndedAt` posterior ao
+ * parque (`settleParkedDeliveriesOnExit`).
+ *
+ * POR QUE A ÂNCORA É `settledAt` (o fim do laço) E NÃO o instante do envio: a
+ * PRÓPRIA entrega renova `lastWorkGrantedAt` (origin `"delivery"`, ver
+ * `grantsWork` em pty-registry.ts). Ancorar no envio tornaria `workGrantedAt >
+ * âncora` verdadeiro para toda entrega, promovendo TUDO a `sent` — o falso
+ * positivo que a e256d946 matou, por outra porta. O corpo, os Enters de retry e
+ * o clear do composer são todos escritos ANTES de `settledAt`, então só um
+ * trabalho POSTERIOR ao veredito conta. `null` em qualquer sinal = "não sei" e
+ * não promove (mesma polaridade do resto: ausência não vira afirmação).
+ */
+export function shouldPromoteUnconfirmed(input: {
+  /** Instante em que o laço de confirmação fechou o veredito. */
+  settledAt: number;
+  /** Fim de turno declarado pelo card, ou `null`. */
+  turnEndedAt: number | null;
+  /** Último trabalho concedido (input humano ou entrega), ou `null`. */
+  workGrantedAt: number | null;
+}): boolean {
+  if (input.turnEndedAt !== null && input.turnEndedAt > input.settledAt) return true;
+  if (input.workGrantedAt !== null && input.workGrantedAt > input.settledAt) return true;
+  return false;
+}
+
 /** Which side of the PTY is reading the delivery. `"agent"` is a TUI
  * composer (claude/codex/cursor/...), `"shell"` is readline in a `bash`
  * card. Mirrors `ProviderCapacity.role` — passed in, not imported, so

@@ -7,6 +7,7 @@ import type { ProvidersReloadReport } from "../main/providers-dynamic";
 import type { ProviderUsageStats } from "../main/provider-usage";
 import type { BoardPreset } from "../main/board-preset-decision";
 import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
+import type { TaskPhase } from "../main/task-phase-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
 // lista aqui era drift esperando acontecer — o `integrate` (task 095158e9)
 // fez o tsc apontar as duas cópias de uma vez.
@@ -294,6 +295,18 @@ export type BoardRow = {
 export type BoardCounts = { agents: number };
 
 /**
+ * Home aggregate for one saved board: the provider mix of its terminal cards
+ * and its tasks by derived phase (running / awaiting review). The awaiting
+ * tasks carry enough to list them before the review central exists.
+ */
+export type BoardSummary = {
+  providers: { provider: string; count: number }[];
+  tasksRunning: number;
+  tasksAwaitingReview: number;
+  awaitingReview: { taskId: string; title: string; updatedAt: number }[];
+};
+
+/**
  * Uma linha do dropdown de agentes do Topbar: QUEM é o card e QUAIS papéis ele
  * carrega agora.
  *
@@ -411,6 +424,7 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
     remove: (url: string): Promise<void> => ipcRenderer.invoke("store:favorites:remove", url),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
+  boardSummaries: (): Promise<Record<string, BoardSummary>> => ipcRenderer.invoke("store:board-summaries"),
   /** O dropdown de agentes do Topbar (task 49de95ce) — pedido no GESTO de
    * abrir, não em push: a lista de papéis anda com o quadro, e quem a pede é a
    * tela. O main projeta (nome + papéis vivos), o renderer só desenha. */
@@ -1060,6 +1074,10 @@ export type TaskBoardItem = {
    * crashado). Também alimenta o delta 8 (marca de movimento humano) —
    * ver `task-board-model.ts`'s `isTaskCardLive`/`describeHumanMoveNotice`. */
   cardAlive: boolean;
+  /** Flow phase computed in the main process from the real facts
+   * (reservation links, report after the last work grant, reviewer verdict).
+   * The renderer only reads it — see `task-board-model.ts`. */
+  phase: TaskPhase;
   /** Fidelidade visual ao protótipo v5, delta 6 (trilha de transição com
    * horários) — mesma consulta que o gráfico 3 já usa
    * (`listStatusTransitionsForBoard`), agora anexada a CADA task no push
@@ -2011,6 +2029,11 @@ export type ProfileView = {
   isDefault: boolean;
   isActive: boolean;
   openable: boolean;
+  /** Team linked to this profile (a team profile); `null` when there is none. */
+  teamId: string | null;
+  teamSlug: string | null;
+  /** `true` once the member left or was removed: local profile, turned off. */
+  detached: boolean;
 };
 export type ProfilesState = {
   registryPath: string;
@@ -2074,6 +2097,177 @@ const cloud: CloudApi = {
   },
 };
 
+// ---- CASA DE TRABALHO (A3b): sync da casa + copiar do sistema --------------
+export type WorkHomeTool = "claude" | "codex" | "cursor" | "gemini" | "stellar";
+export type WorkHomeStatusInfo = {
+  loggedIn: boolean;
+  profileId: string | null;
+  enabledTools: WorkHomeTool[];
+  toolRoots: Partial<Record<WorkHomeTool, string>>;
+  workFolders: string[];
+  lastRevision: number | null;
+  lastSyncAt: number | null;
+  lastError: string | null;
+};
+export type WorkHomeAction = "add" | "update" | "unchanged" | "keep-local" | "conflict" | "pending" | "remove";
+export type WorkHomePlanInfo = {
+  items: { path: string; tool: WorkHomeTool; relPath: string; action: WorkHomeAction; targetPath: string | null; reason: string }[];
+  summary: Record<string, number>;
+};
+export type WorkHomeConflictChoice = "local" | "remote" | "both";
+export type WorkHomeConflictInfo = { path: string; baseSha: string | null; localSha: string; remoteSha: string };
+export type WorkHomeApplyResultInfo = {
+  written: { path: string; targetPath: string }[];
+  removed: { path: string; targetPath: string }[];
+  keptLocal: string[];
+  conflicts: { path: string; targetPath: string }[];
+  pending: { path: string; reason: string }[];
+  warnings: string[];
+  backupDir: string | null;
+};
+export type WorkHomePreviewResult =
+  | { ok: true; revision: number; plan: WorkHomePlanInfo; warnings: string[] }
+  | { ok: false; error: string };
+export type WorkHomeApplyOutcome =
+  | { ok: true; result: WorkHomeApplyResultInfo; baseUpdated: boolean }
+  | { ok: false; error: string };
+export type WorkHomePushOutcome =
+  | { ok: true; kind: "pushed"; revision: number; uploaded: number; warnings: string[] }
+  | { ok: true; kind: "conflicts"; conflicts: WorkHomeConflictInfo[]; manifest: unknown; remote: unknown; revision: number; warnings: string[] }
+  | { ok: false; error: string };
+export type WorkHomeToolCounts = { skills: number; agents: number; memories: number; rules: number; files: number };
+export type WorkHomeToolSummaryResult =
+  | { ok: true; tools: Partial<Record<WorkHomeTool, WorkHomeToolCounts>> }
+  | { ok: false; reason: string };
+export type WorkHomeApi = {
+  status: () => Promise<WorkHomeStatusInfo>;
+  toolSummary: () => Promise<WorkHomeToolSummaryResult>;
+  setTools: (tools: WorkHomeTool[]) => Promise<WorkHomeStatusInfo>;
+  setWorkFolders: (folders: string[]) => Promise<WorkHomeStatusInfo>;
+  preview: () => Promise<WorkHomePreviewResult>;
+  apply: (choices: Record<string, WorkHomeConflictChoice>) => Promise<WorkHomeApplyOutcome>;
+  syncNow: () => Promise<WorkHomePushOutcome>;
+  resolveConflicts: (payload: {
+    manifest: unknown;
+    conflicts: WorkHomeConflictInfo[];
+    remote: unknown;
+    revision: number;
+    choices: Record<string, WorkHomeConflictChoice>;
+  }) => Promise<WorkHomePushOutcome>;
+  copyPreview: (providerId: string) => Promise<
+    | { ok: true; providerId: string; tool: string; source: string; destination: string; plan: WorkHomePlanInfo; warnings: string[] }
+    | { ok: false; reason: string }
+  >;
+  copyApply: (providerId: string) => Promise<
+    { ok: true; result: WorkHomeApplyResultInfo } | { ok: false; reason: string }
+  >;
+};
+
+const workhome: WorkHomeApi = {
+  status: () => ipcRenderer.invoke("workhome:status"),
+  toolSummary: () => ipcRenderer.invoke("workhome:tool-summary"),
+  setTools: (tools) => ipcRenderer.invoke("workhome:set-tools", tools),
+  setWorkFolders: (folders) => ipcRenderer.invoke("workhome:set-work-folders", folders),
+  preview: () => ipcRenderer.invoke("workhome:preview"),
+  apply: (choices) => ipcRenderer.invoke("workhome:apply", choices),
+  syncNow: () => ipcRenderer.invoke("workhome:sync-now"),
+  resolveConflicts: (payload) => ipcRenderer.invoke("workhome:resolve-conflicts", payload),
+  copyPreview: (providerId) => ipcRenderer.invoke("workhome:copy-preview", providerId),
+  copyApply: (providerId) => ipcRenderer.invoke("workhome:copy-apply", providerId),
+};
+
+/** Teams in the app. The `stellar://invite` link arrives by push (`team:invite`)
+ *  and stays pending for the UI to accept. Every action requires a login; the
+ *  main process is the authority (roles and permissions come from the backend). */
+export type TeamRole = "owner" | "admin" | "member";
+export type TeamSummaryInfo = { id: string; name: string; slug: string };
+export type TeamMemberInfo = { accountId: string; role: TeamRole; joinedAt: string | null };
+export type TeamProfileRef = { id: string; name: string; kind: ProfileKind };
+export type TeamProfileAccountRef = { id: string; kind: string; teamId: string | null; name: string };
+export type TeamInviteInfo = { id: string; teamId: string; target: string; role: TeamRole };
+export type TeamOverviewInfo = {
+  accountId: string | null;
+  displayName: string;
+  teams: TeamSummaryInfo[];
+  profiles: TeamProfileAccountRef[];
+  identitySubjects: string[];
+};
+export type TeamDetailInfo = { team: TeamSummaryInfo; members: TeamMemberInfo[] };
+export type TeamAcceptReason =
+  | "identity-mismatch"
+  | "expired"
+  | "used"
+  | "revoked"
+  | "not-found"
+  | "already-member"
+  | "error";
+
+export type TeamOverviewResult = { ok: true; view: TeamOverviewInfo } | { ok: false; error: string };
+export type TeamCreateResult =
+  | { ok: true; value: { team: TeamSummaryInfo; profile: TeamProfileRef; profileCreated: boolean } }
+  | { ok: false; error: string };
+export type TeamDetailResult = { ok: true; detail: TeamDetailInfo } | { ok: false; error: string };
+export type TeamInviteResult =
+  | { ok: true; invite: TeamInviteInfo }
+  | { ok: false; reason: "invalid-target" | "forbidden" | "error"; error: string };
+export type TeamMemberResult = { ok: true; member: TeamMemberInfo } | { ok: false; error: string };
+export type TeamSimpleResult = { ok: true } | { ok: false; error: string };
+export type TeamAcceptResult =
+  | { ok: true; value: { team: TeamSummaryInfo; membership: TeamMemberInfo; profile: TeamProfileRef; profileCreated: boolean } }
+  | { ok: false; reason: TeamAcceptReason; error: string };
+export type TeamPublishPreviewResult =
+  | { ok: true; preview: { entries: { path: string; tool: WorkHomeTool; size: number }[]; dropped: string[]; warnings: string[] } }
+  | { ok: false; error: string };
+export type TeamPublishResult =
+  | { ok: true; revision: number; uploaded: number; count: number; dropped: string[]; warnings: string[] }
+  | { ok: false; conflict: true; currentRevision: number }
+  | { ok: false; conflict: false; error: string };
+export type TeamPullPreviewResult =
+  | { ok: true; value: { profileId: string; profileDir: string; slug: string; revision: number; plan: WorkHomePlanInfo; warnings: string[] } }
+  | { ok: false; reason: "no-profile" | "no-slug" | "error"; error: string };
+export type TeamPullApplyResult =
+  | { ok: true; result: WorkHomeApplyResultInfo; baseUpdated: boolean }
+  | { ok: false; reason: "no-profile" | "no-slug" | "error"; error: string };
+
+export type TeamApi = {
+  overview: () => Promise<TeamOverviewResult>;
+  create: (input: { name: string; slug?: string }) => Promise<TeamCreateResult>;
+  detail: (teamId: string) => Promise<TeamDetailResult>;
+  invite: (teamId: string, input: { target: string; role: TeamRole }) => Promise<TeamInviteResult>;
+  revokeInvite: (teamId: string, inviteId: string) => Promise<TeamSimpleResult>;
+  changeRole: (teamId: string, accountId: string, role: TeamRole) => Promise<TeamMemberResult>;
+  removeMember: (teamId: string, accountId: string) => Promise<TeamSimpleResult>;
+  leave: (teamId: string) => Promise<TeamSimpleResult>;
+  acceptInvite: (token: string) => Promise<TeamAcceptResult>;
+  publishPreview: (teamId: string) => Promise<TeamPublishPreviewResult>;
+  publish: (teamId: string) => Promise<TeamPublishResult>;
+  pullPreview: (teamId: string) => Promise<TeamPullPreviewResult>;
+  pullApply: (teamId: string, choices: Record<string, WorkHomeConflictChoice>) => Promise<TeamPullApplyResult>;
+  pendingInvite: () => Promise<{ token: string | null }>;
+  onInvite: (cb: (payload: { token: string }) => void) => () => void;
+};
+const team: TeamApi = {
+  overview: () => ipcRenderer.invoke("team:overview"),
+  create: (input) => ipcRenderer.invoke("team:create", input),
+  detail: (teamId) => ipcRenderer.invoke("team:detail", teamId),
+  invite: (teamId, input) => ipcRenderer.invoke("team:invite", teamId, input),
+  revokeInvite: (teamId, inviteId) => ipcRenderer.invoke("team:revoke-invite", teamId, inviteId),
+  changeRole: (teamId, accountId, role) => ipcRenderer.invoke("team:change-role", teamId, accountId, role),
+  removeMember: (teamId, accountId) => ipcRenderer.invoke("team:remove-member", teamId, accountId),
+  leave: (teamId) => ipcRenderer.invoke("team:leave", teamId),
+  acceptInvite: (token) => ipcRenderer.invoke("team:accept-invite", token),
+  publishPreview: (teamId) => ipcRenderer.invoke("team:publish-preview", teamId),
+  publish: (teamId) => ipcRenderer.invoke("team:publish", teamId),
+  pullPreview: (teamId) => ipcRenderer.invoke("team:pull-preview", teamId),
+  pullApply: (teamId, choices) => ipcRenderer.invoke("team:pull-apply", teamId, choices),
+  pendingInvite: () => ipcRenderer.invoke("team:pending-invite"),
+  onInvite: (cb) => {
+    const listener = (_e: unknown, payload: { token: string }) => cb(payload);
+    ipcRenderer.on("team:invite", listener);
+    return () => ipcRenderer.removeListener("team:invite", listener);
+  },
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
 contextBridge.exposeInMainWorld("voice", voice);
@@ -2102,6 +2296,8 @@ contextBridge.exposeInMainWorld("i18n", i18n);
 contextBridge.exposeInMainWorld("bus", bus);
 contextBridge.exposeInMainWorld("profiles", profiles);
 contextBridge.exposeInMainWorld("cloud", cloud);
+contextBridge.exposeInMainWorld("workhome", workhome);
+contextBridge.exposeInMainWorld("team", team);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */
