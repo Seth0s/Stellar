@@ -10,54 +10,50 @@ import {
 } from "../../src/renderer/src/task-board-model";
 
 /**
- * Task 6266d3e7 — o chip de fase da Fila e o filtro "aguardando revisão". A
- * derivação monta os fatos do item do board e delega à MESMA regra do main
- * (`deriveTaskPhase`); aqui fixamos a montagem e o filtro.
+ * task dec5e889 — a FASE vem do MAIN no payload do board (`buildTaskBoard`
+ * carrega `phase`, decidido por `deriveTaskPhase`). O renderer só LÊ: as duas
+ * aproximações antigas (`hasReservedCard` fixo em false, `report !== null`
+ * como "reportou desde a entrega") foram REMOVIDAS. Sem `phase` no payload, o
+ * default é o "nenhum sinal" do próprio deriveTaskPhase (`ready`), nunca uma
+ * segunda regra a partir de fatos parciais.
  */
 
-function item(over: Partial<BoardPhaseInput> = {}): BoardPhaseInput {
-  return { status: "pending", deps: [], depStatuses: {}, cardAlive: false, report: null, verdicts: [], ...over };
-}
+const item = (over: BoardPhaseInput = {}): BoardPhaseInput => ({ ...over });
 
-describe("deriveTaskPhaseForBoardItem", () => {
-  it("done/failed são terminais", () => {
-    expect(deriveTaskPhaseForBoardItem(item({ status: "done" }))).toBe("done");
-    expect(deriveTaskPhaseForBoardItem(item({ status: "failed" }))).toBe("failed");
-  });
-
-  it("dep pendente vence tudo (bloqueio real)", () => {
-    expect(deriveTaskPhaseForBoardItem(item({ deps: ["d1"], depStatuses: { d1: "running" }, cardAlive: true }))).toBe("waiting_deps");
-  });
-
-  it("report do implementer → awaiting_review (mesmo com card vivo)", () => {
-    expect(deriveTaskPhaseForBoardItem(item({ cardAlive: true, report: { verdict: "aprovado" } }))).toBe("awaiting_review");
-  });
-
-  it("veredito reprovado → changes_requested", () => {
-    expect(deriveTaskPhaseForBoardItem(item({ cardAlive: true, verdicts: [{ verdict: "reprovado" }] }))).toBe("changes_requested");
-  });
-
-  it("card vivo sem report → running; sem nada → ready", () => {
-    expect(deriveTaskPhaseForBoardItem(item({ cardAlive: true }))).toBe("running");
-    expect(deriveTaskPhaseForBoardItem(item())).toBe("ready");
-  });
-});
-
-describe("chip (rótulo + tom)", () => {
-  it("toda fase tem chave i18n e tom", () => {
-    for (const phase of Object.keys(PHASE_LABEL_KEY) as (keyof typeof PHASE_LABEL_KEY)[]) {
-      expect(PHASE_LABEL_KEY[phase]).toMatch(/^task\.phase\./);
-      expect(PHASE_TONE[phase]).toBeTruthy();
+describe("deriveTaskPhaseForBoardItem — lê a phase do payload", () => {
+  it("devolve exatamente a phase que veio do main", () => {
+    for (const phase of ["waiting_deps", "ready", "reserved", "running", "awaiting_review", "changes_requested", "done", "failed"] as const) {
+      expect(deriveTaskPhaseForBoardItem(item({ phase }))).toBe(phase);
     }
+  });
+
+  it("sem phase no payload → 'ready' (o valor de nenhum sinal do próprio deriveTaskPhase)", () => {
+    expect(deriveTaskPhaseForBoardItem(item())).toBe("ready");
+    expect(deriveTaskPhaseForBoardItem(item({ phase: null }))).toBe("ready");
+  });
+
+  it("NÃO deriva mais de fatos parciais — um item com cardAlive/report não inventa running/awaiting_review", () => {
+    // An object with the old facts but NO `phase` falls back to "ready" — the
+    // proof that deriving from partial facts was removed.
+    const withOldFacts = {
+      cardAlive: true,
+      report: { verdict: "aprovado" },
+      status: "pending",
+      deps: [],
+      depStatuses: {},
+      verdicts: [],
+    } as unknown as BoardPhaseInput;
+    expect(deriveTaskPhaseForBoardItem(withOldFacts)).toBe("ready");
   });
 });
 
 describe("filtro rápido 'aguardando revisão'", () => {
-  const tasks = [
-    item({ status: "pending", report: { verdict: null } }), // awaiting_review
-    item({ status: "pending", cardAlive: true }), // running
-    item({ status: "done" }), // done
-    item({ status: "pending", report: { verdict: null } }), // awaiting_review
+  const tasks: BoardPhaseInput[] = [
+    { phase: "awaiting_review" },
+    { phase: "running" },
+    { phase: "done" },
+    { phase: "awaiting_review" },
+    { phase: "reserved" },
   ];
 
   it("conta só as aguardando revisão", () => {
@@ -65,13 +61,20 @@ describe("filtro rápido 'aguardando revisão'", () => {
   });
 
   it("inativo devolve a lista inteira; ativo filtra", () => {
-    expect(filterTasksByAwaitingReview(tasks, false)).toHaveLength(4);
+    expect(filterTasksByAwaitingReview(tasks, false)).toHaveLength(5);
     expect(filterTasksByAwaitingReview(tasks, true)).toHaveLength(2);
   });
 });
 
-describe("reservationStateFromPhase", () => {
-  it("rodando → running; aguardando revisão → review; deps → waiting-deps; resto → ready", () => {
+describe("chip (rótulo + tom) e estado da gaveta", () => {
+  it("toda fase tem chave i18n e tom", () => {
+    for (const phase of Object.keys(PHASE_LABEL_KEY) as (keyof typeof PHASE_LABEL_KEY)[]) {
+      expect(PHASE_LABEL_KEY[phase]).toMatch(/^task\.phase\./);
+      expect(PHASE_TONE[phase]).toBeTruthy();
+    }
+  });
+
+  it("reservationStateFromPhase mapeia a fase para o estado da gaveta", () => {
     expect(reservationStateFromPhase("running")).toBe("running");
     expect(reservationStateFromPhase("awaiting_review")).toBe("review");
     expect(reservationStateFromPhase("changes_requested")).toBe("review");

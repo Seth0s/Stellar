@@ -1,0 +1,171 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s8);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s6);
+  padding: var(--v2-s9);
+  border-radius: var(--v2-r14);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-soft);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+}
+
+.title {
+  font-size: var(--v2-f15);
+  font-weight: 600;
+}
+
+.sub {
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-3);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s5);
+  align-items: center;
+}
+
+.select {
+  height: 36px;
+  padding: 0 var(--v2-s6);
+  border: 1px solid var(--v2-line-input);
+  border-radius: var(--v2-r8);
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f13);
+}
+
+.input {
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 var(--v2-s6);
+  border: 1px solid var(--v2-line-input);
+  border-radius: var(--v2-r8);
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f13);
+  outline: none;
+}
+
+.btn {
+  height: 36px;
+  padding: 0 var(--v2-s7);
+  border: 1px solid var(--v2-line-input);
+  border-radius: var(--v2-r8);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: var(--v2-f13);
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-bright);
+}
+
+.primaryBtn {
+  height: 36px;
+  padding: 0 var(--v2-s7);
+  border: 0;
+  border-radius: var(--v2-r8);
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font: inherit;
+  font-size: var(--v2-f13);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primaryBtn:hover {
+  background: var(--v2-primary-hover);
+}
+
+.btn:disabled,
+.primaryBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.devices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+  padding: var(--v2-s5) var(--v2-s2);
+}
+
+.deviceText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s1);
+}
+
+.deviceLabel {
+  font-size: var(--v2-f13h);
+  font-weight: 600;
+}
+
+.deviceMeta {
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}
+
+.current {
+  font-size: var(--v2-f11);
+  font-weight: 600;
+  color: var(--v2-good-fg);
+  background: var(--v2-good-bg);
+  border-radius: var(--v2-r5);
+  padding: var(--v2-s1) var(--v2-s3);
+}
+
+.danger {
+  height: 32px;
+  padding: 0 var(--v2-s5);
+  border: 1px solid var(--v2-line-input);
+  border-radius: var(--v2-r7);
+  background: transparent;
+  color: var(--v2-danger);
+  font: inherit;
+  font-size: var(--v2-f12);
+  cursor: pointer;
+}
+
+.danger:hover {
+  border-color: var(--v2-danger);
+}
+
+.missing {
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-5);
+}
+
+.error {
+  font-size: var(--v2-f12h);
+  color: var(--v2-warn);
+}

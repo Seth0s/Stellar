@@ -253,3 +253,105 @@ Cada fase entrega algo verificável sozinha. **A1 não depende do backend** e po
 | P3 | **App OAuth no GitHub** | **DECIDIDA (2026-10-04): registrar em `Seth0s`** |
 | P5 | **Pastas de ferramenta por perfil** (§5.5): cada perfil do Stellar aponta as CLIs para pastas próprias (casa e login separados por perfil) ou todos os perfis usam `~/.claude` etc. do sistema | **DECIDIDA (2026-10-04): por perfil.** O pessoal pode continuar nas pastas padrão |
 | P4 | **Termos e privacidade** do site passam a citar conta e dados guardados | **DECIDIDA (2026-10-04): atualizar só na ida para produção.** É item obrigatório do checklist da B5 — o orquestrador lembra o dono antes do deploy |
+
+---
+
+## 11. Fase 2 — app completo para times (aprovada pelo dono em 2026-10-05)
+
+**Protótipo aprovado:** canvas https://claude.ai/artifact/HnbN8eechpzEvUU4yRDm3J (20 telas). É especificação, não inspiração: a implementação segue `ai/skills/implement-approved-prototype/SKILL.md`.
+
+### 11.1 O que muda nas decisões
+
+| # | Antes | Agora |
+|---|---|---|
+| D6 | O time compartilha membros + casa padrão; sem tasks | O time compartilha também **tasks**: um board do time (kanban) com distribuição entre pessoas. Posições de card, notas e o canvas de cada board **continuam locais**: só a task e o estado dela viajam |
+| — | Home atual (constelação animada, botões soltos) | Shell novo do protótipo: cold start com o logo, primeira abertura, barra lateral (perfil, Sessões, Aguardando você, Casa de trabalho, Time, Estatísticas), home de sessões com "Continuar", fundo estático |
+| — | Login em tela única | Login interno passo a passo (navegador → autorizar → conta → o que sincronizar), com **"não sincronizar nada"** |
+
+### 11.2 Tasks do time (servidor)
+
+- Uma task do time tem: título, contrato (markdown, com versões), tipo (investigar/implementar/corrigir/medir/integrar), território, gates (com `exclusive`), dependências, revisor, provider sugerido, prioridade, sprint, dono, estado (`sem dono → atribuída → rodando → aguardando revisão → concluída`, mais `arquivada`), quem criou, de onde veio (manual, Slack, GitHub, Linear, Jira, CSV).
+- **Distribuir:** admin/owner atribui a uma pessoa (e a uma sessão dela, ou deixa a pessoa escolher), deixa sem dono, ou "despachar sozinho" (vai para quem estiver livre e conhecer o território quando a dependência fechar).
+- **Membro:** vê o board inteiro; move só as suas; aceita ou devolve o que recebe; **pede para pegar** uma sem dono (vira item na central do admin).
+- **Ponte com o app:** ao aceitar, a task entra na **Fila do board local** escolhido, marcada "do time", com contrato, território e gates. O app devolve ao servidor só o estado (rodando, relatório entregue, gates medidos N/M, veredito) — **nunca o código**; o diff fica na máquina da pessoa.
+- **Arquivar** (padrão, restaurável por 30 dias) e **excluir de vez** (confirmação digitando o #id); ambos avisam o agente rodando e o dono, e mostram as dependências afetadas.
+- **Timeline** (eventos e versões do contrato), **comentários com menção**, **sprints**.
+- Permissões pela matriz da tela 10: criar/distribuir/revisar/publicar casa = owner e admin; mover as próprias = todos; papéis e excluir o time = owner.
+
+### 11.3 Central "Aguardando você" e notificações
+
+Itens por conta: revisar, pedido para pegar, devolução, gate que falhou, menção, atribuição, convite. Entrega ao app por **SSE** (`/v1/events`, reconecta com `Last-Event-ID`); notificação do sistema no app; resumo diário por e-mail (Resend), opcional.
+
+### 11.4 Importação e integrações
+
+- **Importar:** Slack (canal + regra, ex.: reação `:ticket:`; mapeamento de campos; deduplicação por id de origem; opção de continuar importando), Linear, Jira (JQL), GitHub Issues (label), CSV/JSON.
+- **Integrações do time:** Slack (`/stellar task`, reação vira task, avisos no canal, DM a quem recebeu), GitHub (issue com label vira task, PR ligado pelo `#id`, fechar issue ao concluir), Linear, Jira, webhooks assinados (HMAC) e exportação.
+- Só owner/admin conectam. **Tokens das integrações ficam no servidor, cifrados em repouso** (chave por env), nunca nas máquinas.
+
+### 11.5 Fases
+
+| # | Repo | Fase | Depende de |
+|---|---|---|---|
+| B7 | StellarCloud | Tasks do time: schema (tasks, versões de contrato, eventos, comentários, sprints, pedidos), API completa, permissões, estado vindo do app, arquivar/excluir | B6.1 |
+| B8 | StellarCloud | Central e notificações: itens por conta, SSE `/v1/events`, resumo por e-mail | B7 |
+| B9a | StellarCloud | Integrações I: infraestrutura de conectores (OAuth, tokens cifrados), Slack (comando, reação, avisos, importação de histórico), CSV/JSON | B8 |
+| B9b | StellarCloud | Integrações II: GitHub, Linear, Jira, webhooks assinados, exportação | B9a |
+| U1 | Stellar | Shell novo do protótipo: telas 1–9 (cold start, primeira abertura, barra lateral, home, home vazia, login passo a passo, convite, perfis, casa de trabalho) sobre a lógica que já existe (A1–A3b) | A4 v2 |
+| A5a | Stellar | Time no app: painel do time (tela 10), board do time e distribuição (11), visão do membro (12), Fila "do time" e ponte de estado (13) | B7, U1 |
+| A5b | Stellar | Tasks: formulário completo (14), criação rápida no board e Ctrl K (15), detalhe e ações (16), arquivar/excluir (17) | A5a |
+| A5c | Stellar | Central "Aguardando você" (20) com SSE e notificação do sistema | B8, A5b |
+| A6 | Stellar | Importar e integrações (18, 19) | B9a, A5b |
+| E2 | ambos | Integração ponta a ponta com três instâncias (owner, admin, membro): criar, distribuir, aceitar, rodar, revisar, importar do Slack falso, notificar | todas |
+
+### 11.6 Agentes com acesso ao CRUD, por CLI (ideia do dono, 2026-10-05)
+
+O agente opera tasks, regras, skills e personas por **CLI e MCP**, nunca automatizando a UI.
+
+- **CLI `stellar`**, a mesma superfície do `acbridge`, com subcomandos legíveis:
+  - `stellar task create|edit|assign|archive|delete|comment|list` (local ou `--team`);
+  - `stellar sprint …`;
+  - `stellar home rule|skill|agent add|edit|rm` para a casa de trabalho (personas = agentes das CLIs, ex.: `~/.claude/agents/`);
+  - `stellar home push|pull`;
+  - `stellar team base publish`.
+  Saída `--json` para o agente ler. As ferramentas MCP equivalentes têm os mesmos nomes.
+- **Permissão explícita:** o usuário concede, por perfil e por sessão, escopos ao agente (`tasks:write`, `team-tasks:write`, `home:write`, `team-base:publish`). O padrão é só leitura. A concessão aparece no card do agente e pode ser revogada.
+- **No servidor:** o agente usa um **token de agente** derivado da conta, com escopos, curto e revogável. Ele **nunca** pode mais que o papel da pessoa (membro não distribui task, nem por agente).
+- **Rastro:** toda escrita do agente fica marcada "por agente X (card Y) em nome de Lucas" na timeline e no audit_log.
+- **Confirmação humana:** operações destrutivas ou de alcance do time (excluir de vez, publicar a base do time, remover membro) viram item em "Aguardando você" e só acontecem quando a pessoa aprova.
+
+| # | Repo | Fase | Depende de |
+|---|---|---|---|
+| B10 | StellarCloud | Tokens de agente com escopos, limite pelo papel, marca de autoria, fila de aprovação humana para destrutivas | B8 |
+| A7 | Stellar | CLI `stellar` + ferramentas MCP de CRUD (tasks local/time, sprint, casa de trabalho, base do time), concessão de escopos por sessão com UI no card | A5b, B10 |
+
+---
+
+## 12. Estado em 2026-10-05 — integração ponta a ponta (E v2)
+
+**Ambiente medido:** backend local (`StellarCloud`) contra Postgres 17 em contêiner próprio, com **GitHub falso** (endpoints `STELLARCLOUD_GITHUB_*` sobrepostos) e **mailer `log` com links**. **Duas instâncias isoladas** do app (máquina A e máquina B), cada uma com `$HOME` falso, pastas de CLI falsas (`profiles/<id>/homes/<tool>`), o mesmo projeto clonado em caminhos diferentes e um `.credentials.json` falso. Roteiro em `docs/backend-v1/integracao/` (16 prints + `e2e-results.json`). Nada de código do produto foi editado.
+
+### 12.1 Passou (medido)
+
+- **Migração para perfis (§3):** perfil pessoal criado no primeiro boot; `providers.json` da raiz movido para `profiles/<id>/` e ausente da raiz.
+- **Perfil "Empresa" `isolated` (A3c) e troca de perfil (§3/§7.1):** trocar reabre o app no perfil certo; a casa, o board e a sessão de um perfil não aparecem no outro (login é por perfil: o pessoal volta `logged-out`).
+- **Login por GitHub (§4):** fluxo nativo loopback + PKCE S256 contra o backend real, `/me` e renovação do access.
+- **Time (A4/B4):** criar; convidar por e-mail **e** por login do GitHub; aceitar (perfil de time local em `isolated`); revogar convite. Permissões e alvo do convite conferem (`identity-mismatch` para o convite de outro).
+- **Base do time (A4/B6):** publicar a partir da casa do perfil ativo (só regras/skills/agentes/config — sem memória) e o membro recebe com o prefixo `team-<slug>-` (medido `{claude}/skills/team-acme-…`). O servidor recusa memória na base: `PUT /v1/teams/{id}/house` com path `.../memory/...` → `400 invalid_manifest: path segment "memory" is not allowed in the team base`.
+
+### 12.2 Defeitos (passo · esperado · obtido · evidência)
+
+1. **Passo 2 — A sincroniza a casa.** Esperado: `GET/PUT /v1/profiles/{id}/house` aceito. Obtido: `{"ok":false,"error":"profile not found"}`. O app usa o **id LOCAL** do perfil (§3, gerado pelo cliente) mas **nunca registra o perfil no servidor**; `GET /v1/me` devolve `profiles: []` e o backend responde `404 profile not found` (reproduzido por HTTP: `GET /v1/profiles/<uuid-desconhecido>/house` → `404`). Evidência: `passo-05-A-casa-sincronizada.png`, `e2e-results.json`.
+2. **Passo 3 — B recebe a casa.** Mesmo `profile not found`. A casa de A não desce em B: como o id de perfil é por máquina e o servidor nunca o conhece, **duas máquinas da mesma conta não compartilham casa**; isso bloqueia também os passos 4 e 5 (mescla e conflito), que ficam **sem medir ponta a ponta**. Evidência: `passo-07-B-casa-recebida.png`.
+3. **Passo 9 — remover membro.** Esperado: o perfil de time de B desliga ao ser removido. Obtido: o perfil de B continua **ativo** (o app só desliga o perfil local do próprio chamador; não há empurrão para o removido), e `team.leave` em B devolve `not found` (já não é membro), então nem "sair" desliga. Evidência: `passo-15-B-time-desligado.png`.
+4. **Passo 9 — revogação de dispositivo.** Esperado: o app expor listar/desconectar máquinas (`GET/DELETE /v1/devices`). Obtido: não há IPC nem preload para devices (`window.devices` indefinido); só `logout`. Evidência: `preload/index.ts` (só `cloud`/`profiles`/`team`/`workhome`).
+
+### 12.3 Gates (rodados juntos, sob o lock do gate)
+
+- **StellarCloud:** `go vet` ok · `staticcheck` ok · `go test -race` ok · `make test-integration` ok (contêiner de teste removido).
+- **Stellar:** `check:types` **vermelho** e `vitest` **vermelho** — por trabalho **em voo de outro(s) card(s)** na árvore compartilhada, **fora do território desta task** (editei só este doc e os prints): `src/renderer/src/Shell.tsx` (untracked) → `error TS2322: Property 'rootName' does not exist`; e `tests/unit/design-tokens.test.ts` (regras de spacing/motion sobre `docs/design/`, untracked). Total: 367 arquivos / 3554 testes passaram; 1 arquivo / 2 testes falharam.
+
+### 12.4 Pendências do dono
+
+- **B5 (deploy na VPS)** segue pendente — único bloqueio para o backend no ar; o app aponta para `api.stellar.idyplatform.com` (P2).
+- **Termos e Privacidade do site** (P4) precisam citar conta e dados guardados **antes de produção** — item obrigatório do checklist da B5.
+- **Conserto do defeito 1/2 (o achado principal):** registrar o perfil no servidor no primeiro uso — o app precisa adotar o id do servidor, ou o servidor precisa aceitar/ecoar o id local. Sem isso, a casa não sincroniza entre máquinas.

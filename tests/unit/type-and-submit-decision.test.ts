@@ -11,7 +11,6 @@ import {
   shouldPressEnterOnAttempt,
   shouldSteerAfterPark,
   deliveryWriteOpensTurn,
-  looksLikeSubmitStarted,
   needleVisibleOnScreen,
   composerClearSequence,
   wrapBracketedPaste,
@@ -27,11 +26,11 @@ import {
   lastNeedleRow,
   decideShellSubmitCheck,
   decideDeliveryOutcome,
+  shouldPromoteUnconfirmed,
   readlineAcceptedSince,
   HUMAN_INPUT_GATE_MAX_AGE_MS,
   WRITE_READY_QUIET_MS,
   WRITE_READY_MAX_WAIT_MS,
-  SUBMIT_STARTED_PATTERN,
   type WriteReadinessInput,
   type SubmitCheckInput,
 } from "../../src/main/type-and-submit-decision";
@@ -437,6 +436,28 @@ describe("decideDeliveryOutcome", () => {
     expect(decideDeliveryOutcome("read-failed")).toBe("unconfirmed");
     expect(decideDeliveryOutcome("card-gone")).toBe("unconfirmed");
     expect(decideDeliveryOutcome("error")).toBe("unconfirmed");
+  });
+});
+
+describe("shouldPromoteUnconfirmed — o fim de turno / trabalho novo promove unknown", () => {
+  const settledAt = 1_000;
+
+  it("turn end DEPOIS do veredito promove; antes (ou igual) não", () => {
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: settledAt + 1, workGrantedAt: null })).toBe(true);
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: settledAt, workGrantedAt: null })).toBe(false);
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: settledAt - 1, workGrantedAt: null })).toBe(false);
+  });
+
+  it("trabalho novo DEPOIS do veredito promove; a PRÓPRIA entrega (antes) não", () => {
+    // A entrega renova `lastWorkGrantedAt` enquanto escreve — sempre ANTES de
+    // `settledAt`. Só um trabalho POSTERIOR conta (senão todo `unknown` viraria
+    // `sent` por causa do próprio envio).
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: null, workGrantedAt: settledAt + 1 })).toBe(true);
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: null, workGrantedAt: settledAt - 1 })).toBe(false);
+  });
+
+  it("ausência dos dois sinais não promove (ausência não vira afirmação)", () => {
+    expect(shouldPromoteUnconfirmed({ settledAt, turnEndedAt: null, workGrantedAt: null })).toBe(false);
   });
 });
 

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — entrar</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.gh{height:46px;border-radius:10px;border:1px solid #2f3546;background:#f4f5f8;color:#0d0f15;font:inherit;font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer}
+.gh:hover{background:#ffffff;color:#0d0f15}
+.primary{height:46px;border-radius:10px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer}
+.primary:hover{background:#5770f0;color:#fff}
+.field{height:46px;box-sizing:border-box;padding:0 14px;border-radius:10px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:14px;outline:none}
+.field:focus{border-color:#6474e8}
+.close{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;color:#a3aabb}
+.close:hover{background:#1a1e29;color:#fff}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex; flex-wrap: wrap">
+    <section style="flex: 1 1 520px; display: flex; flex-direction: column; justify-content: space-between; gap: 32px; padding: 56px 64px; box-sizing: border-box; background: #0f1220; border-right: 1px solid #1a1e2c; position: relative; overflow: hidden">
+      <svg width="560" height="420" viewBox="0 0 560 420" fill="none" aria-hidden="true" style="position: absolute; right: -80px; bottom: -40px; opacity: .5"><path d="M40 360L150 280L220 330L340 210L470 250" stroke="#2c3768" stroke-width="1.2"></path><path d="M340 210L380 90L520 60" stroke="#2c3768" stroke-width="1.2"></path><circle cx="40" cy="360" r="3" fill="#3b4a8c"></circle><circle cx="150" cy="280" r="4" fill="#4a5bb0"></circle><circle cx="220" cy="330" r="3" fill="#3b4a8c"></circle><circle cx="340" cy="210" r="5" fill="#6878d8"></circle><circle cx="470" cy="250" r="3" fill="#3b4a8c"></circle><circle cx="380" cy="90" r="3.5" fill="#4a5bb0"></circle><circle cx="520" cy="60" r="3" fill="#3b4a8c"></circle></svg>
+      <div style="display: flex; align-items: center; gap: 12px; position: relative">
+        <svg width="40" height="40" viewBox="0 0 64 64" role="img" aria-label="Stellar"><defs><linearGradient id="b-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient><linearGradient id="b-s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a9d6ff"></stop><stop offset=".5" stop-color="#8fa2ff"></stop><stop offset="1" stop-color="#c39cff"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#b-f)" stroke-width="2.6"></rect><path d="M32.5 18c.9 9.1 3.3 11.6 12.5 12.5-9.2.9-11.6 3.4-12.5 12.5-.9-9.1-3.3-11.6-12.5-12.5 9.2-.9 11.6-3.4 12.5-12.5z" fill="url(#b-s)"></path></svg>
+        <span style="font-size: 20px; font-weight: 600">stellar</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 28px; max-width: 460px; position: relative">
+        <h2 style="margin: 0; font-size: 30px; line-height: 1.2; font-weight: 600; letter-spacing: -0.02em">Sua casa de trabalho vai junto com você.</h2>
+        <div style="display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; gap: 14px">
+            <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #1b2242; display: grid; place-items: center"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="#b9c4ff" stroke-width="1.4" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8z"></path></svg></span>
+            <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 600">Em qualquer máquina</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3aabb">Regras, skills, memórias e agentes das suas CLIs chegam prontos, cada memória no clone certo do projeto.</span></span>
+          </div>
+          <div style="display: flex; gap: 14px">
+            <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #1b2242; display: grid; place-items: center"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="#b9c4ff" stroke-width="1.4" aria-hidden="true"><rect x="2" y="3" width="5" height="10" rx="1.2"></rect><rect x="9" y="3" width="5" height="10" rx="1.2"></rect></svg></span>
+            <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 600">Pessoal e empresa separados</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3aabb">Cada perfil tem suas sessões, sua casa e o login de cada CLI. Trocar é um clique.</span></span>
+          </div>
+          <div style="display: flex; gap: 14px">
+            <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #1b2242; display: grid; place-items: center"><svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="#b9c4ff" stroke-width="1.4" aria-hidden="true"><circle cx="5.8" cy="5.6" r="2.3"></circle><circle cx="11" cy="6.3" r="1.8"></circle><path d="M1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4"></path></svg></span>
+            <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 600">Times com a mesma base</span><span style="font-size: 13.5px; line-height: 1.5; color: #a3aabb">O lead publica regras e skills do time; quem entra herda, e acrescenta o que é seu por cima.</span></span>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: #8d94a6; position: relative">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#5fd08a" stroke-width="1.4" aria-hidden="true"><path d="M8 1.8l5 2v4.1c0 3-2.1 5.3-5 6.3-2.9-1-5-3.3-5-6.3V3.8z"></path></svg>
+        Credenciais das CLIs e chaves de API nunca saem desta máquina.
+      </div>
+    </section>
+
+    <section style="flex: 1 1 520px; display: flex; flex-direction: column; padding: 28px 32px 40px; box-sizing: border-box; position: relative">
+      <div style="display: flex; justify-content: flex-end"><a class="close" href="Home.dc.html" aria-label="Fechar e voltar"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"></path></svg></a></div>
+      <div style="flex: 1; display: flex; align-items: center; justify-content: center">
+        <div style="width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 22px">
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Entrar no Stellar</h1>
+            <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #a3aabb">Abrimos o navegador do sistema para você entrar. Nenhuma senha fica guardada no app.</p>
+          </div>
+          <a class="gh" href="LoginWaiting.dc.html">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="#0d0f15" aria-hidden="true"><path d="M8 .3a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 .3z"></path></svg>
+            Continuar com GitHub
+          </a>
+          <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #8d94a6"><span style="flex: 1; height: 1px; background: #232838"></span>ou com e-mail<span style="flex: 1; height: 1px; background: #232838"></span></div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <label for="em" style="font-size: 13px; color: #c9cede">E-mail</label>
+            <input id="em" class="field" type="email" placeholder="voce@empresa.com" value="">
+          </div>
+          <a class="primary" href="LoginWaiting.dc.html">Enviar link de acesso</a>
+          <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #8d94a6">Ao entrar, você concorda com os <a href="Login.dc.html">Termos de uso</a> e a <a href="Login.dc.html">Privacidade</a>.</p>
+          <div style="height: 1px; background: #1c2030"></div>
+          <a href="Home.dc.html" style="font-size: 13.5px; color: #c9cede; display: inline-flex; align-items: center; gap: 8px">Continuar sem conta, só nesta máquina<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7h8M7.5 3.5L11 7l-3.5 3.5"></path></svg></a>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

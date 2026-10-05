@@ -114,6 +114,7 @@
         },
         "delivery": {
           "briefMechanism": "positional",
+          "submitStartedPattern": "(?:esc to interrupt)|(?:[●○✻✽✳]\\s*[A-Z][a-z]+…)",
           "turnEnd": {
             "mechanism": "screen",
             "pattern": "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)"

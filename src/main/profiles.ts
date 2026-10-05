@@ -37,6 +37,7 @@ import { isOpaqueId } from "./local-identity-decision";
 import { isProviderHomeMode, type ProviderHomeMode } from "./config-home-decision";
 import {
   createProfileEntry,
+  createTeamProfileEntry,
   defaultHomeModeForKind,
   describeProfilesBootstrapAbort,
   describeUnknownProfile,
@@ -45,7 +46,9 @@ import {
   isValidProfileName,
   normalizeProfileName,
   parseProfilesRegistry,
+  profileForTeam,
   resolveProfileSelection,
+  teamProfileName,
   validateNewProfile,
   validateRenameProfile,
   PROFILES_DIR_NAME,
@@ -57,11 +60,19 @@ import {
   type NewProfileRejection,
   type ProfileEntry,
   type ProfileKind,
+  type ProfileTeam,
   type ProfilesBootstrapDecision,
   type ProfilesRegistry,
 } from "./profiles-decision";
 
-export { PROFILES_REGISTRY_FILENAME, PROFILES_DIR_NAME, type ProfileEntry, type ProfileKind, type ProfilesRegistry };
+export {
+  PROFILES_REGISTRY_FILENAME,
+  PROFILES_DIR_NAME,
+  type ProfileEntry,
+  type ProfileKind,
+  type ProfileTeam,
+  type ProfilesRegistry,
+};
 
 /** Entradas da RAIZ que pertencem a um perfil e migram para `profiles/<id>/`.
  *  `local-identity.json` e `locale.json` NÃO estão aqui: são da máquina. */
@@ -460,6 +471,12 @@ export type ProfileView = {
   isActive: boolean;
   /** O diretório existe? A UI não oferece "trocar" para um perfil sumido. */
   openable: boolean;
+  /** Team this profile is linked to; `null` when there is none. */
+  teamId: string | null;
+  /** Team slug (prefix for the base files); `null` without a team. */
+  teamSlug: string | null;
+  /** `true` once the member left or was removed: local profile, turned off. */
+  detached: boolean;
 };
 
 export type ProfilesState = {
@@ -490,6 +507,9 @@ export function describeProfilesState(baseUserDataDir: string, activeProfileId: 
       isDefault: registry.defaultProfileId === p.id,
       isActive: activeProfileId === p.id,
       openable: existsSync(profileDirectory(baseUserDataDir, p.id)),
+      teamId: p.team?.id ?? null,
+      teamSlug: p.team?.slug ?? null,
+      detached: p.detached === true,
     })),
   };
 }
@@ -534,6 +554,78 @@ export function setProfileHomeMode(baseUserDataDir: string, id: string, mode: Pr
   };
   writeProfilesRegistry(baseUserDataDir, registry);
   return { ok: true, registry };
+}
+
+export type EnsureTeamProfileResult =
+  | { ok: true; registry: ProfilesRegistry; profile: ProfileEntry; created: boolean }
+  | { ok: false; reason: NewProfileRejection | "no-registry" | "generate-failed" };
+
+/**
+ * Ensures the LOCAL profile of a team and returns the entry. If a profile is
+ * already linked to this team, it updates the link (the team name/slug may have
+ * changed) WITHOUT touching the id or `detached`; otherwise it creates an
+ * `isolated` `team` profile. Idempotent: creating the team and accepting the
+ * invite both come through here, so a second accept does not duplicate it.
+ */
+export function ensureTeamProfile(
+  baseUserDataDir: string,
+  opts: { team: ProfileTeam; now: number; generateId: () => string },
+): EnsureTeamProfileResult {
+  const finding = readProfilesRegistry(baseUserDataDir);
+  if (finding.kind !== "valid") return { ok: false, reason: "no-registry" };
+
+  const existing = profileForTeam(finding.registry, opts.team.id);
+  if (existing) {
+    const updated: ProfileEntry = { ...existing, team: opts.team };
+    const registry: ProfilesRegistry = {
+      ...finding.registry,
+      profiles: finding.registry.profiles.map((p) => (p.id === existing.id ? updated : p)),
+    };
+    writeProfilesRegistry(baseUserDataDir, registry);
+    return { ok: true, registry, profile: updated, created: false };
+  }
+
+  const name = teamProfileName(finding.registry, opts.team);
+  const validation = validateNewProfile(finding.registry, name);
+  if (!validation.ok) return { ok: false, reason: validation.reason };
+  const id = opts.generateId();
+  if (!isOpaqueId(id)) return { ok: false, reason: "generate-failed" };
+
+  mkdirSync(profileDirectory(baseUserDataDir, id), { recursive: true });
+  const profile = createTeamProfileEntry(id, validation.name, opts.now, opts.team);
+  const registry: ProfilesRegistry = {
+    ...finding.registry,
+    profiles: [...finding.registry.profiles, profile],
+  };
+  writeProfilesRegistry(baseUserDataDir, registry);
+  return { ok: true, registry, profile, created: true };
+}
+
+export type DetachTeamProfileResult = { ok: true; registry: ProfilesRegistry } | { ok: false; reason: "unknown-profile" | "no-registry" };
+
+/**
+ * The member left the team (or was removed): the profile stays LOCAL and OFF.
+ * Nothing is deleted. The team link is KEPT (it shows where the profile came
+ * from and preserves the slug of the prefix for files already materialized);
+ * `detached` is what the UI reads to stop offering team actions.
+ */
+export function detachTeamProfile(baseUserDataDir: string, id: string): DetachTeamProfileResult {
+  const finding = readProfilesRegistry(baseUserDataDir);
+  if (finding.kind !== "valid") return { ok: false, reason: "no-registry" };
+  if (!finding.registry.profiles.some((p) => p.id === id)) return { ok: false, reason: "unknown-profile" };
+  const registry: ProfilesRegistry = {
+    ...finding.registry,
+    profiles: finding.registry.profiles.map((p) => (p.id === id ? { ...p, detached: true } : p)),
+  };
+  writeProfilesRegistry(baseUserDataDir, registry);
+  return { ok: true, registry };
+}
+
+/** Entry of the local profile linked to a team (to pull that team's house). */
+export function findTeamProfile(baseUserDataDir: string, teamId: string): ProfileEntry | null {
+  const finding = readProfilesRegistry(baseUserDataDir);
+  if (finding.kind !== "valid") return null;
+  return profileForTeam(finding.registry, teamId);
 }
 
 export type RenameProfileResult =

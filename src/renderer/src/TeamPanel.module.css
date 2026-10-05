@@ -1,5 +1,5 @@
-/* Conta Stellar (A2) — só tokens do design system (tokens.css). O gate
-   check-design-tokens morde em CSS novo. */
+/* Teams in the app — minimal UI; design-system tokens only (tokens.css). The
+   check-design-tokens gate fails on new raw values. */
 .wrap {
   position: relative;
   font-family: var(--font-ui);
@@ -26,24 +26,18 @@
   width: 8px;
   height: 8px;
   border-radius: var(--radius-circle);
-  background: var(--muted);
-}
-
-.dotOn {
   background: var(--good);
 }
 
-.dotPending {
-  background: var(--warn);
-}
-
-.menu {
+.panel {
   position: absolute;
   top: 100%;
   right: 0;
   margin-top: var(--space-2);
   z-index: 20;
-  min-width: 280px;
+  width: min(480px, 74vw);
+  max-height: 72vh;
+  overflow: auto;
   padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-4);
@@ -52,22 +46,27 @@
   box-shadow: var(--shadow-float);
 }
 
-.title {
-  font-size: var(--text-4);
-  font-weight: 600;
-  margin-bottom: var(--space-3);
-}
-
 .row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .input {
   flex: 1;
+  min-width: 120px;
   padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-3);
+}
+
+.select {
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
   background: var(--surface);
@@ -96,45 +95,98 @@
   cursor: default;
 }
 
-.wide {
-  width: 100%;
-  justify-content: center;
+.section {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
 }
 
-.name {
-  font-size: var(--text-4);
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-3);
   font-weight: 600;
+  margin-bottom: var(--space-2);
 }
 
-.muted {
-  font-size: var(--text-2);
-  color: var(--muted);
-  margin-top: var(--space-1);
-  word-break: break-all;
-}
-
-.identities {
+.list {
   list-style: none;
-  margin: var(--space-2) 0 0;
+  margin: 0 0 var(--space-2);
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
-.identity {
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.teamBtn {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-3);
+  cursor: pointer;
+  text-align: left;
+}
+
+.teamBtnOn {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.path {
   font-size: var(--text-2);
   color: var(--muted);
+  word-break: break-all;
 }
 
 .badge {
-  display: inline-block;
-  margin-right: var(--space-2);
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-1);
+  color: var(--muted);
+}
+
+.tag {
+  flex: none;
   padding: 0 var(--space-2);
   border: 1px solid currentColor;
   border-radius: var(--radius-pill);
   font-size: var(--text-1);
   color: var(--muted);
+}
+
+.inviteBanner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--good);
+  border-radius: var(--radius-2);
+  font-size: var(--text-3);
+}
+
+.muted {
+  font-size: var(--text-2);
+  color: var(--muted);
+  margin-top: var(--space-1);
+}
+
+.note {
+  margin-top: var(--space-2);
+  font-size: var(--text-2);
+  color: var(--good);
+  word-break: break-word;
 }
 
 .error {

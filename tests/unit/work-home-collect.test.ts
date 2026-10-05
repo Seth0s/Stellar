@@ -183,6 +183,26 @@ describe("collectWorkHome — codex", () => {
       expect(Buffer.from(bytes).toString("utf-8")).not.toContain("FAKE_SECRET");
     }
   });
+
+  it("reescreve caminho absoluto DENTRO do config.toml (adendo A3b)", () => {
+    const codexRoot = join(base, ".codex");
+    const projRoot = join(base, "mono");
+    mkdirSync(codexRoot, { recursive: true });
+    mkdirSync(join(projRoot, ".git"), { recursive: true });
+    writeFileSync(join(projRoot, ".git", "config"), `[remote "origin"]\n\turl = git@github.com:o/mono.git\n`);
+    writeFileSync(join(codexRoot, "config.toml"), `model = "gpt-5"\n[projects."${projRoot}"]\ntrust = true\n`);
+
+    const clone = { root: projRoot, remote: "git@github.com:o/mono.git", normalizedRemote: "github.com/o/mono" };
+    const { package: pkg } = collectWorkHome({
+      tool: "codex",
+      rootDir: codexRoot,
+      homeDir: home,
+      projectClones: [clone],
+    });
+    const config = blobText(pkg, "{codex}/config.toml");
+    expect(config).toContain('[projects."{project:github.com/o/mono}"]');
+    expect(config).not.toContain(projRoot);
+  });
 });
 
 describe("collectWorkHome — stellar (bundle existente)", () => {
@@ -200,7 +220,9 @@ describe("collectWorkHome — stellar (bundle existente)", () => {
     const bundle = JSON.parse(blobText(pkg, "{stellar}/provider-bundle.json"));
     expect(bundle.kind).toBe("stellar-provider-config");
     expect(bundle.providers[0].cwd).toBe("{home}/x");
-    expect(bundle.credentialsRequired).toEqual(["anthropic"]);
+    // §5: segredo não é assunto do sync — nem os NOMES de credencial saem.
+    expect(bundle.credentialsRequired).toBeUndefined();
+    expect(blobText(pkg, "{stellar}/provider-bundle.json")).not.toContain("credentialsRequired");
     expect(blobText(pkg, "{stellar}/provider-bundle.json")).not.toContain("sk-");
   });
 });

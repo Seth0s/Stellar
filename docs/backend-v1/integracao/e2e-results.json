@@ -1,0 +1,186 @@
+{
+  "checks": 28,
+  "failed": 5,
+  "defects": [
+    {
+      "step": "passo 2 (A sincroniza a casa)",
+      "expected": "push da casa aceito pelo backend",
+      "got": "{\"ok\":false,\"error\":\"profile not found\"}",
+      "evidence": "app manda GET/PUT /v1/profiles/<id LOCAL>/house; GET /v1/me.profiles=[] (o app nunca registra o perfil no servidor)"
+    },
+    {
+      "step": "passo 3 (B recebe a casa)",
+      "expected": "CLAUDE.md/skill/memória de A materializados em B; credencial fora",
+      "got": "{\"ok\":false,\"error\":\"profile not found\"}",
+      "evidence": "GET/PUT /v1/profiles/<id LOCAL de B>/house → profile not found (id local ≠ id do servidor, que nunca recebeu o perfil)"
+    },
+    {
+      "step": "passo 9 (remover membro)",
+      "expected": "o perfil de time de B desliga ao ser removido no servidor",
+      "got": "perfil de B continua ativo (nada é empurrado para B)",
+      "evidence": "profiles.list de B mantém o perfil de time ativo após A remover a conta de B"
+    },
+    {
+      "step": "passo 9 (revogação de dispositivo)",
+      "expected": "o app expõe listar/desconectar máquinas (GET/DELETE /v1/devices)",
+      "got": "não há IPC nem preload para devices; só logout",
+      "evidence": "preload/index.ts: cloud/profiles/team/workhome, sem devices"
+    }
+  ],
+  "blocked": [
+    {
+      "label": "passo 3 (B recebe a casa)",
+      "reason": "a casa não chega: o passo 2 falhou ({\"ok\":false,\"error\":\"profile not found\"})"
+    },
+    {
+      "label": "passo 4 (mescla de arquivos diferentes)",
+      "reason": "depende do sync da casa (passo 2), que falhou"
+    },
+    {
+      "label": "passo 5 (conflito no mesmo arquivo)",
+      "reason": "depende do sync da casa (passo 2), que falhou"
+    }
+  ],
+  "results": [
+    {
+      "label": "migração criou o perfil pessoal",
+      "ok": true,
+      "actual": "personal"
+    },
+    {
+      "label": "providers.json da raiz migrou para profiles/<id>/",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "providers.json NÃO ficou na raiz",
+      "ok": true,
+      "actual": false
+    },
+    {
+      "label": "perfil Empresa criado",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil Empresa em modo isolated",
+      "ok": true,
+      "actual": "isolated"
+    },
+    {
+      "label": "app reabriu no perfil Empresa",
+      "ok": true,
+      "actual": "69551c53-39a3-4076-822c-a9ce4fb59713"
+    },
+    {
+      "label": "A logado na conta (GitHub)",
+      "ok": true,
+      "actual": "Alice GitHub"
+    },
+    {
+      "label": "A: prévia da casa lista arquivos",
+      "ok": false,
+      "actual": false
+    },
+    {
+      "label": "A sincronizou a casa (push aceito)",
+      "ok": false,
+      "actual": false
+    },
+    {
+      "label": "B logado na MESMA conta",
+      "ok": true,
+      "actual": "Alice GitHub"
+    },
+    {
+      "label": "B recebeu a casa de A (prévia + apply)",
+      "ok": false,
+      "actual": false
+    },
+    {
+      "label": "A cria o time",
+      "ok": true,
+      "actual": "acme"
+    },
+    {
+      "label": "A convida por e-mail",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A convida por login GitHub",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B logado como o membro (bob-gh)",
+      "ok": true,
+      "actual": "Bob GitHub"
+    },
+    {
+      "label": "B aceita o convite",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil de time aparece em B",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil de time em isolated",
+      "ok": true,
+      "actual": "isolated"
+    },
+    {
+      "label": "A publica a base",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B vê a skill do time com prefixo team-acme-",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "troca reabriu no perfil pessoal",
+      "ok": true,
+      "actual": "7fa026cc-03d0-44e0-896e-1b077adbb24f"
+    },
+    {
+      "label": "casa do perfil Empresa não vazou para o pessoal",
+      "ok": true,
+      "actual": false
+    },
+    {
+      "label": "login é por perfil: pessoal não herdou a sessão da Empresa",
+      "ok": true,
+      "actual": "logged-out"
+    },
+    {
+      "label": "A revoga um convite",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A remove o membro",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "remover no servidor desliga o perfil de time de B",
+      "ok": false,
+      "actual": false
+    },
+    {
+      "label": "B sai e o perfil de time desliga localmente",
+      "ok": false,
+      "actual": false
+    },
+    {
+      "label": "A faz logout",
+      "ok": true,
+      "actual": "logged-out"
+    }
+  ]
+}

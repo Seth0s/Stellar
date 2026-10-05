@@ -32,7 +32,7 @@ import { Compass } from "./Compass";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
-import { Home } from "./Home";
+import { AppShell } from "./AppShell";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
@@ -3335,20 +3335,18 @@ export function App() {
     else addCardOfKind(action, at);
   }
 
-  if (!loaded) return <div className="viewport" />;
-
-  // DESIGN-BACKLOG.md item 8 — boots here always (see useBoardStore's boot
-  // effect); no board is loaded (so no PTYs spawned) until the user picks
-  // one. `Titlebar` stays mounted for window controls even on Home.
+  // The home shell (cold start, first run, sessions, profiles, work home,
+  // teams) takes over whenever no board is loaded. The titlebar stays mounted
+  // for the window controls.
   if (activeBoardId === null) {
     return (
       <div className="viewport">
         <Titlebar />
         <UpdateBanner />
-        <Home
+        <AppShell
+          loaded={loaded}
           boards={boards}
           boardCounts={boardCounts}
-          rootName={rootDisplayName(workspaceRoot)}
           workspaceRoot={workspaceRoot}
           defaultCwd={DEFAULT_CWD}
           onChangeRoot={changeWorkspaceRoot}
@@ -3357,6 +3355,7 @@ export function App() {
           onCreateBoard={createBoard}
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
+          onOpenSettings={() => setSettingsPage("general")}
         />
       </div>
     );

@@ -328,7 +328,7 @@ function TerminalCardInner({
     if (when) return `${short} · ${when}`;
     return short;
   }
-  const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, homeNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -743,6 +743,15 @@ function TerminalCardInner({
               }
             >
               ⚠ {resumeInvalidNotice.reason === "missing" ? t("terminal.resumeMissing") : t("terminal.resumeEmpty")}
+            </span>
+          )}
+          {/* Aviso de perfil (task fb6542e6) — o card abriu, num perfil
+           * isolated, um provider que NÃO separa por perfil: o perfil não vale
+           * para ele. Mesmo lugar do aviso de resume: DOM de verdade no
+           * rodapé, pra vida do card (não bytes no PTY). */}
+          {homeNotice && (
+            <span className={styles.terminalCardResumeWarning} data-role="terminal-home-notice">
+              ⚠ {t("terminal.homeUnsupported")}
             </span>
           )}
           <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>

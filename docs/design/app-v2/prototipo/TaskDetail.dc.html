@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — detalhe da task</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.ghost{height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:32px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.mi{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:7px;border:0;background:transparent;color:#d6dae4;font:inherit;font-size:13px;text-align:left;width:100%;cursor:pointer}
+.mi:hover{background:#1f2433;color:#fff}
+.k{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8d94a6}
+.ph{font-size:10.5px;font-weight:600;letter-spacing:.03em;border-radius:5px;padding:2px 7px}
+.ev{display:flex;gap:12px;font-size:12.5px;color:#a3aabb;line-height:1.5}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Board do time</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex; position: relative">
+    <div style="flex: 1; display: flex; gap: 10px; padding: 16px; opacity: .35">
+      <div style="flex: 1; border-radius: 12px; background: #0f1117; border: 1px solid #1b1f2a"></div>
+      <div style="flex: 1; border-radius: 12px; background: #0f1117; border: 1px solid #1b1f2a"></div>
+      <div style="flex: 1; border-radius: 12px; background: #0f1117; border: 1px solid #1b1f2a"></div>
+    </div>
+
+    <aside aria-label="Task #58" style="width: 620px; flex: none; display: flex; flex-direction: column; background: #10131a; border-left: 1px solid #262c3d; box-shadow: -20px 0 50px rgba(0,0,0,.4)">
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 20px 22px 0">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8d94a6">#58</span>
+          <span class="ph" style="background: #2b1c10; color: #ffa86b">RODANDO</span>
+          <span style="font-size: 12px; color: #8d94a6">Corrigir · Sprint 14 · prioridade normal</span>
+          <span style="flex: 1"></span>
+          <div style="position: relative">
+            <button class="ghost" aria-expanded="true" aria-haspopup="menu">Ações<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg></button>
+            <div role="menu" style="position: absolute; right: 0; top: 38px; z-index: 2; width: 250px; padding: 6px; border-radius: 12px; background: #171b27; border: 1px solid #2a3042; box-shadow: 0 20px 50px rgba(0,0,0,.55)">
+              <button class="mi" role="menuitem">Editar contrato<span class="k">E</span></button>
+              <button class="mi" role="menuitem">Reatribuir…</button>
+              <button class="mi" role="menuitem">Mudar revisor…</button>
+              <button class="mi" role="menuitem">Mover para outra sprint…</button>
+              <button class="mi" role="menuitem">Duplicar</button>
+              <button class="mi" role="menuitem">Dividir em subtasks…</button>
+              <button class="mi" role="menuitem">Copiar link</button>
+              <div style="height: 1px; background: #262b3a; margin: 4px 2px"></div>
+              <button class="mi" role="menuitem">Pausar e devolver para Sem dono</button>
+              <button class="mi" role="menuitem">Arquivar</button>
+              <a class="mi" role="menuitem" href="DeleteTask.dc.html" style="color: #ff9b9b">Excluir…<span class="k">Del</span></a>
+            </div>
+          </div>
+          <button class="wc" aria-label="Fechar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+        </div>
+        <h1 style="margin: 0; font-size: 20px; line-height: 1.3; font-weight: 600">Fila de retries com backoff em 429</h1>
+        <div style="display: flex; flex-wrap: wrap; gap: 18px; font-size: 12.5px; color: #a3aabb">
+          <span>Dono <span style="color: #e8eaf0">Bruno Melo</span></span>
+          <span>Revisa <span style="color: #e8eaf0">Ana Ribeiro</span></span>
+          <span>Agente <span style="color: #e8eaf0">Command Code</span> · 22 min</span>
+          <span>Criada por <span style="color: #e8eaf0">Ana</span> · ontem</span>
+        </div>
+        <div style="display: flex; gap: 4px; border-bottom: 1px solid #1d2130" role="tablist" aria-label="Seções da task">
+          <sc-for list="{{tabs}}" as="tb" hint-placeholder-count="5">
+            <button role="tab" aria-selected="{{tb.on}}" onClick="{{tb.pick}}" style="{{tb.style}}">{{tb.label}}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex: 1; min-height: 0; overflow: auto; padding: 18px 22px">
+        <sc-if value="{{isActivity}}" hint-placeholder-val="{{true}}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div class="ev"><span class="dot" style="background: #ffa86b"></span><span><span style="color: #e8eaf0">Command Code</span> começou no card "implementador" da sessão Idyplatform do Bruno · há 22 min</span></div>
+            <div class="ev"><span class="dot" style="background: #a9b8ff"></span><span><span style="color: #e8eaf0">Bruno</span> aceitou e colocou na Fila de Idyplatform · há 25 min</span></div>
+            <div class="ev"><span class="dot" style="background: #a9b8ff"></span><span><span style="color: #e8eaf0">Ana</span> atribuiu a Bruno · há 31 min</span></div>
+            <div class="ev"><span class="dot" style="background: #8d94a6"></span><span><span style="color: #e8eaf0">Ana</span> editou o contrato (v2): incluiu "nada muda para 5xx" · ontem</span><a href="TaskDetail.dc.html" style="font-size: 12px; margin-left: auto">ver diferença</a></div>
+            <div class="ev"><span class="dot" style="background: #8d94a6"></span><span>Importada do Slack, mensagem de <span style="color: #e8eaf0">Carla</span> em #backlog · ontem</span></div>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px">
+              <label for="cm" style="font-size: 12.5px; color: #c9cede">Comentar</label>
+              <textarea id="cm" placeholder="Escreva para o time; @ para mencionar" style="height: 80px; box-sizing: border-box; padding: 10px 12px; border-radius: 9px; border: 1px solid #2a2f3d; background: #0f1218; color: #e8eaf0; font: inherit; font-size: 13px; resize: vertical; outline: none"></textarea>
+              <div style="display: flex; justify-content: flex-end"><button class="primary">Comentar</button></div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{isContract}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; gap: 14px; font-size: 13.5px; line-height: 1.6; color: #c9cede">
+            <div style="font-size: 12px; color: #8d94a6">Versão 2 · editar avisa o dono e o agente rodando</div>
+            <div><span style="color: #e8eaf0; font-weight: 600">Objetivo.</span> Requisições com 429 voltam para a fila com backoff exponencial (base 2 s, teto 60 s, jitter).</div>
+            <div><span style="color: #e8eaf0; font-weight: 600">Aceite.</span> Teste do cálculo do atraso; integração com servidor falso devolvendo 429; nada muda para 5xx.</div>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #a3aabb">território src/queue/**, tests/queue/** · gates check:types, npm test -- queue</div>
+            <div><button class="ghost">Editar contrato</button></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{isGates}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px">
+            <div style="font-size: 12px; color: #8d94a6">Medidos pelo app quando o relatório chega, numa árvore só</div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: #0f1218; border: 1px solid #20242f"><span style="font-family: 'JetBrains Mono', monospace; flex: 1">npm run check:types</span><span style="color: #8d94a6">ainda não rodou</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: #0f1218; border: 1px solid #20242f"><span style="font-family: 'JetBrains Mono', monospace; flex: 1">npm test -- queue</span><span style="color: #8d94a6">exclusivo · ainda não rodou</span></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{isDiff}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px">
+            <div style="color: #8d94a6; font-family: 'Space Grotesk', sans-serif">Mudanças na máquina do Bruno até agora · 3 arquivos, todos dentro do território</div>
+            <div style="padding: 10px 12px; border-radius: 9px; background: #0f1218; border: 1px solid #20242f; display: flex; justify-content: space-between"><span>src/queue/retry.ts</span><span><span style="color: #8ee6a8">+48</span> <span style="color: #ff9b9b">-6</span></span></div>
+            <div style="padding: 10px 12px; border-radius: 9px; background: #0f1218; border: 1px solid #20242f; display: flex; justify-content: space-between"><span>src/queue/backoff.ts</span><span><span style="color: #8ee6a8">+31</span></span></div>
+            <div style="padding: 10px 12px; border-radius: 9px; background: #0f1218; border: 1px solid #20242f; display: flex; justify-content: space-between"><span>tests/queue/backoff.test.ts</span><span><span style="color: #8ee6a8">+64</span></span></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{isReports}}" hint-placeholder-val="{{false}}">
+          <div style="padding: 16px; border-radius: 10px; background: #0f1218; border: 1px dashed #2a2f3d; font-size: 13px; color: #a3aabb">Nenhum relatório ainda. Quando o agente reportar, aparecem aqui o relatório, os gates medidos e o veredito do revisor, rodada por rodada.</div>
+        </sc-if>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 10px; padding: 14px 22px; border-top: 1px solid #1d2130">
+        <span style="font-size: 12px; color: #8d94a6; flex: 1">Depende de #41 (concluída) · bloqueia #60</span>
+        <button class="ghost">Abrir na sessão do Bruno</button>
+        <button class="primary" disabled style="opacity: .5">Aprovar</button>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { tab: 'activity' }; }
+  renderVals() {
+    const t = this.state.tab;
+    const T = [['activity', 'Atividade'], ['contract', 'Contrato'], ['gates', 'Gates'], ['diff', 'Mudanças'], ['reports', 'Relatórios']];
+    return {
+      tabs: T.map((x) => ({
+        label: x[1], on: x[0] === t ? 'true' : 'false',
+        pick: () => this.setState({ tab: x[0] }),
+        style: 'height: 38px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 13px; cursor: pointer; margin-bottom: -1px; ' + (x[0] === t ? 'color: #ffffff; border-bottom: 2px solid #7c8cff' : 'color: #a3aabb; border-bottom: 2px solid transparent')
+      })),
+      isActivity: t === 'activity', isContract: t === 'contract', isGates: t === 'gates', isDiff: t === 'diff', isReports: t === 'reports'
+    };
+  }
+}
+</script>
+</body>
+</html>

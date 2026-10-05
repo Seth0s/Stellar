@@ -59,3 +59,42 @@ export function deriveTaskPhase(facts: TaskPhaseFacts): TaskPhase {
   if (facts.hasReservedCard) return "reserved";
   return "ready";
 }
+
+/**
+ * Raw facts a board projection already holds for one task, before they are
+ * shaped into `TaskPhaseFacts`. The board payload reads them from the store
+ * and the registry; keeping the shaping here means the same rule decides the
+ * phase everywhere, and the projection cannot drift into a second rule.
+ */
+export type BoardTaskPhaseFactsInput = {
+  /** `tasks.status`. */
+  status: string;
+  /** One entry per dependency: its status, or null when unknown. */
+  depStatuses: readonly (string | null)[];
+  /** Live implementer links: null reservation_state = active, "reserved" = held. */
+  liveImplementers: readonly { reservation_state: string | null }[];
+  /** updated_at of the principal card's latest report, or null. */
+  implementerReportAt: number | null;
+  /** Last work-granted instant for the principal card, or null when unknown. */
+  implementerWorkGrantedAt: number | null;
+  /** A reviewer asked for changes after the latest report. */
+  reviewerChangesRequested: boolean;
+};
+
+export function boardTaskPhaseFacts(input: BoardTaskPhaseFactsInput): TaskPhaseFacts {
+  return {
+    status: input.status,
+    deps: input.depStatuses.map((status) => ({ status })),
+    hasActiveImplementer: input.liveImplementers.some((l) => l.reservation_state == null),
+    hasReservedCard: input.liveImplementers.some((l) => l.reservation_state === "reserved"),
+    implementerReportedSinceLastDelivery:
+      input.implementerReportAt !== null &&
+      (input.implementerWorkGrantedAt === null || input.implementerReportAt >= input.implementerWorkGrantedAt),
+    reviewerChangesRequested: input.reviewerChangesRequested,
+  };
+}
+
+/** Convenience wrapper for callers that only need the phase. */
+export function deriveBoardTaskPhase(input: BoardTaskPhaseFactsInput): TaskPhase {
+  return deriveTaskPhase(boardTaskPhaseFacts(input));
+}

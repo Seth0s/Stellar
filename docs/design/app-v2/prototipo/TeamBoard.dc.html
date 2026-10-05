@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — board do time (lead)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.ghost{height:34px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:34px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.primary:hover{background:#5770f0}
+.col{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:12px;background:#0f1117;border:1px solid #1b1f2a}
+.t{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:10px;background:#141821;border:1px solid #232838;color:#e8eaf0;text-align:left;font:inherit;cursor:pointer;width:100%;box-sizing:border-box}
+.t:hover{border-color:#3a4258}
+.chip{font-size:11px;color:#a3aabb;background:#1b1f2b;border-radius:5px;padding:2px 7px}
+.av{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:9.5px;font-weight:700;flex:none}
+.m{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;border:1px solid transparent;background:transparent;color:#e8eaf0;font:inherit;text-align:left;cursor:pointer;width:100%}
+.m:hover{background:#1a1f2c}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px 24px; border-bottom: 1px solid #1a1e28; background: #0d0f15">
+    <a href="TeamAdmin.dc.html" style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #a3aabb"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M11 7H3M6.5 3.5L3 7l3.5 3.5"></path></svg>Idy Platform</a>
+    <h1 style="margin: 0; font-size: 20px; font-weight: 600">Board do time</h1>
+    <span style="font-size: 12px; color: #8d94a6">Sprint 14 · 18 abertas</span>
+    <span style="flex: 1"></span>
+    <div style="display: flex; align-items: center; gap: -4px" aria-label="Filtrar por pessoa">
+      <span class="av" style="background: #2a3150; color: #c7d0ff; outline: 2px solid #0d0f15">LS</span>
+      <span class="av" style="background: #3a2350; color: #e2c4ff; outline: 2px solid #0d0f15; margin-left: -6px">AR</span>
+      <span class="av" style="background: #1d3a2a; color: #a6ecc0; outline: 2px solid #0d0f15; margin-left: -6px">BM</span>
+      <span class="av" style="background: #3a2a18; color: #ffd2a6; outline: 2px solid #0d0f15; margin-left: -6px">CP</span>
+    </div>
+    <button class="ghost">Projeto: todos</button>
+    <button class="ghost">Só sem dono</button>
+    <button class="primary"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Nova task</button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+    <div style="flex: 1; min-width: 0; display: flex; gap: 10px; padding: 16px; overflow-x: auto">
+      <section class="col" aria-label="Sem dono">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px"><span style="font-size: 12.5px; font-weight: 600; flex: 1">Sem dono</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">5</span></div>
+        <button class="t" style="border-color: #5a6be0; background: #161c30" aria-pressed="true">
+          <span style="font-size: 13px; line-height: 1.35">Fila de retries com backoff em 429</span>
+          <span style="display: flex; flex-wrap: wrap; gap: 6px"><span class="chip">Idyplatform</span><span class="chip">implementar</span></span>
+          <span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #8d94a6"><span class="av" style="border: 1px dashed #4a5163; box-sizing: border-box; color: #8d94a6">?</span>distribuir</span>
+        </button>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Exportar relatório de presença</span><span style="display: flex; gap: 6px"><span class="chip">Admin</span><span class="chip">implementar</span></span></button>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Investigar lentidão no login</span><span style="display: flex; gap: 6px"><span class="chip">Backend</span><span class="chip">investigar</span></span></button>
+        <button class="t" style="opacity: .75"><span style="font-size: 13px; line-height: 1.35">Migrar ícones do mobile</span><span style="display: flex; gap: 6px"><span class="chip">Mobile</span><span class="chip">espera 1 dep</span></span></button>
+      </section>
+      <section class="col" aria-label="Atribuída">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px"><span style="font-size: 12.5px; font-weight: 600; flex: 1">Atribuída</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">4</span></div>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Paginação na lista de membros</span><span style="display: flex; gap: 6px"><span class="chip">Admin</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #3a2a18; color: #ffd2a6">CP</span>na Fila da Carla</span></button>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Testes do convite por login</span><span style="display: flex; gap: 6px"><span class="chip">Backend</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #1d3a2a; color: #a6ecc0">BM</span>na Fila do Bruno</span></button>
+      </section>
+      <section class="col" aria-label="Rodando">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px"><span style="font-size: 12.5px; font-weight: 600; flex: 1">Rodando</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">6</span></div>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Sync da casa de trabalho</span><span style="display: flex; gap: 6px"><span class="chip">Stellar</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #2a3150; color: #c7d0ff">LS</span><span style="width: 7px; height: 7px; border-radius: 50%; background: #e56aa6"></span>commandcode · 22 min</span></button>
+        <button class="t"><span style="font-size: 13px; line-height: 1.35">Tela de turmas no portal</span><span style="display: flex; gap: 6px"><span class="chip">Portal</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #3a2350; color: #e2c4ff">AR</span><span style="width: 7px; height: 7px; border-radius: 50%; background: #ff8c3d"></span>claude · 8 min</span></button>
+      </section>
+      <section class="col" aria-label="Aguardando revisão">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px"><span style="font-size: 12.5px; font-weight: 600; flex: 1; color: #f2c96a">Aguardando revisão</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">3</span></div>
+        <button class="t" style="border-color: #3a3218"><span style="font-size: 13px; line-height: 1.35">Lista de membros com papéis</span><span style="display: flex; gap: 6px"><span class="chip">Admin</span><span class="chip" style="color: #8ee6a8">gates 4/4</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #1d3a2a; color: #a6ecc0">BM</span>há 1 h · revisar</span></button>
+        <button class="t" style="border-color: #3a3218"><span style="font-size: 13px; line-height: 1.35">Fechar oráculo de blob</span><span style="display: flex; gap: 6px"><span class="chip">Backend</span><span class="chip" style="color: #8ee6a8">gates 2/2</span></span><span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #a3aabb"><span class="av" style="background: #2a3150; color: #c7d0ff">LS</span>há 2 h · revisar</span></button>
+        <div style="margin-top: auto; padding: 10px 6px 2px; border-top: 1px solid #1b1f2a; font-size: 12px; color: #8d94a6">Concluídas na sprint: 12</div>
+      </section>
+    </div>
+
+    <aside style="width: 360px; flex: none; display: flex; flex-direction: column; gap: 16px; padding: 20px; box-sizing: border-box; background: #10131a; border-left: 1px solid #1d2130; overflow: auto" aria-label="Distribuir task">
+      <div style="display: flex; align-items: flex-start; gap: 10px">
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 6px">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8f9cff">DISTRIBUIR</span>
+          <h2 style="margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600">Fila de retries com backoff em 429</h2>
+        </div>
+        <button class="wc" aria-label="Fechar painel"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px"><span class="chip">Idyplatform · src/queue/**</span><span class="chip">gates: npm test</span><span class="chip">revisão pedida</span></div>
+
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <div style="font-size: 12.5px; color: #c9cede; padding: 0 2px 4px">Para quem</div>
+        <button class="m" style="border-color: #5a6be0; background: #161c30" aria-pressed="true"><span class="av" style="background: #1d3a2a; color: #a6ecc0">BM</span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13px">Bruno Melo</span><span style="font-size: 11.5px; color: #8d94a6">2 rodando · conhece src/queue</span></span><span style="font-size: 11px; color: #8ee6a8">livre</span></button>
+        <button class="m"><span class="av" style="background: #3a2a18; color: #ffd2a6">CP</span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13px">Carla Pinto</span><span style="font-size: 11.5px; color: #8d94a6">3 rodando</span></span></button>
+        <button class="m"><span class="av" style="background: #3a2350; color: #e2c4ff">AR</span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13px">Ana Ribeiro</span><span style="font-size: 11.5px; color: #8d94a6">4 rodando</span></span><span style="font-size: 11px; color: #f2c96a">cheia</span></button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <label for="ss" style="font-size: 12.5px; color: #c9cede">Entra na Fila da sessão</label>
+        <select id="ss" style="height: 38px; padding: 0 10px; border-radius: 9px; border: 1px solid #2a2f3d; background: #0f1218; color: #e8eaf0; font: inherit; font-size: 13px"><option>Idyplatform (do Bruno)</option><option>Escolha dele ao aceitar</option></select>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <div style="display: flex; flex-direction: column; gap: 8px"><label for="pr" style="font-size: 12.5px; color: #c9cede">Prioridade</label><select id="pr" style="height: 38px; padding: 0 10px; border-radius: 9px; border: 1px solid #2a2f3d; background: #0f1218; color: #e8eaf0; font: inherit; font-size: 13px"><option>Alta</option><option selected>Normal</option></select></div>
+        <div style="display: flex; flex-direction: column; gap: 8px"><label for="rv" style="font-size: 12.5px; color: #c9cede">Quem revisa</label><select id="rv" style="height: 38px; padding: 0 10px; border-radius: 9px; border: 1px solid #2a2f3d; background: #0f1218; color: #e8eaf0; font: inherit; font-size: 13px"><option>Ana Ribeiro</option><option>Eu</option></select></div>
+      </div>
+      <div style="padding: 12px; border-radius: 10px; background: #0f1218; border: 1px solid #20242f; font-size: 12.5px; line-height: 1.5; color: #a3aabb">Aparece no card <span style="color: #e8eaf0">Fila</span> do board do Bruno, marcada "do time". O contrato, o território e os gates vão junto; o código continua na máquina dele.</div>
+      <span style="flex: 1"></span>
+      <button class="primary" style="height: 40px">Atribuir a Bruno</button>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

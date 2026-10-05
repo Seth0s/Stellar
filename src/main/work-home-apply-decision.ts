@@ -31,7 +31,9 @@ import {
   type WorkHomeTool,
   manifestByPath,
 } from "./work-home-manifest";
-import { encodeClaudeProjectDir, resolveProjectLocalDir, type ProjectClone } from "./work-home-remap";
+import { encodeClaudeProjectDir, relWithin, resolveProjectLocalDir, toPosix, type ProjectClone } from "./work-home-remap";
+import { isTemplatedContentPath } from "./work-home-tools";
+import { projectRefsInText } from "./work-home-path-values";
 import { join } from "node:path";
 
 /** Ação de um arquivo que CHEGA (existe no pacote remoto). */
@@ -104,7 +106,7 @@ export function resolveWorkHomeConflict(
 
 export type WorkHomeApplyTarget =
   | { kind: "resolved"; absPath: string }
-  | { kind: "pending"; reason: "unknown-tool-root" | "unresolved-project" | "non-portable" };
+  | { kind: "pending"; reason: "unknown-tool-root" | "unresolved-project" | "non-portable" | "unsafe-path" };
 
 export type WorkHomeTargetContext = {
   toolRoots: Partial<Record<WorkHomeTool, string>>;
@@ -113,12 +115,48 @@ export type WorkHomeTargetContext = {
 };
 
 /**
- * Resolve o caminho ABSOLUTO local de um caminho lógico. Projeto pendente
- * (sem clone) e raiz de ferramenta não informada NÃO viram caminho inventado —
- * viram pendência com o motivo.
+ * A relative path is unsafe when it is absolute, carries a backslash or a NUL,
+ * or has any empty, `.` or `..` segment. The server already rejects `..`, but
+ * the team base is applied inside every member's home, so the app refuses it on
+ * its own instead of trusting the sender.
+ */
+function unsafeRelPath(rel: string): boolean {
+  if (rel === "") return false;
+  if (rel.startsWith("/") || rel.startsWith("\\")) return true;
+  if (rel.includes("\\") || rel.includes("\0")) return true;
+  for (const segment of rel.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") return true;
+    if (/^[A-Za-z]:$/.test(segment)) return true;
+  }
+  return false;
+}
+
+/** True when `absPath` stays inside `root` (relative, with no leading `..`). */
+function staysWithin(root: string, absPath: string): boolean {
+  return relWithin(toPosix(root), toPosix(absPath)) !== null;
+}
+
+/**
+ * Joins a validated relative path onto a root and proves the result stays
+ * inside the root. A rejected path becomes a pending `unsafe-path`, never a
+ * write.
+ */
+function resolveWithin(root: string, rel: string): WorkHomeApplyTarget {
+  if (unsafeRelPath(rel)) return { kind: "pending", reason: "unsafe-path" };
+  const absPath = rel === "" ? root : join(root, ...rel.split("/"));
+  if (!staysWithin(root, absPath)) return { kind: "pending", reason: "unsafe-path" };
+  return { kind: "resolved", absPath };
+}
+
+/**
+ * Resolves the ABSOLUTE local path of a logical path. An unresolved project
+ * (no clone) and a missing tool root do NOT become an invented path — they
+ * become a pending item with its reason. A path that could escape the root
+ * (traversal, backslash, absolute) is refused as `unsafe-path` even after the
+ * team prefix.
  *
- * Memória de projeto do Claude (`{project:<id>}/memory/x`) volta para o
- * diretório do Claude: `<raiz claude>/projects/<cwd-codificado>/memory/x`.
+ * Claude project memory (`{project:<id>}/memory/x`) goes back to the Claude
+ * directory: `<claude root>/projects/<encoded-cwd>/memory/x`.
  */
 export function resolveWorkHomeTarget(logicalPath: string, ctx: WorkHomeTargetContext): WorkHomeApplyTarget {
   const projectId = projectIdOf(logicalPath);
@@ -128,29 +166,26 @@ export function resolveWorkHomeTarget(logicalPath: string, ctx: WorkHomeTargetCo
     const localRoot = resolveProjectLocalDir(projectId, ctx.projectClones);
     if (localRoot === null) return { kind: "pending", reason: "unresolved-project" };
     const rel = relPathOf(logicalPath);
-    return { kind: "resolved", absPath: join(claudeRoot, "projects", encodeClaudeProjectDir(localRoot), ...rel.split("/").filter((p) => p !== "")) };
+    const encoded = encodeClaudeProjectDir(localRoot);
+    if (unsafeRelPath(rel) || unsafeRelPath(encoded)) return { kind: "pending", reason: "unsafe-path" };
+    const base = join(claudeRoot, "projects", encoded);
+    const absPath = rel === "" ? base : join(base, ...rel.split("/"));
+    if (!staysWithin(claudeRoot, absPath)) return { kind: "pending", reason: "unsafe-path" };
+    return { kind: "resolved", absPath };
   }
 
   const tool = markerTool(logicalPath);
   if (tool !== null) {
     const root = ctx.toolRoots[tool];
     if (!root) return { kind: "pending", reason: "unknown-tool-root" };
-    const rel = relPathOf(logicalPath);
-    return {
-      kind: "resolved",
-      absPath: rel === "" ? root : join(root, ...rel.split("/").filter((p) => p !== "")),
-    };
+    return resolveWithin(root, relPathOf(logicalPath));
   }
 
   if (logicalPath === HOME_MARKER || logicalPath.startsWith(`${HOME_MARKER}/`)) {
-    const rel = relPathOf(logicalPath);
-    return {
-      kind: "resolved",
-      absPath: rel === "" ? ctx.homeDir : join(ctx.homeDir, ...rel.split("/").filter((p) => p !== "")),
-    };
+    return resolveWithin(ctx.homeDir, relPathOf(logicalPath));
   }
 
-  // Caminho absoluto da origem: não é portável (§5.2), nunca aplicado.
+  // Absolute path from the origin: not portable, never applied.
   return { kind: "pending", reason: "non-portable" };
 }
 
@@ -214,9 +249,10 @@ function itemFor(input: {
 }
 
 const PENDING_REASON: Record<Extract<WorkHomeApplyTarget, { kind: "pending" }>["reason"], string> = {
-  "unknown-tool-root": "raiz da ferramenta não informada",
-  "unresolved-project": "projeto sem clone local — pendente",
-  "non-portable": "caminho absoluto da origem — não portável",
+  "unknown-tool-root": "tool root not provided",
+  "unresolved-project": "project without a local clone — pending",
+  "non-portable": "absolute path from the origin — not portable",
+  "unsafe-path": "path could escape the root — refused",
 };
 
 /**
@@ -253,12 +289,28 @@ export function planWorkHomeApply(input: PlanWorkHomeInput): WorkHomeApplyPlan {
       continue;
     }
     const localSha = input.shaOf(target.absPath);
-    const action = decideWorkHomeFileAction({ baseSha, localSha, remoteSha: entry.sha256 });
+    let action: WorkHomeApplyPlanItem["action"] = decideWorkHomeFileAction({ baseSha, localSha, remoteSha: entry.sha256 });
+    let reason: string = action;
+
+    // A filtered settings that carries `{project:<id>}` without a local clone:
+    // the path INSIDE the content cannot be materialized, so the file stays
+    // PENDING (the file target resolves, but the content does not).
+    if (action !== "unchanged" && isTemplatedContentPath(entry.path)) {
+      const blob = input.incoming.blobs.get(entry.sha256);
+      const refs = blob ? projectRefsInText(Buffer.from(blob).toString("utf-8")) : [];
+      const unresolved = refs.filter((id) => resolveProjectLocalDir(id, input.projectClones) === null);
+      if (unresolved.length > 0) {
+        action = "pending";
+        reason = `settings referencia projeto sem clone local: ${unresolved.join(", ")}`;
+      }
+    }
+
     if (action === "add") summary.add++;
     else if (action === "update") summary.update++;
     else if (action === "unchanged") summary.unchanged++;
     else if (action === "keep-local") summary.keepLocal++;
-    else summary.conflict++;
+    else if (action === "conflict") summary.conflict++;
+    else summary.pending++;
     items.push(
       itemFor({
         source: entry,
@@ -267,7 +319,7 @@ export function planWorkHomeApply(input: PlanWorkHomeInput): WorkHomeApplyPlan {
         localSha,
         remoteSha: entry.sha256,
         baseSha,
-        reason: action,
+        reason,
       }),
     );
   }
