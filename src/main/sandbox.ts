@@ -77,8 +77,23 @@ export type SandboxResult = { ok: boolean; text: string };
  * `bwrap` itself with this argv instead of forking a second, drifting copy
  * of these flags. Pure: same input, same array, no I/O.
  */
-export function buildSandboxedBashArgs(root: string, command: string): string[] {
+export function buildSandboxedBashArgs(
+  root: string,
+  command: string,
+  /**
+   * ADDITIONAL mounts, applied AFTER `--tmpfs $HOME` — the only position where
+   * re-exposing something that lives under `$HOME` has an effect (before it,
+   * the tmpfs masks it again). Used by the isolated gate: the worktree is born
+   * in `/tmp`, its `node_modules` is a SYMLINK to the repo (under `$HOME`), and
+   * without this mount the symlink target is invisible inside the sandbox. `ro`
+   * defaults to `true`; `ro:false` becomes `--bind` (RW) for what must be
+   * written (vitest cache in `node_modules/.vite`).
+   */
+  extraBinds: readonly { src: string; dest: string; ro?: boolean }[] = [],
+): string[] {
   const home = homedir();
+  const extra: string[] = [];
+  for (const b of extraBinds) extra.push(b.ro === false ? "--bind" : "--ro-bind", b.src, b.dest);
   return [
     "--ro-bind",
     "/",
@@ -100,6 +115,7 @@ export function buildSandboxedBashArgs(root: string, command: string): string[] 
     // `$HOME`, which is the common case for this app's projects.
     "--tmpfs",
     home,
+    ...extra,
     "--bind",
     root,
     root,

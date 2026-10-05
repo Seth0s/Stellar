@@ -555,7 +555,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_cards",
       {
         description:
-          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window, task). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
+          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window, task). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Terminal/chat entries ALSO carry `context` ({usedTokens, source, at}) and `quota` ({text, percent?, at}) — how full the provider says this card is (context tokens in use; plan/quota line) — both null when the provider does not expose them, or for non-terminal cards. A null is 'unknown', never zero. Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
         inputSchema: {},
       },
       async () => {
@@ -822,7 +822,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     contractTool(server, {
       contract: CARD_STATUS_CONTRACT,
       description:
-        "Check a terminal card's status. The response carries the card's `provider`, so a bash shell is never mistaken for an agent card, plus a `note` explaining whatever state came back. States: 'running' (the card declared its turn complete and output is arriving AFTER that — a new turn began); 'idle' (the agent's turn ended, or it is sitting at an input line waiting on you); 'at-prompt' (BASH ONLY, and only when quiet — the shell is free at its prompt; a shell has no turn, so it is never called 'idle'); 'waiting' (blocked on a consent decision, e.g. an open_url/spawn_agent/spawn_card call a human hasn't approved or denied); 'exited' (process gone); 'no-output' (the PTY has produced NOT ONE BYTE since it was born and the first-output deadline has passed — the process is alive and mute: missing credential, a login prompt, or a binary stuck before its first draw. This is the honest name for what used to answer 'unknown'; nothing was killed, and the spawner was warned through the same channel as the idle watchdog. ONE warning per card, and the first byte clears it); 'unknown' (output cannot distinguish work from repaint — a parked TUI repaints forever, and a TUI can be running INSIDE a bash card, so this covers both an agent that never declared turn completion and a bash card that is emitting bytes. CHECK THE SCREEN before deciding dispatch on it: do not read 'unknown' as free, and do not read it as busy). A cheap alternative to polling snapshot/read_card in a loop.",
+        "Check a terminal card's status. The response carries the card's `provider`, so a bash shell is never mistaken for an agent card, plus a `note` explaining whatever state came back. States: 'running' (the card declared its turn complete and output is arriving AFTER that — a new turn began); 'idle' (the agent's turn ended, or it is sitting at an input line waiting on you); 'at-prompt' (BASH ONLY, and only when quiet — the shell is free at its prompt; a shell has no turn, so it is never called 'idle'); 'waiting' (blocked on a consent decision, e.g. an open_url/spawn_agent/spawn_card call a human hasn't approved or denied); 'exited' (process gone); 'no-output' (the PTY has produced NOT ONE BYTE since it was born and the first-output deadline has passed — the process is alive and mute: missing credential, a login prompt, or a binary stuck before its first draw. This is the honest name for what used to answer 'unknown'; nothing was killed, and the spawner was warned through the same channel as the idle watchdog. ONE warning per card, and the first byte clears it); 'unknown' (output cannot distinguish work from repaint — a parked TUI repaints forever, and a TUI can be running INSIDE a bash card, so this covers both an agent that never declared turn completion and a bash card that is emitting bytes. CHECK THE SCREEN before deciding dispatch on it: do not read 'unknown' as free, and do not read it as busy). The response ALSO carries `context` and `quota` — what the provider's own screen shows about how full this card is: `context` is {usedTokens, source, at} (tokens of context in use) and `quota` is {text, percent?, at} (the provider's plan/quota line). BOTH are null when this provider does not expose them — a null is 'unknown', never zero, and never a guessed number. Check `context` before handing a card more work: a card past its window has little headroom. A cheap alternative to polling snapshot/read_card in a loop.",
       run: async (args) => opts.handleRequest({ cmd: "card_status", target: args.target as string }),
     });
 
@@ -1019,7 +1019,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(z.string())
             .optional()
             .describe(
-              "File paths/globs this task may touch — structured, not a paragraph. Declared once on the task; appended to the delivered brief. The app never derives this from the filesystem. Omit = undeclared (NORMAL).",
+              "File paths/globs this task may touch — structured, not a paragraph. Each entry is `exclusive` (default) or `shared`. Two ACTIVE implementers may hold the same path ONLY if BOTH declare it `shared`, written `shared:<path> (<how the two coordinate>)` — the coordination note is MANDATORY. The guard runs at spawn_agent(taskId), link_task_card(implementer, deliver) and update_task(cardId). A broad glob does not hard-block a specific new file: a glob collides with a concrete path only when it matches AND the path already exists on disk. Declared once on the task; appended to the brief. The app never derives this from the filesystem. Omit = undeclared (NORMAL).",
             ),
           gates: z
             .array(GATE_SCHEMA)
@@ -1095,7 +1095,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session. THE RESPONSE CARRIES THE STATUS THAT WAS STORED whenever you propose one: `status:\"running\"` is accepted and never stored (the row keeps `pending`, and the response says so in `warning`) — whether a card is on the task right now is a separate fact (`cardAlive`), read from get_task/list_tasks, never a status you can write.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session. SUPERSEDED: status \"superseded\" marks the task as REPLACED by another — it REQUIRES supersededBy (an existing task of the SAME board, refused otherwise naming the field) and only the board's marked orchestrator or the human may write it (an implementer of the task NEVER can). It is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents; the orchestrator is notified to swap any dependent's dependency. THE RESPONSE CARRIES THE STATUS THAT WAS STORED whenever you propose one: `status:\"running\"` is accepted and never stored (the row keeps `pending`, and the response says so in `warning`) — whether a card is on the task right now is a separate fact (`cardAlive`), read from get_task/list_tasks, never a status you can write.",
         inputSchema: {
           taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports; an ambiguous prefix is refused, naming the candidates"),
           // Fechado por ENUM (task b41ac547): `status` era `z.string()` livre, e
@@ -1106,10 +1106,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           // `pending` (`coerceStoredTaskStatus`): `running` nunca é coluna
           // autoritativa, participação se lê de card vivo, não de status.
           status: z
-            .enum(["pending", "running", "done", "failed", "blocked"])
+            .enum(["pending", "running", "done", "failed", "blocked", "superseded"])
             .optional()
             .describe(
-              "New status — one of: pending, running, done, failed, blocked. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`). `blocked` REQUIRES `question` (see below) — a blocked task with no question is refused, because a silent hang is exactly what `blocked` exists to eliminate.",
+              "New status — one of: pending, running, done, failed, blocked, superseded. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`). `blocked` REQUIRES `question` (see below) — a blocked task with no question is refused, because a silent hang is exactly what `blocked` exists to eliminate. `superseded` marks the task as REPLACED by another one and REQUIRES `supersededBy` (see below); it is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents. Only the board's marked orchestrator or the human may write it — an implementer of the task never can.",
+            ),
+          supersededBy: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "REQUIRED when status is \"superseded\": the id (or unique prefix) of the task that REPLACES this one. It must name an EXISTING task of the SAME board — a missing, unknown, self or other-board target is refused naming this field. Omit (or null) in every other status: the substitute only exists while the task IS superseded.",
             ),
           question: z
             .object({
@@ -1162,7 +1169,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(z.string())
             .nullable()
             .optional()
-            .describe("Set/clear task territory (paths). null clears; omit leaves unchanged. See create_task."),
+            .describe(
+              'Set/clear task territory (paths; `shared:<path> (<note>)` for a shared path, `exclusive` by default). null clears; omit leaves unchanged. See create_task. Changing the territory does not re-run the guard here — the guard runs when this call ACTIVATES the task (cardId) or at the next spawn/link.',
+            ),
           gates: z
             .array(GATE_SCHEMA)
             .nullable()
@@ -1180,12 +1189,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .nullable()
             .optional()
             .describe("Set/clear required report keys. null clears; omit leaves unchanged."),
+          overrideTerritory: z
+            .string()
+            .optional()
+            .describe(
+              "Orchestrator only. When this write ACTIVATES the task (cardId) and its territory would collide with another active task, a non-empty reason here makes the guard PASS anyway and is recorded on the task's trail (get_task). Without it the write is REFUSED. An empty/blank reason does not bypass.",
+            ),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
       async ({
         taskId,
         status,
+        supersededBy,
+        overrideTerritory,
         question,
         cardId,
         cwd,
@@ -1206,6 +1223,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           cmd: "update_task",
           taskId,
           status,
+          supersededBy,
           question,
           cardId,
           cwd,
@@ -1220,6 +1238,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           gates,
           allowCommit,
           reportSchema,
+          overrideTerritory,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
@@ -1284,13 +1303,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_tasks",
       {
         description:
-          "List recorded tasks. Without filters this is the full history (prompt+result per row — hundreds of KB once a board has a sprint behind it). For the orchestrator, pass filters: status (one or many), boardId, since (updatedAt >= epoch-ms), hasCard (true = principal cardId has a live PTY right now). view \"summary\" drops prompt and result (the scan shape); \"full\" is the complete row (default). Survives card closes and app restarts. For one task's transitions/cards/verdicts use get_task. \"Pending with a live card\" = status pending + hasCard true, and `cardAlive` per row is that same fact by its own name. STATUS IS THE STORED TRUTH (task b41ac547): it stays `pending` until a judgment is written and never becomes `running` because some process exists.",
+          "List recorded tasks. Without filters this is the full history (prompt+result per row — hundreds of KB once a board has a sprint behind it). For the orchestrator, pass filters: status (one or many), boardId, since (updatedAt >= epoch-ms), hasCard (true = principal cardId has a live PTY right now). view \"summary\" drops prompt and result (the scan shape); \"full\" is the complete row (default). Survives card closes and app restarts. For one task's transitions/cards/verdicts use get_task. \"Pending with a live card\" = status pending + hasCard true, and `cardAlive` per row is that same fact by its own name. STATUS IS THE STORED TRUTH (task b41ac547): it stays `pending` until a judgment is written and never becomes `running` because some process exists. A row with status `superseded` is TERMINAL and is neither a success nor a failure: it carries `supersededBy` (the id of the task that replaced it) and must not be counted or retried as a failure.",
         inputSchema: {
           boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list across every board"),
           status: z
             .union([z.string(), z.array(z.string())])
             .optional()
-            .describe("Keep only these statuses (e.g. \"pending\" or [\"pending\",\"running\"]). Known values today: pending, running, done, failed"),
+            .describe("Keep only these statuses (e.g. \"pending\" or [\"pending\",\"running\"]). Known values today: pending, running, done, failed, superseded (a task replaced by another — see `supersededBy` on the row and `update_task`)"),
           since: z
             .number()
             .optional()
@@ -1379,11 +1398,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "implementer only. 'reserve' = put the task on this card's queue WITHOUT delivering anything (starts by itself when its deps are done and the card is free); 'deliver' = hand the contract over now. OMIT = default decided by the DEPS: any dep not done yet reserves, all done (or no deps) delivers. Ignored for role 'reviewer'.",
             ),
+          overrideTerritory: z
+            .string()
+            .optional()
+            .describe(
+              "Orchestrator only. On an implementer DELIVER whose territory would collide with another active task, a non-empty reason makes the guard PASS anyway and is recorded on the task's trail; without it the delivery is REFUSED. Ignored when nothing is delivered (reserve/reviewer).",
+            ),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ taskId, cardId, role, mode, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "link_task_card", taskId, cardId, role, mode, requesterId: caller(callerCardId) });
+      async ({ taskId, cardId, role, mode, overrideTerritory, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "link_task_card", taskId, cardId, role, mode, overrideTerritory, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1863,6 +1888,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Your own retry key for THIS spawn: same key + same caller card, within 10 minutes, returns the SAME card instead of creating a second one — and never waits in the queue twice. Use it whenever you might retry after a timeout (e.g. your client's own watchdog aborting a call): without it, a retry after an abort creates a second agent card on the same tree for the same work, which is how silent overwrites get manufactured. A key is scoped to your card, so reusing a string that another card also uses does not collide with it. Only the CARD is deduplicated: a failed attempt (nothing created) does not hold the key, so you can retry it normally.",
             ),
+          overrideTerritory: z
+            .string()
+            .optional()
+            .describe(
+              "Orchestrator only. With `taskId`, when the task's territory would collide with another active task's, a non-empty reason here makes the guard PASS anyway and is recorded on the task's trail; without it the spawn is REFUSED. Use it only when you have coordinated the overlap by hand.",
+            ),
         },
       },
       async ({
@@ -1881,6 +1912,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         taskId,
         role,
         idempotencyKey,
+        overrideTerritory,
       }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
@@ -1899,6 +1931,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           taskId,
           role,
           idempotencyKey,
+          overrideTerritory,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

@@ -108,3 +108,39 @@ export function reorderReservations(
   }
   return { ok: true, order: [...requested] };
 }
+
+/**
+ * Is the card free to receive a reservation? The free signal is a declared END
+ * OF TURN: without `turnEndedAt` the card counts as busy. Byte activity is not
+ * used on purpose — an idle TUI repaints and keeps its activity clock fresh.
+ * A dependency that closes while the card is mid-turn is therefore not acted on
+ * at that moment; the end-of-turn trigger in `message-bus.ts` re-evaluates it.
+ */
+export type ReservationCardBusyFacts = {
+  /** An ACTIVE (non-reserved) implementer link is live for this card. */
+  hasActiveImplementer: boolean;
+  /** Registry `turnEndedAt`; null means no turn end was declared. */
+  turnEndedAt: number | null;
+  /** Last work granted to the card (spawn, human input or delivery). */
+  workGrantedAt: number | null;
+};
+
+export function decideCardBusyForReservation(facts: ReservationCardBusyFacts): boolean {
+  if (facts.hasActiveImplementer) return true;
+  if (facts.turnEndedAt === null) return true;
+  // Work granted after the turn end means a new turn is running.
+  return facts.workGrantedAt !== null && facts.workGrantedAt > facts.turnEndedAt;
+}
+
+/** The first ready reservation (every dependency done) in order, or null. */
+export function firstReadyReservation(order: readonly ReservationItem[]): ReservationItem | null {
+  for (const item of order) {
+    if (item.state !== "reserved") continue;
+    if (pendingDeps(item.deps).length === 0) return item;
+  }
+  return null;
+}
+
+/** A ready reservation that does not leave a free card within this window is
+ *  reported to the orchestrator once. */
+export const RESERVATION_STUCK_MS = 3 * 60_000;

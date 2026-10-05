@@ -16,16 +16,20 @@
 export type SessionCandidateView = {
   id: string;
   timestampMs?: number;
+  /** The session's first prompt, when the store exposes it — the content key. */
+  firstPrompt?: string | null;
 };
 
 export type ReservationView = {
   ownerId: string;
   rearmAtMs: number;
   matchStartMs: number;
+  /** The brief the app handed to this card, when known. */
+  brief?: string;
 };
 
 export type ClaimDecision =
-  | { action: "claim"; id: string }
+  | { action: "claim"; id: string; confidence?: "paired-by-order" }
   | { action: "none"; reason: "no-candidates" | "ambiguous" | "awaiting-input" | "not-ours" };
 
 function newestReservationFor(
@@ -92,10 +96,133 @@ export function decideClaimAmongCandidates(input: {
     }
   }
 
-  if (sawTie) return { action: "none", reason: "ambiguous" };
   if (ours.length === 1) return { action: "claim", id: ours[0]!.id };
-  if (ours.length > 1) return { action: "none", reason: "ambiguous" };
+
+  // N cards and N files in the same scope: separate them by CONTENT first. The
+  // session's first prompt is the brief the app handed to that card, so a
+  // perfect content matching is exact ownership — never a guess.
+  if (!input.requiresInputReservation && input.ownerId) {
+    const byContent = contentPairingClaim({ open, reservations: input.reservations, ownerId: input.ownerId });
+    if (byContent) return { action: "claim", id: byContent };
+    // Same brief or no brief at all (a silent card): the only remaining signal
+    // is order. Claim, but declare the low confidence so the orchestrator can
+    // resolve it by hand.
+    const byOrder = orderPairingClaim({
+      open,
+      reservations: input.reservations,
+      ownerId: input.ownerId,
+      requiresInputReservation: input.requiresInputReservation,
+    });
+    if (byOrder) return { action: "claim", id: byOrder, confidence: "paired-by-order" };
+  }
+
+  if (sawTie || ours.length > 1) return { action: "none", reason: "ambiguous" };
   return { action: "none", reason: "not-ours" };
+}
+
+/** Whitespace-collapsed, trimmed, lower-cased — the shape content is compared
+ *  in, so formatting differences do not defeat an exact match. */
+function normalizePrompt(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Two prompts are "the same brief" when they share a long normalized prefix
+ *  (the app's brief may carry extra context appended to the task prompt), or
+ *  one contains the other when both are short. */
+const PROMPT_MATCH_PREFIX = 24;
+
+function promptMatches(a: string, b: string): boolean {
+  if (a === b) return true;
+  const shortest = Math.min(a.length, b.length);
+  if (shortest < PROMPT_MATCH_PREFIX) return a.startsWith(b) || b.startsWith(a);
+  return a.slice(0, PROMPT_MATCH_PREFIX) === b.slice(0, PROMPT_MATCH_PREFIX);
+}
+
+/**
+ * Exact ownership by content: with N owners (each with a brief) and N fresh
+ * candidates (each with its first prompt), claim the candidate whose prompt
+ * matches this owner's brief, but only when the matching is a PERFECT bijection
+ * (every owner matches exactly one candidate and vice versa). Anything less is
+ * refused here, so the caller can fall back to order pairing with low
+ * confidence. Returns `null` when content cannot decide.
+ */
+function contentPairingClaim(input: {
+  open: readonly SessionCandidateView[];
+  reservations: readonly ReservationView[];
+  ownerId?: string;
+}): string | null {
+  if (!input.ownerId || input.open.length < 2) return null;
+  const ownerBriefs = new Map<string, string>();
+  for (const r of input.reservations) {
+    const brief = r.brief ? normalizePrompt(r.brief) : "";
+    if (brief) ownerBriefs.set(r.ownerId, brief);
+  }
+  if (ownerBriefs.size !== input.open.length) return null;
+  const ownersForCandidate = new Map<string, string[]>();
+  const candidatesForOwner = new Map<string, string[]>();
+  for (const candidate of input.open) {
+    const prompt = candidate.firstPrompt ? normalizePrompt(candidate.firstPrompt) : "";
+    if (!prompt) return null;
+    for (const [ownerId, brief] of ownerBriefs) {
+      if (!promptMatches(brief, prompt)) continue;
+      push(ownersForCandidate, candidate.id, ownerId);
+      push(candidatesForOwner, ownerId, candidate.id);
+    }
+  }
+  for (const ids of candidatesForOwner.values()) if (ids.length !== 1) return null;
+  for (const owners of ownersForCandidate.values()) if (owners.length !== 1) return null;
+  const mine = candidatesForOwner.get(input.ownerId);
+  return mine && mine.length === 1 ? mine[0]! : null;
+}
+
+function push(map: Map<string, string[]>, key: string, value: string): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+/**
+ * Deterministic 1:1 pairing for N cards and N fresh files, the case where
+ * content could not separate them (identical or absent briefs). No per-process
+ * evidence exists: the on-disk record carries neither PID nor cwd, and the CLI
+ * holds no session file open. So the pairing is an AGGREGATE rule, not an mtime
+ * guess: sort the owners by `rearmAtMs` (spawn/input instant, ownerId as the
+ * stable tiebreak) and the candidates by `timestampMs` (id as the tiebreak),
+ * then pair by index. Every watcher computes the SAME bijection from the same
+ * global sets, so each card claims a DISTINCT file and the result is stable as
+ * cards claim and release.
+ *
+ * LOW CONFIDENCE by design: it guarantees N distinct ids, NOT that each file
+ * belongs to the card it is paired with. The caller stamps the claim
+ * `paired-by-order` so the orchestrator and the human know to verify it.
+ */
+function orderPairingClaim(input: {
+  open: readonly SessionCandidateView[];
+  reservations: readonly ReservationView[];
+  ownerId?: string;
+  requiresInputReservation: boolean;
+}): string | null {
+  if (input.requiresInputReservation) return null;
+  if (!input.ownerId) return null;
+  const ownersByLatest = new Map<string, number>();
+  for (const r of input.reservations) {
+    const current = ownersByLatest.get(r.ownerId);
+    if (current === undefined || r.rearmAtMs > current) ownersByLatest.set(r.ownerId, r.rearmAtMs);
+  }
+  if (ownersByLatest.size < 2 || ownersByLatest.size !== input.open.length) return null;
+  const owners = [...ownersByLatest.entries()]
+    .map(([ownerId, rearmAtMs]) => ({ ownerId, rearmAtMs }))
+    .sort((a, b) => a.rearmAtMs - b.rearmAtMs || compare(a.ownerId, b.ownerId));
+  const candidates = [...input.open].sort(
+    (a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0) || compare(a.id, b.id),
+  );
+  const index = owners.findIndex((o) => o.ownerId === input.ownerId);
+  if (index < 0) return null;
+  return candidates[index]?.id ?? null;
+}
+
+function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**

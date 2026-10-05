@@ -17,6 +17,12 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
+import {
+  computeBackgroundStatus,
+  decideUnmountKill,
+  resolveMaxBackgroundSessions,
+  type BoardBackgroundFact,
+} from "./session-background";
 import { decideTraceTailForStorage } from "./card-trace";
 import { deleteCardForever } from "./card-delete";
 import {
@@ -55,6 +61,7 @@ import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
+import { deriveBoardTaskPhase, type TaskPhase } from "./task-phase-decision";
 import { checkAgentAvailability, providerById, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
 import { getProviderUsage } from "./provider-usage";
 import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
@@ -131,7 +138,8 @@ import {
 import { createPrototypeServer } from "./prototype-server";
 import { parseManifest, presetUrl, type PrototypePresetInfo } from "./prototype-presets";
 import { ensureMcpRegistered } from "./mcp-registration";
-import { parseGateDiffEvidence } from "./gate-runner";
+import { gateProgressForTask, parseGateDiffEvidence } from "./gate-runner";
+import { taskGateViewFromResult } from "./gate-notice-decision";
 import { createMcpServer } from "./mcp-server";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
@@ -173,7 +181,12 @@ import { isProviderHomeMode, planConfigHome, workHomeToolForProvider } from "./c
 import { buildRelaunchArgs, isProfileKind, isValidProfileName, parseProfileArg } from "./profiles-decision";
 import { readLocalIdentityFile, setMachineIdentityDir } from "./local-identity";
 import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth";
+import { registerWorkHomeIpc } from "./work-home-ipc";
+import { registerTeamIpc, type LocalTeamTaskInput } from "./team-ipc";
+import { registerCloudAccountIpc } from "./cloud-account-ipc";
+import { parseDeepLink } from "./team-decision";
 import { resolveCloudApiBaseUrl } from "./cloud-auth-decision";
+import { resolvePlansUrl } from "./plan-decision";
 import { hostname } from "node:os";
 import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
 import { ACBRIDGE_PROTOCOL } from "./acbridge-protocol-decision";
@@ -539,6 +552,18 @@ function cloudStatusOrLoggedOut(): CloudStatus {
   return cloudAuth?.getStatus() ?? { state: "logged-out", apiBaseUrl: resolveCloudApiBaseUrl(process.env), lastError: null };
 }
 
+/** The ACTIVE profile from the registry with its directory and house mode;
+ *  `null` on a deferred boot or with an unreadable registry. Shared by the work
+ *  home and the team surfaces so the two reads cannot diverge. */
+function activeProfileEntry() {
+  if (!activeProfileId) return null;
+  const finding = readProfilesRegistry(BASE_USER_DATA);
+  if (finding.kind !== "valid") return null;
+  const profile = finding.registry.profiles.find((p) => p.id === activeProfileId);
+  if (!profile) return null;
+  return { id: profile.id, dir: profileDirectory(BASE_USER_DATA, profile.id), homeMode: profile.homeMode };
+}
+
 /**
  * A3c (P5) — a casa de config/login do provider no PERFIL ativo. `null` = nada
  * a injetar (perfil `system`, sem perfil, ou casca sem agente).
@@ -699,6 +724,54 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
     }
   }
 }
+
+// ---------------------------------------------------------------------
+// DEEP LINK `stellar://invite?token=...`
+//
+// The invite arrives as a link that opens the app (`stellar://invite?...`) —
+// on macOS through the `open-url` event, on Linux/Windows as a command-line
+// argument (first instance OR `second-instance`). We keep the token and tell
+// the renderer; the UI asks to accept (`team:accept-invite`), which creates the
+// local profile only if the backend ACCEPTS. The scheme is registered with the
+// OS here; the packaged build needs a `protocols` entry in the builder config.
+// ---------------------------------------------------------------------
+let pendingInviteToken: string | null = null;
+
+function focusMainWindow(): void {
+  const win = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function handleDeepLink(url: string): void {
+  const link = parseDeepLink(url);
+  if (!link) return;
+  pendingInviteToken = link.token;
+  focusMainWindow();
+  if (mainWindow) safeSend(mainWindow, "team:invite", { token: link.token });
+}
+
+/** Scans the command line for a `stellar:...` link (first instance or 2nd). */
+function handleDeepLinksInArgv(argv: readonly string[]): void {
+  for (const arg of argv) {
+    if (typeof arg === "string" && arg.startsWith("stellar:")) handleDeepLink(arg);
+  }
+}
+
+try {
+  // Registers the app as the handler for `stellar://`. Idempotent; without a
+  // .desktop entry (dev) it is best-effort — the link still arrives via argv.
+  if (!app.isDefaultProtocolClient("stellar")) app.setAsDefaultProtocolClient("stellar");
+} catch (err) {
+  console.warn("[deep-link] could not register the stellar:// scheme:", err);
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
 
 /**
  * `acbridge snapshot` — an agent asking to *see* a specific part of the
@@ -1500,10 +1573,16 @@ function createWindow() {
     onData: (id, data) => {
       ptyRxChunks += 1;
       ptyRxBytes += data.length;
-      // Hold while the frame is dead — scrollback is agent work product;
-      // discard would erase output produced during the gap. Cap + tail
-      // truncate in decidePtyHoldAppend. remote mirror still gets live bytes.
-      if (!mainWindowRendererReachable) {
+      // A RETAINED card belongs to a session the user left: its UI does not
+      // exist, and the replay on return comes from the registry ring
+      // (`getScrollback`), not from here. Neither send nor hold — holding
+      // (holdPtyData) would duplicate what the ring already keeps.
+      if (registry.isRetained(id)) {
+        // nothing to forward to the renderer right now
+      } else if (!mainWindowRendererReachable) {
+        // Hold while the frame is dead — scrollback is agent work product;
+        // discard would erase output produced during the gap. Cap + tail
+        // truncate in decidePtyHoldAppend. remote mirror still gets live bytes.
         holdPtyData(id, data);
       } else {
         ptyDataSends += 1;
@@ -1519,6 +1598,23 @@ function createWindow() {
     // aviso; o rodapé do card é follow-up (ver report).
     onHomeNotice: (id, providerId) => {
       safeSend(win, "pty:home-notice", id, providerId);
+    },
+    // The board's declared root bounds the trust-prompt auto-confirm: inside it
+    // the registry answers the dialog, outside it reports instead.
+    resolveTrustPromptRoot: (id) => {
+      const card = store.getCard(id);
+      return card?.board_id ? store.getBoard(card.board_id)?.cwd || null : null;
+    },
+    // Routed through the bus so the notice waits for a human mid-line on the
+    // orchestrator card and confirms the submit, like every other notice.
+    onTrustPromptUnconfirmed: (id, _providerId, message) => {
+      messageBus?.notifyTrustPromptUnconfirmed(id, message);
+    },
+    // The main process detects screen turn-ends for providers without a hook,
+    // so hand the card to the bus: the reservation engine re-evaluates even
+    // when no board is mounted (the renderer is not the only detector).
+    onTurnEnd: (id) => {
+      messageBus?.onTurnEnd(id);
     },
     onExit: (id, exitCode) => {
       safeSend(win, "pty:exit", id, exitCode);
@@ -1569,6 +1665,9 @@ function createWindow() {
     // fica sem `session_id`; o bus avisa o ORQUESTRADOR do board. `messageBus`
     // é criado depois desta wiring (null aqui) — a callback só roda em runtime.
     onSessionWatchStuck: (id, reason) => messageBus?.notifySessionUnresolved(id, reason),
+    // Session id claimed by ORDER (identical/absent briefs): real but unproven —
+    // warn the orchestrator so a human can verify.
+    onSessionLowConfidence: (id, reason) => messageBus?.notifySessionUnresolved(id, reason),
     // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — canal dedicado pro aviso
     // de resumeId inválido (ver `pty-registry.ts`'s doc comment em
     // `onResumeInvalid`): DOM de verdade no rodapé do card
@@ -1843,6 +1942,10 @@ function createWindow() {
     review: "wanted" | null;
     depPurposes: Record<string, TaskPurpose | null>;
     cardAlive: boolean;
+    /** Flow phase, decided here from the real facts (reservation links, report
+     * after the last work grant, reviewer verdict) so the renderer only reads
+     * it and never approximates it. */
+    phase: TaskPhase;
     statusTransitions: { toValue: string; at: number }[];
     /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência.
      * Ambos null = sem divergência. Espelha `tasks.diverged_status` /
@@ -1991,6 +2094,23 @@ function createWindow() {
       }
       const cardAlive = t.card_id ? registry.isAlive(t.card_id) : false;
       const lastActor = lastActorByTask.get(t.id) ?? null;
+      const liveImplementers = store.listLiveImplementersForTask(t.id);
+      const implementerCardId =
+        t.card_id ?? liveImplementers.find((l) => l.reservation_state == null)?.card_id ?? null;
+      const implementerReportAt = implementerCardId ? reportByCardId.get(implementerCardId)?.updated_at ?? null : null;
+      const implementerWorkGrantedAt = implementerCardId ? registry.getLastWorkGrantedAt(implementerCardId) : null;
+      const taskVerdicts = verdictsByTask.get(t.id) ?? [];
+      const lastVerdict = taskVerdicts.length > 0 ? taskVerdicts[taskVerdicts.length - 1]! : null;
+      const reviewerChangesRequested =
+        lastVerdict?.verdict === "reprovado" && (implementerReportAt === null || lastVerdict.at >= implementerReportAt);
+      const phase = deriveBoardTaskPhase({
+        status: t.status,
+        depStatuses: deps.map((depId) => depStatuses[depId] ?? null),
+        liveImplementers,
+        implementerReportAt,
+        implementerWorkGrantedAt,
+        reviewerChangesRequested,
+      });
       // CAMADA 4 (task b41ac547) — mesmo par de fatos que o MCP publica:
       // `status` é o que o BANCO diz (nem um `running` legado é
       // autoritativo), e `cardAlive` é o segundo fato, projetado abaixo com
@@ -2032,6 +2152,7 @@ function createWindow() {
         // real pra uma leitura de PTY de verdade, não pra uma checagem de
         // Map). `false` quando não há card vinculado.
         cardAlive,
+        phase,
         statusTransitions: transitionsByTask.get(t.id) ?? [],
         // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo no push
         // `task:changed` (canal do quadro; o aviso ao agente vai por
@@ -2042,12 +2163,22 @@ function createWindow() {
         requestedReason: t.requested_reason ?? null,
         requestedBy: t.requested_by ?? null,
         requestedAt: t.requested_at ?? null,
+        // The substitution target reaches the board through the push, so the
+        // "superseded by #Y" chip can be clickable.
+        supersededBy: t.superseded_by ?? null,
         // Task 22f0a649 — a pergunta de `blocked` chega à Fila pelo push, com o
         // MESMO parse do MCP (`blockedQuestionFromResultJson`).
         blockedQuestion: blockedQuestionFromResultJson(t.result_json),
         verdicts: verdictsByTask.get(t.id) ?? [],
         firstActor: firstActorByTask.get(t.id) ?? null,
         interruptionReason: interruptionReasonFromResultJson(t.result_json),
+        // The gate verdict rides the PUSH (green/red chip + tooltip with the
+        // trailing output). The summary is compact; the textual check avoids
+        // parsing `result_json` for every task.
+        gateRun: t.result_json && t.result_json.includes('"gateRun":') ? taskGateViewFromResult(t.result_json) : null,
+        // LIVE progress (the "rodando gates i/N" chip) comes from the runner's
+        // in-memory registry — no polling, the push follows `onProgress`.
+        gateProgress: gateProgressForTask(t.id),
       };
     });
   }
@@ -2293,6 +2424,9 @@ function createWindow() {
     // fato — o push continua sendo só UI.
     getCardTurnEndedAt: (cardId) => registry.getTurnFacts(cardId)?.turnEndedAt ?? null,
     getCardLastWorkGrantedAt: (cardId) => registry.getLastWorkGrantedAt(cardId),
+    // Retained output tail of a card, so the bus can tell a report written to
+    // the screen from a normal idle without a renderer round-trip.
+    getCardRecentOutput: (cardId) => registry.getRecentOutput(cardId),
     markCardTurnComplete: (cardId) => registry.markTurnComplete(cardId),
     // Activity bar — send_to_card writes the body from main, outside
     // the renderer's xterm onData hook. Same channel shape as
@@ -2462,6 +2596,10 @@ function createWindow() {
       if (!win || boardId !== activeBoardId) return;
       safeSend(win, "task-sprints:changed", boardId);
     },
+    // The gate runner reported that a command started (or the run ended):
+    // reuse the SAME board push (`task:changed`), no new channel.
+    // `notifyTaskChanged` already ignores a board that is not the active one.
+    onGateProgress: (_taskId, boardId) => notifyTaskChanged(boardId),
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
     getReport: (cardId, afterSeq) => store.getReport(cardId, afterSeq),
@@ -2542,6 +2680,14 @@ function createWindow() {
     },
     reorderReservedTaskCards: (cardId, taskIds) => store.reorderReservedTaskCards(cardId, taskIds),
     listLiveImplementersForTask: (taskId) => store.listLiveImplementersForTask(taskId),
+    // Releases reservations and territory without touching the status; a push
+    // to the board so the reservation leaves the drawer without a reload.
+    releaseAllImplementerLinks: (taskId, reason, releasedBy) => {
+      const changes = store.releaseAllImplementerLinks(taskId, reason, releasedBy);
+      const task = store.getTask(taskId);
+      if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
+      return changes;
+    },
     moveReservedTaskCards: (fromCardId, toCardId) => {
       const moved = store.moveReservedTaskCards(fromCardId, toCardId);
       // A Fila precisa ver a mudança de dono da reserva sem reload.
@@ -2801,7 +2947,15 @@ function createWindow() {
       // cleanup never ran). Remount always calls spawn — without this
       // early return, a second process would orphan the survivor.
       if (registry.isAlive(id)) {
-        return { id };
+        // Return the ring only when the card was RETAINED (the user had left
+        // the board): that is the background-session return, and the new xterm
+        // needs to repaint the recent history. A reattach WITHOUT retention is
+        // the renderer-gone path (page reload), which already has its own
+        // buffer (`holdPtyData`/`flushHeldPtyData`) — sending the ring there
+        // would DUPLICATE what the hold delivers.
+        const wasRetained = registry.isRetained(id);
+        registry.setRetained(id, false);
+        return wasRetained ? { id, scrollback: registry.getScrollback(id) ?? "" } : { id };
       }
       // Precisa acontecer ANTES do spawn: `cursor`/`antigravity` leem o
       // registro de MCP do disco na subida, então registrar depois só
@@ -2855,8 +3009,61 @@ function createWindow() {
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
+    // The UI unmount of a board the user LEFT sends `pty:kill` for every card;
+    // on a RETAINED card that is a "keep running" request disguised as a kill.
+    // Only an explicit order (`board:stop`, closing the card while its board is
+    // not retained, app close) terminates.
+    if (decideUnmountKill(registry.isRetained(id)) === "skip") return;
     registry.kill(id);
     remoteServer?.broadcastCards();
+  });
+  /**
+   * Marks/unmarks every PTY of a board as RETAINED. The renderer calls `true`
+   * when LEAVING the board and `false` when entering; without it, the UI
+   * unmount would terminate the processes this app now wants alive.
+   */
+  ipcMain.handle("pty:set-board-retention", (_e, boardId: string, retained: boolean) => {
+    for (const card of store.listCards(boardId)) {
+      if (card.kind === "terminal" && registry.isAlive(card.id)) registry.setRetained(card.id, retained);
+    }
+  });
+  /**
+   * EXPLICIT "stop session" — terminates that board's processes. The renderer
+   * asks for confirmation first when an agent is running (the UI knows that);
+   * this is only the actuator. Unlike leaving the board (which retains),
+   * stopping kills.
+   */
+  ipcMain.handle("board:stop", (_e, boardId: string) => {
+    let killed = 0;
+    for (const card of store.listCards(boardId)) {
+      if (card.kind !== "terminal") continue;
+      if (!registry.isAlive(card.id)) continue;
+      registry.setRetained(card.id, false);
+      registry.kill(card.id);
+      killed += 1;
+    }
+    remoteServer?.broadcastCards();
+    return { ok: true as const, killed };
+  });
+  /**
+   * Per-session BACKGROUND state — what the Home reads to say "running / N
+   * agents / waiting on you". Same raw source as the cards (the store) plus the
+   * registry; the pure projection lives in `session-background.ts`.
+   */
+  ipcMain.handle("board:background-status", () => {
+    const facts: BoardBackgroundFact[] = store.listBoards().map((board) => {
+      let alive = false;
+      let agents = 0;
+      let awaiting = 0;
+      for (const card of store.listCards(board.id)) {
+        if (card.kind !== "terminal" || !registry.isAlive(card.id)) continue;
+        alive = true;
+        if (card.provider !== "bash") agents += 1;
+        if (registry.isAwaitingHuman(card.id)) awaiting += 1;
+      }
+      return { boardId: board.id, alive, agents, awaiting };
+    });
+    return computeBackgroundStatus(facts, activeBoardId, resolveMaxBackgroundSessions());
   });
   // Manual identify — one card, one click. Disk/CLI I/O stays in main
   // (`identifyCurrentSession`). The renderer only receives the result.
@@ -3008,6 +3215,15 @@ function createWindow() {
   // existe mais) até a próxima gravação de task qualquer. Achado de review
   // adversarial da fase 2 do card task (2026-09-11).
   ipcMain.handle("store:boards:delete", (_e, id: string) => {
+    // Deleting a board is the ONE irreversible exit: its processes die with it
+    // (retention is for LEAVING a session, not for deleting it). Read BEFORE
+    // the delete, otherwise the cascade removes the rows and nothing else knows
+    // which PTYs belonged to this board.
+    for (const card of store.listCards(id)) {
+      if (card.kind !== "terminal" || !registry.isAlive(card.id)) continue;
+      registry.setRetained(card.id, false);
+      registry.kill(card.id);
+    }
     store.deleteBoard(id);
     notifyTaskScopeChanged();
   });
@@ -3074,6 +3290,40 @@ function createWindow() {
       Object.entries(store.cardCounts()).map(([boardId, counts]) => [boardId, { agents: counts.agents }]),
     ),
   );
+  /**
+   * Home aggregate, one entry per saved board: the provider mix of its
+   * terminal cards, and its tasks split by the derived phase. The phase comes
+   * from the same `buildTaskBoard` the Fila uses, so this projection cannot
+   * drift into a second rule.
+   */
+  ipcMain.handle("store:board-summaries", () => {
+    const out: Record<
+      string,
+      {
+        providers: { provider: string; count: number }[];
+        tasksRunning: number;
+        tasksAwaitingReview: number;
+        awaitingReview: { taskId: string; title: string; updatedAt: number }[];
+      }
+    > = {};
+    for (const board of store.listBoards()) {
+      const items = buildTaskBoard(board.id);
+      const awaiting = items.filter((t) => t.phase === "awaiting_review");
+      const tally = new Map<string, number>();
+      for (const card of store.listCards(board.id)) {
+        if (card.kind === "terminal" && card.provider !== "bash") {
+          tally.set(card.provider, (tally.get(card.provider) ?? 0) + 1);
+        }
+      }
+      out[board.id] = {
+        providers: [...tally.entries()].map(([provider, count]) => ({ provider, count })),
+        tasksRunning: items.reduce((n, t) => n + (t.phase === "running" ? 1 : 0), 0),
+        tasksAwaitingReview: awaiting.length,
+        awaitingReview: awaiting.map((t) => ({ taskId: t.id, title: t.prompt ?? "", updatedAt: t.updatedAt })),
+      };
+    }
+    return out;
+  });
   // O dropdown de agentes do Topbar (task 49de95ce) — gesto de abrir, nunca
   // push: a lista de papéis muda com o quadro, e quem a pede é a tela.
   ipcMain.handle("store:board-agent-roles", (_e, boardId: string) => buildBoardAgentRoles(boardId));
@@ -3410,6 +3660,7 @@ function createWindow() {
         implicitOrder: t.implicit_order,
         createdAt: t.created_at,
         updatedAt: t.updated_at,
+        supersededBy: t.superseded_by ?? null,
       })),
     };
   });
@@ -4080,6 +4331,101 @@ function createWindow() {
   });
   ipcMain.handle("cloud:cancel", () => cloudAuth?.cancel() ?? cloudStatusOrLoggedOut());
   ipcMain.handle("cloud:logout", () => cloudAuth?.logout() ?? cloudStatusOrLoggedOut());
+  // The plans page the "Fazer upgrade" call-to-action opens (config).
+  ipcMain.handle("cloud:plans-url", () => resolvePlansUrl(process.env));
+
+  // ---- CASA DE TRABALHO: sync (A3b) + copiar do sistema -------------------
+  registerWorkHomeIpc({
+    activeProfile: activeProfileEntry,
+    baseUserDataDir: () => BASE_USER_DATA,
+    homeDir: () => app.getPath("home"),
+    agentProviders: () =>
+      PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => ({
+        id: p.id,
+        supportsConfigHome: p.configHome !== undefined,
+      })),
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+    now: () => Date.now(),
+  });
+
+  // ---- TEAMS IN THE APP ---------------------------------------------------
+  // The logic lives in `team.ts`/`team-decision.ts`; here there is only the
+  // wiring. The token is the account one (renewed before it expires) and the
+  // ACTIVE profile is the house the base is published from.
+  registerTeamIpc({
+    baseUserDataDir: () => BASE_USER_DATA,
+    activeProfile: activeProfileEntry,
+    homeDir: () => app.getPath("home"),
+    agentProviders: () =>
+      PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => ({
+        id: p.id,
+        supportsConfigHome: p.configHome !== undefined,
+      })),
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+    now: () => Date.now(),
+    generateId: () => randomUUID(),
+    // The state bridge (A5a): an accepted team task becomes a REAL local Fila
+    // task in the chosen board, carrying the contract/territory/gates — the
+    // code never leaves the machine, and `getLocalTaskStatus` feeds the state
+    // reported back (running → rodando, done → delivered).
+    createLocalTeamTask: (input: LocalTeamTaskInput) => {
+      if (!store.getBoard(input.boardId)) return { ok: false as const, error: `no such board "${input.boardId}"` };
+      const now = Date.now();
+      const id = randomUUID();
+      persistTask({
+        id,
+        prompt: input.prompt,
+        provider: input.provider,
+        status: "pending",
+        card_id: null,
+        spawn_profile: null,
+        board_id: input.boardId,
+        cwd: null,
+        result_json: null,
+        deps_json: null,
+        retry_count: 0,
+        attempted_providers_json: null,
+        max_retries: null,
+        fallback_providers_json: null,
+        order: null,
+        suggested_order: null,
+        implicit_order: null,
+        diverged_status: null,
+        diverged_actor: null,
+        purpose: input.purpose,
+        territory_json: input.territory.length > 0 ? JSON.stringify(input.territory) : null,
+        gates_json: input.gates.length > 0 ? JSON.stringify(input.gates) : null,
+        allow_commit: input.allowCommit ? 1 : 0,
+        report_schema_json: input.reportSchema.length > 0 ? JSON.stringify(input.reportSchema) : null,
+        created_at: now,
+        updated_at: now,
+        actor: "human",
+      });
+      return { ok: true as const, taskId: id };
+    },
+    getLocalTaskStatus: (taskId: string) => {
+      const task = store.getTask(taskId);
+      if (!task) return null;
+      return { status: task.status, cardAlive: task.card_id ? registry.isAlive(task.card_id) : false };
+    },
+  });
+
+  // ---- ACCOUNT: server-profile link + devices (A8) ------------------------
+  registerCloudAccountIpc({
+    baseUserDataDir: () => BASE_USER_DATA,
+    activeProfileId: () => activeProfileId,
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+  });
+
+  // An invite that already arrived (`stellar://invite?...` on boot) is kept for
+  // the UI that mounts later; without this the token of a link boot would be lost.
+  ipcMain.handle("team:pending-invite", () => ({ token: pendingInviteToken }));
 
   ipcMain.handle(
     "chat:send",
@@ -4321,12 +4667,15 @@ function createWindow() {
 // dela própria — só a instância que DETÉM o lock recebe este evento
 // (Electron: emitido no processo original quando uma 2ª tentativa é
 // barrada pelo `requestSingleInstanceLock()` acima).
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   const win = BrowserWindow.getAllWindows()[0];
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  // The second instance brought the invite link (`stellar://invite?...`).
+  handleDeepLinksInArgv(argv);
 });
 
 app.whenReady().then(async () => {
@@ -4956,6 +5305,11 @@ app.whenReady().then(async () => {
   app.once("will-quit", () => cloudAuth?.dispose());
 
   createWindow();
+
+  // Boot deep link (first instance): the invite link may have come on the
+  // command line (`stellar://invite?...`). The token is kept and the UI fetches
+  // it via `team:pending-invite`; the push covers an already-mounted window.
+  handleDeepLinksInArgv(process.argv);
 
   // Empurra o estado da conta quando muda (login fecha no navegador depois) e
   // tenta restaurar a sessão guardada, para a Home já abrir logada.

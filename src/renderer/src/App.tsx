@@ -32,7 +32,7 @@ import { Compass } from "./Compass";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
-import { Home } from "./Home";
+import { AppShell } from "./AppShell";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
@@ -78,7 +78,7 @@ import type {
 } from "./card-types";
 import { STICKY_FONT_SIZE_DEFAULT, clampStickyFontSize, parseStickyFontSize } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
-import { getTerminalText } from "./terminal-registry";
+import { readTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
 import { decideBrowserOpen } from "../../browser-open-policy";
 import { deriveCardDisplayName, type CardIdentitySnapshot } from "../../shared/card-identity";
@@ -937,6 +937,7 @@ export function App() {
   const getCloseHandler = useStableCardIdHandler(closeCard);
   const getCloseAnimationEndHandler = useStableCardIdHandler(finalizeCloseCard);
   const getRenameHandler = useStableCardIdHandler(renameCard);
+  const getUrlCommitHandler = useStableCardIdHandler(commitBrowserUrl);
   const getResumeIdDiscoveredHandler = useStableCardIdHandler(resumeIdDiscovered);
   const getStatusChangeHandler = useStableCardIdHandler(handleTerminalStatus);
   const getContentChangeHandler = useStableCardIdHandler(changeStickyContent);
@@ -1003,6 +1004,7 @@ export function App() {
     createBoard,
     updateBoard,
     deleteBoard,
+    stopBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
     applyBoardPreset,
@@ -1209,8 +1211,10 @@ export function App() {
     // scrollback say", only the renderer holds the live xterm.js Terminal
     // instance (terminal-registry.ts). Replies null when there's no such
     // card, or it's not a terminal (nothing registered under that id).
+    // `readTerminalText` first drains any bytes held back while the card was
+    // off the viewport, so the answer is the current screen, not the stale one.
     const offReadCard = window.readCard.onRequest((requestId, cardId, lines) => {
-      window.readCard.reply(requestId, getTerminalText(cardId, lines));
+      void readTerminalText(cardId, lines).then((text) => window.readCard.reply(requestId, text));
     });
     // Achado ao vivo (2026-09-01) — read_sticky/write_sticky. Lê
     // `cardsRef` (não `cards`): este listener é registrado uma vez na
@@ -2925,6 +2929,19 @@ export function App() {
     });
   }
 
+  /** Browser card: write the live URL back (the card's `cwd` column), so a
+   * background unload/reload reattaches there instead of the creation URL. */
+  function commitBrowserUrl(id: string, url: string) {
+    setCards((prev) => {
+      const current = prev.find((c) => c.id === id);
+      if (!current || current.kind !== "browser" || current.url === url) return prev;
+      const next = prev.map((c) => (c.id === id ? { ...c, url } : c));
+      const updated = next.find((c) => c.id === id);
+      if (updated) void window.store.upsert(toRow(updated, activeBoardIdRef.current!));
+      return next;
+    });
+  }
+
   /** DESIGN-BACKLOG.md §2.1 decisões 8/9 — o único caminho de escrita do
    * quadro de tasks nesta fase: aceitar a proposta de conclusão de um
    * report aprovado (`TaskCard`'s barra). Nunca chamado automaticamente —
@@ -3335,20 +3352,18 @@ export function App() {
     else addCardOfKind(action, at);
   }
 
-  if (!loaded) return <div className="viewport" />;
-
-  // DESIGN-BACKLOG.md item 8 — boots here always (see useBoardStore's boot
-  // effect); no board is loaded (so no PTYs spawned) until the user picks
-  // one. `Titlebar` stays mounted for window controls even on Home.
+  // The home shell (cold start, first run, sessions, profiles, work home,
+  // teams) takes over whenever no board is loaded. The titlebar stays mounted
+  // for the window controls.
   if (activeBoardId === null) {
     return (
       <div className="viewport">
         <Titlebar />
         <UpdateBanner />
-        <Home
+        <AppShell
+          loaded={loaded}
           boards={boards}
           boardCounts={boardCounts}
-          rootName={rootDisplayName(workspaceRoot)}
           workspaceRoot={workspaceRoot}
           defaultCwd={DEFAULT_CWD}
           onChangeRoot={changeWorkspaceRoot}
@@ -3357,6 +3372,8 @@ export function App() {
           onCreateBoard={createBoard}
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
+          onStopBoard={stopBoard}
+          onOpenSettings={() => setSettingsPage("general")}
         />
       </div>
     );
@@ -3824,6 +3841,7 @@ export function App() {
                 onClose={getCloseHandler(c)}
                 onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
                 onRename={getRenameHandler(c)}
+                onUrlCommit={getUrlCommitHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}

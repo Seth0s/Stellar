@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — painel do time</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.nav{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:8px;color:#a3aabb;font-size:13.5px;cursor:pointer}
+.nav:hover{background:#161a24;color:#e8eaf0}
+.sub{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px 0 36px;border-radius:8px;color:#a3aabb;font-size:13px}
+.sub:hover{background:#161a24;color:#e8eaf0}
+.ghost{height:36px;padding:0 14px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:36px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.primary:hover{background:#5770f0;color:#fff}
+.icon{width:30px;height:30px;border-radius:7px;border:0;background:transparent;color:#858da0;display:grid;place-items:center;cursor:pointer}
+.icon:hover{background:#1c2130;color:#e8eaf0}
+.sel{height:30px;padding:0 28px 0 10px;border-radius:7px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:12.5px}
+td,th{padding:12px 14px;text-align:left;border-top:1px solid #1d2130;font-weight:400}
+th{font-size:11px;letter-spacing:.06em;color:#8d94a6;font-family:'JetBrains Mono',monospace;border-top:0}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
+      <a href="Profiles.dc.html" style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #141823; border: 1px solid #222838; color: #e8eaf0">
+        <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #123a35; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #8ee6d8">I</span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Idy Platform</span><span style="font-size: 12px; color: #8d94a6">você é owner</span></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg>
+      </a>
+      <nav style="display: flex; flex-direction: column; gap: 2px" aria-label="Seções">
+        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"></rect><rect x="9" y="2" width="5" height="5" rx="1.2"></rect><rect x="2" y="9" width="5" height="5" rx="1.2"></rect><rect x="9" y="9" width="5" height="5" rx="1.2"></rect></svg><span style="flex: 1">Sessões</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">9</span></a>
+        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v3.2l2 1.3"></path></svg><span style="flex: 1">Aguardando você</span><span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: #3a2f12; color: #f2c96a; font-size: 11px; font-weight: 600; display: grid; place-items: center">3</span></a>
+        <a class="nav" href="WorkHome.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8z"></path><path d="M6.3 13.8V9.6h3.4v4.2"></path></svg><span style="flex: 1">Casa de trabalho</span></a>
+        <a class="nav" href="TeamAdmin.dc.html" style="color: #ffffff"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.8" cy="5.6" r="2.3"></circle><circle cx="11" cy="6.3" r="1.8"></circle><path d="M1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4"></path></svg><span style="flex: 1">Time</span></a>
+        <a class="sub" href="TeamAdmin.dc.html" style="background: #182037; color: #ffffff" aria-current="page">Visão geral</a>
+        <a class="sub" href="TeamBoard.dc.html">Board do time</a>
+        <a class="sub" href="TeamAdmin.dc.html">Membros e papéis</a>
+        <a class="sub" href="WorkHome.dc.html">Casa do time</a>
+        <a class="sub" href="TeamAdmin.dc.html">Auditoria</a>
+        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5"></path></svg><span style="flex: 1">Estatísticas</span></a>
+      </nav>
+      <span style="flex: 1"></span>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 10px">
+        <span style="width: 30px; height: 30px; flex: none; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #c7d0ff">LS</span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500">lucas@idyplatform.com</span><span style="font-size: 11.5px; color: #8d94a6">owner · Idy Platform</span></span>
+      </div>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; overflow: auto; padding: 30px 40px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px">
+        <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 6px">
+          <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Idy Platform</h1>
+          <div style="font-size: 13.5px; color: #9aa1b2">Painel do time · você tem acesso total como owner</div>
+        </div>
+        <a class="ghost" href="TeamBoard.dc.html">Abrir o board do time</a>
+        <button class="primary"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Convidar pessoa</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Membros</span><span style="font-size: 24px; font-weight: 600">4</span><span style="font-size: 12px; color: #8d94a6">1 convite pendente</span></div>
+        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Tasks abertas</span><span style="font-size: 24px; font-weight: 600">18</span><span style="font-size: 12px; color: #8d94a6">5 sem dono</span></div>
+        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #3a3218; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Aguardando revisão</span><span style="font-size: 24px; font-weight: 600; color: #f2c96a">3</span><span style="font-size: 12px; color: #8d94a6">a mais antiga há 2 h</span></div>
+        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Casa do time</span><span style="font-size: 24px; font-weight: 600">rev. 7</span><span style="font-size: 12px; color: #8d94a6">publicada por você, ontem</span></div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <section style="flex: 999 1 640px; min-width: 0; border-radius: 14px; background: #12151d; border: 1px solid #20242f; overflow: hidden" aria-labelledby="mb">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 16px">
+            <h2 id="mb" style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Membros e papéis</h2>
+            <span style="font-size: 12px; color: #8d94a6">sempre ao menos 1 owner</span>
+          </div>
+          <div style="overflow-x: auto">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px">
+              <thead><tr><th>PESSOA</th><th>PAPEL</th><th>TASKS</th><th>MÁQUINAS</th><th>ÚLTIMO ACESSO</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Ações</span></th></tr></thead>
+              <tbody>
+                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #c7d0ff">LS</span><span style="display: flex; flex-direction: column"><span>Lucas Sabino</span><span style="font-size: 11.5px; color: #8d94a6">você</span></span></span></td><td><select class="sel" aria-label="Papel de Lucas"><option selected>Owner</option><option>Admin</option><option>Membro</option></select></td><td>4</td><td>2</td><td style="color: #a3aabb">agora</td><td><button class="icon" aria-label="Ações de Lucas"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
+                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #3a2350; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #e2c4ff">AR</span><span style="display: flex; flex-direction: column"><span>Ana Ribeiro</span><span style="font-size: 11.5px; color: #8d94a6">ana@idyplatform.com</span></span></span></td><td><select class="sel" aria-label="Papel de Ana"><option>Owner</option><option selected>Admin</option><option>Membro</option></select></td><td>6</td><td>1</td><td style="color: #a3aabb">há 12 min</td><td><button class="icon" aria-label="Ações de Ana"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
+                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #1d3a2a; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #a6ecc0">BM</span><span style="display: flex; flex-direction: column"><span>Bruno Melo</span><span style="font-size: 11.5px; color: #8d94a6">github: brunomelo</span></span></span></td><td><select class="sel" aria-label="Papel de Bruno"><option>Owner</option><option>Admin</option><option selected>Membro</option></select></td><td>5</td><td>1</td><td style="color: #a3aabb">há 1 h</td><td><button class="icon" aria-label="Ações de Bruno"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
+                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #3a2a18; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #ffd2a6">CP</span><span style="display: flex; flex-direction: column"><span>Carla Pinto</span><span style="font-size: 11.5px; color: #8d94a6">carla@idyplatform.com</span></span></span></td><td><select class="sel" aria-label="Papel de Carla"><option>Owner</option><option>Admin</option><option selected>Membro</option></select></td><td>3</td><td>2</td><td style="color: #a3aabb">ontem</td><td><button class="icon" aria-label="Ações de Carla"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
+                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; border: 1px dashed #4a5163; box-sizing: border-box; display: grid; place-items: center; font-size: 13px; color: #8d94a6">@</span><span style="display: flex; flex-direction: column"><span>daniel@idyplatform.com</span><span style="font-size: 11.5px; color: #f2c96a">convite pendente · expira em 5 dias</span></span></span></td><td style="color: #a3aabb">Membro</td><td style="color: #8d94a6">—</td><td style="color: #8d94a6">—</td><td style="color: #8d94a6">—</td><td><button class="ghost" style="height: 28px; font-size: 12px">Revogar</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 14px; background: #12151d; border: 1px solid #20242f" aria-labelledby="pp">
+          <h2 id="pp" style="margin: 0; font-size: 15px; font-weight: 600">O que cada papel pode</h2>
+          <div style="display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 52px); gap: 8px 6px; align-items: center; font-size: 12.5px">
+            <span style="color: #8d94a6"></span><span style="font-size: 11px; color: #8d94a6; text-align: center">Owner</span><span style="font-size: 11px; color: #8d94a6; text-align: center">Admin</span><span style="font-size: 11px; color: #8d94a6; text-align: center">Membro</span>
+            <span style="color: #c9cede">Criar e distribuir tasks</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
+            <span style="color: #c9cede">Mover as próprias tasks</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span>
+            <span style="color: #c9cede">Revisar e aprovar</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
+            <span style="color: #c9cede">Publicar a casa do time</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
+            <span style="color: #c9cede">Convidar e remover membros</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #f2c96a">membros</span><span style="text-align: center; color: #8d94a6">não</span>
+            <span style="color: #c9cede">Mudar papéis e excluir o time</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span><span style="text-align: center; color: #8d94a6">não</span>
+          </div>
+          <div style="height: 1px; background: #1d2130"></div>
+          <h3 style="margin: 0; font-size: 13.5px; font-weight: 600">Atividade recente</h3>
+          <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: #a3aabb">
+            <span><span style="color: #e8eaf0">Ana</span> atribuiu "Fila de retries" a Bruno · há 12 min</span>
+            <span><span style="color: #e8eaf0">Bruno</span> entregou "Paginação de membros" para revisão · há 1 h</span>
+            <span><span style="color: #e8eaf0">Você</span> publicou a casa do time rev. 7 · ontem</span>
+          </div>
+          <a href="TeamAdmin.dc.html" style="font-size: 12.5px">Ver auditoria completa</a>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -12,6 +12,8 @@
  * Sem I/O, sem store: o chamador monta os FATOS e esta função decide.
  */
 
+import { isDependencySettled } from "../task-status-derive";
+
 export type TaskPhase =
   | "waiting_deps"
   | "ready"
@@ -20,7 +22,8 @@ export type TaskPhase =
   | "awaiting_review"
   | "changes_requested"
   | "done"
-  | "failed";
+  | "failed"
+  | "superseded";
 
 /** Fatos que o chamador já tem sobre UMA task. */
 export type TaskPhaseFacts = {
@@ -50,7 +53,13 @@ export type TaskPhaseFacts = {
 export function deriveTaskPhase(facts: TaskPhaseFacts): TaskPhase {
   if (facts.status === "done") return "done";
   if (facts.status === "failed") return "failed";
-  if (facts.deps.some((d) => d.status !== "done")) return "waiting_deps";
+  // `superseded` is a terminal of its own: a task swapped for another one is
+  // never "failed". It comes with the other terminals.
+  if (facts.status === "superseded") return "superseded";
+  // A dep that is `done` OR `superseded` does NOT block: the second one was
+  // replaced, and the engine only notifies the orchestrator to swap the edge —
+  // it never leaves the dependent stuck forever (see `isDependencySettled`).
+  if (facts.deps.some((d) => !isDependencySettled(d.status))) return "waiting_deps";
   if (facts.reviewerChangesRequested) return "changes_requested";
   // O report do implementer é o gatilho da revisão — vale mesmo que o card já
   // tenha saído (o veredito pendente continua sendo do orquestrador).
@@ -58,4 +67,43 @@ export function deriveTaskPhase(facts: TaskPhaseFacts): TaskPhase {
   if (facts.hasActiveImplementer) return "running";
   if (facts.hasReservedCard) return "reserved";
   return "ready";
+}
+
+/**
+ * Raw facts a board projection already holds for one task, before they are
+ * shaped into `TaskPhaseFacts`. The board payload reads them from the store
+ * and the registry; keeping the shaping here means the same rule decides the
+ * phase everywhere, and the projection cannot drift into a second rule.
+ */
+export type BoardTaskPhaseFactsInput = {
+  /** `tasks.status`. */
+  status: string;
+  /** One entry per dependency: its status, or null when unknown. */
+  depStatuses: readonly (string | null)[];
+  /** Live implementer links: null reservation_state = active, "reserved" = held. */
+  liveImplementers: readonly { reservation_state: string | null }[];
+  /** updated_at of the principal card's latest report, or null. */
+  implementerReportAt: number | null;
+  /** Last work-granted instant for the principal card, or null when unknown. */
+  implementerWorkGrantedAt: number | null;
+  /** A reviewer asked for changes after the latest report. */
+  reviewerChangesRequested: boolean;
+};
+
+export function boardTaskPhaseFacts(input: BoardTaskPhaseFactsInput): TaskPhaseFacts {
+  return {
+    status: input.status,
+    deps: input.depStatuses.map((status) => ({ status })),
+    hasActiveImplementer: input.liveImplementers.some((l) => l.reservation_state == null),
+    hasReservedCard: input.liveImplementers.some((l) => l.reservation_state === "reserved"),
+    implementerReportedSinceLastDelivery:
+      input.implementerReportAt !== null &&
+      (input.implementerWorkGrantedAt === null || input.implementerReportAt >= input.implementerWorkGrantedAt),
+    reviewerChangesRequested: input.reviewerChangesRequested,
+  };
+}
+
+/** Convenience wrapper for callers that only need the phase. */
+export function deriveBoardTaskPhase(input: BoardTaskPhaseFactsInput): TaskPhase {
+  return deriveTaskPhase(boardTaskPhaseFacts(input));
 }

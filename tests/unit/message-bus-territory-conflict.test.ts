@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
@@ -166,13 +166,20 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
 
   it("(e) task sem cwd resolve contra a RAIZ DO BOARD — relativo casa absoluto dentro da raiz", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-territory-board-root-"));
+    // The concrete file EXISTS on disk: a glob only collides with a concrete
+    // path when the path matches AND exists (a new/specific target under a
+    // broad glob passes with a warning instead — see territory-shared-mode).
+    const boardRoot = dir;
+    const existingAbs = join(boardRoot, "tests/unit/x.test.ts");
+    mkdirSync(join(boardRoot, "tests/unit"), { recursive: true });
+    writeFileSync(existingAbs, "");
     const spawnParams: Array<Record<string, unknown>> = [];
     const candidate = baseTask({ id: "candidate", cwd: null, territory_json: JSON.stringify(["tests/unit/**"]) });
     const activeSibling = baseTask({
       id: "active-sibling",
       card_id: "777",
       cwd: null,
-      territory_json: JSON.stringify(["/tmp/tests/unit/x.test.ts"]),
+      territory_json: JSON.stringify([existingAbs]),
     });
 
     bus = createMessageBus(
@@ -183,7 +190,7 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
         isCardAlive: (id: string) => id === "777",
         getTaskCards: () => [],
         listTaskCardsForCard: () => [],
-        getBoardCwd: () => "/tmp", // raiz declarada do board
+        getBoardCwd: () => boardRoot, // raiz declarada do board
         onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
         },

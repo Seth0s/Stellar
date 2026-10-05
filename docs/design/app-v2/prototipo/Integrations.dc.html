@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — integrações do time</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.ghost{height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:12.5px;cursor:pointer}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:32px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.card{display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:14px;background:#12151d;border:1px solid #20242f}
+.logo{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:15px;font-weight:700;flex:none}
+.sw{appearance:none;width:34px;height:20px;border-radius:10px;background:#2a2f3d;position:relative;cursor:pointer;margin:0;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#c9cede}
+.sw:checked{background:#4a5fe0}
+.sw:checked::after{left:17px;background:#fff}
+.opt{display:flex;align-items:center;gap:10px;font-size:12.5px;color:#c9cede}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Idy Platform · Integrações</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <main style="flex: 1; min-height: 0; overflow: auto; padding: 30px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+    <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px">
+      <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 6px">
+        <a href="TeamAdmin.dc.html" style="font-size: 13px; color: #a3aabb">← Idy Platform</a>
+        <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Integrações</h1>
+        <div style="font-size: 13.5px; color: #9aa1b2">Só owner e admin conectam. Os tokens ficam no servidor do time, nunca nas máquinas.</div>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px">
+      <section class="card" style="grid-column: span 2; border-color: #3a4a8a" aria-labelledby="sl">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span class="logo" style="background: #3b1f3d; color: #f2a6ef">S</span>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><h2 id="sl" style="margin: 0; font-size: 16px; font-weight: 600">Slack</h2><span style="font-size: 12px; color: #8ee6a8">conectado · workspace idy · por Ana</span></div>
+          <button class="ghost">Desconectar</button>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <span style="font-size: 12px; color: #8d94a6">Do Slack para o Stellar</span>
+            <label class="opt"><input class="sw" type="checkbox" checked>/stellar task cria task no board do time</label>
+            <label class="opt"><input class="sw" type="checkbox" checked>Reação :ticket: em #backlog vira task</label>
+            <label class="opt"><input class="sw" type="checkbox">Qualquer mensagem com @stellar vira task</label>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <span style="font-size: 12px; color: #8d94a6">Do Stellar para o Slack, em #dev</span>
+            <label class="opt"><input class="sw" type="checkbox" checked>Task foi para revisão</label>
+            <label class="opt"><input class="sw" type="checkbox" checked>Gate falhou</label>
+            <label class="opt"><input class="sw" type="checkbox">Task concluída</label>
+            <label class="opt"><input class="sw" type="checkbox" checked>Mensagem direta a quem recebeu uma task</label>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="gh">
+        <div style="display: flex; align-items: center; gap: 12px"><span class="logo" style="background: #222630; color: #e8eaf0">G</span><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><h2 id="gh" style="margin: 0; font-size: 16px; font-weight: 600">GitHub</h2><span style="font-size: 12px; color: #8ee6a8">conectado · org Seth0s</span></div></div>
+        <label class="opt"><input class="sw" type="checkbox" checked>Issue com label stellar vira task</label>
+        <label class="opt"><input class="sw" type="checkbox" checked>PR aberto liga na task pelo #id</label>
+        <label class="opt"><input class="sw" type="checkbox">Fechar a issue quando a task concluir</label>
+      </section>
+
+      <section class="card" aria-labelledby="ln">
+        <div style="display: flex; align-items: center; gap: 12px"><span class="logo" style="background: #1d2240; color: #b9c4ff">L</span><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><h2 id="ln" style="margin: 0; font-size: 16px; font-weight: 600">Linear</h2><span style="font-size: 12px; color: #8d94a6">não conectado</span></div></div>
+        <span style="font-size: 12.5px; line-height: 1.5; color: #a3aabb">Importar um projeto e manter o status dos dois lados.</span>
+        <button class="primary" style="align-self: flex-start">Conectar</button>
+      </section>
+      <section class="card" aria-labelledby="jr">
+        <div style="display: flex; align-items: center; gap: 12px"><span class="logo" style="background: #13263f; color: #8fc2ff">J</span><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><h2 id="jr" style="margin: 0; font-size: 16px; font-weight: 600">Jira</h2><span style="font-size: 12px; color: #8d94a6">não conectado</span></div></div>
+        <span style="font-size: 12.5px; line-height: 1.5; color: #a3aabb">Importar por JQL; atualizar o status no Jira quando mudar aqui.</span>
+        <button class="primary" style="align-self: flex-start">Conectar</button>
+      </section>
+      <section class="card" aria-labelledby="wh">
+        <div style="display: flex; align-items: center; gap: 12px"><span class="logo" style="background: #20242f; color: #c9cede; font-family: 'JetBrains Mono', monospace; font-size: 12px">{ }</span><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><h2 id="wh" style="margin: 0; font-size: 16px; font-weight: 600">Webhooks e exportação</h2><span style="font-size: 12px; color: #8d94a6">1 webhook ativo</span></div></div>
+        <span style="font-size: 12.5px; line-height: 1.5; color: #a3aabb">Eventos de task em JSON assinado; exportar o board em CSV ou JSON.</span>
+        <div style="display: flex; gap: 8px"><button class="ghost">Gerenciar</button><button class="ghost">Exportar</button></div>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

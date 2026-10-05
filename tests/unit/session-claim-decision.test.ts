@@ -109,6 +109,111 @@ describe("decideClaimAmongCandidates", () => {
       }),
     ).toEqual({ action: "none", reason: "ambiguous" });
   });
+
+  it("N spawn-anchored owners and N fresh files, no brief/content => order pairing, LOW confidence", () => {
+    const candidates = [
+      { id: "f-1", timestampMs: 900 },
+      { id: "f-2", timestampMs: 900 },
+      { id: "f-3", timestampMs: 900 },
+    ];
+    const reservations = [
+      { ownerId: "card-1", rearmAtMs: 100, matchStartMs: 100 },
+      { ownerId: "card-2", rearmAtMs: 100, matchStartMs: 100 },
+      { ownerId: "card-3", rearmAtMs: 100, matchStartMs: 100 },
+    ];
+    const claim = (ownerId: string) =>
+      decideClaimAmongCandidates({
+        candidates,
+        isClaimed: noneClaimed,
+        ownerId,
+        reservations,
+        requiresInputReservation: false,
+      });
+    // Sorted owners pair with sorted files, so each card gets a DISTINCT file —
+    // but by ORDER, so the claim declares it is not proven ownership.
+    expect(claim("card-1")).toEqual({ action: "claim", id: "f-1", confidence: "paired-by-order" });
+    expect(claim("card-2")).toEqual({ action: "claim", id: "f-2", confidence: "paired-by-order" });
+    expect(claim("card-3")).toEqual({ action: "claim", id: "f-3", confidence: "paired-by-order" });
+  });
+
+  it("N owners with DIFFERENT briefs: exact ownership by CONTENT, even when files are out of order", () => {
+    // Files created in an order that does not match the owners' spawns.
+    const candidates = [
+      { id: "sess-b", timestampMs: 900, firstPrompt: "trabalhe na task B" },
+      { id: "sess-c", timestampMs: 900, firstPrompt: "trabalhe na task C" },
+      { id: "sess-a", timestampMs: 900, firstPrompt: "trabalhe na task A" },
+    ];
+    const reservations = [
+      { ownerId: "card-a", rearmAtMs: 100, matchStartMs: 100, brief: "Trabalhe na task A" },
+      { ownerId: "card-b", rearmAtMs: 100, matchStartMs: 100, brief: "Trabalhe na task B" },
+      { ownerId: "card-c", rearmAtMs: 100, matchStartMs: 100, brief: "Trabalhe na task C" },
+    ];
+    const claim = (ownerId: string) =>
+      decideClaimAmongCandidates({
+        candidates,
+        isClaimed: noneClaimed,
+        ownerId,
+        reservations,
+        requiresInputReservation: false,
+      });
+    // No `confidence` field = exact: the content decided, not the order.
+    expect(claim("card-a")).toEqual({ action: "claim", id: "sess-a" });
+    expect(claim("card-b")).toEqual({ action: "claim", id: "sess-b" });
+    expect(claim("card-c")).toEqual({ action: "claim", id: "sess-c" });
+  });
+
+  it("IDENTICAL briefs => content cannot decide, falls back to order with LOW confidence", () => {
+    const candidates = [
+      { id: "f-1", timestampMs: 900, firstPrompt: "mesmo brief" },
+      { id: "f-2", timestampMs: 900, firstPrompt: "mesmo brief" },
+    ];
+    const reservations = [
+      { ownerId: "card-1", rearmAtMs: 100, matchStartMs: 100, brief: "mesmo brief" },
+      { ownerId: "card-2", rearmAtMs: 100, matchStartMs: 100, brief: "mesmo brief" },
+    ];
+    expect(
+      decideClaimAmongCandidates({
+        candidates,
+        isClaimed: noneClaimed,
+        ownerId: "card-1",
+        reservations,
+        requiresInputReservation: false,
+      }),
+    ).toEqual({ action: "claim", id: "f-1", confidence: "paired-by-order" });
+  });
+
+  it("rearm-on-input providers are NOT paired (their input times already separate them)", () => {
+    expect(
+      decideClaimAmongCandidates({
+        candidates: [
+          { id: "a", timestampMs: 900 },
+          { id: "b", timestampMs: 900 },
+        ],
+        isClaimed: noneClaimed,
+        ownerId: "card-a",
+        reservations: [
+          { ownerId: "card-a", rearmAtMs: 100, matchStartMs: 100 },
+          { ownerId: "card-b", rearmAtMs: 100, matchStartMs: 100 },
+        ],
+        requiresInputReservation: true,
+      }),
+    ).toEqual({ action: "none", reason: "ambiguous" });
+  });
+
+  it("pairing needs a perfect matching: more files than owners still refuses", () => {
+    expect(
+      decideClaimAmongCandidates({
+        candidates: [
+          { id: "a", timestampMs: 900 },
+          { id: "b", timestampMs: 900 },
+        ],
+        isClaimed: noneClaimed,
+        ownerId: "card-a",
+        reservations: [{ ownerId: "card-a", rearmAtMs: 100, matchStartMs: 100 }],
+        requiresInputReservation: false,
+      }),
+    ).toEqual({ action: "none", reason: "ambiguous" });
+  });
 });
 
 describe("decideIdentifyByProcessEvidence", () => {

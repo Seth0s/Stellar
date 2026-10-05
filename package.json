@@ -42,6 +42,14 @@
     "appId": "com.stellar.app",
     "productName": "Stellar",
     "icon": "build/icon.png",
+    "protocols": [
+      {
+        "name": "Stellar",
+        "schemes": [
+          "stellar"
+        ]
+      }
+    ],
     "files": [
       "out/**/*"
     ],
@@ -63,6 +71,9 @@
       "executableName": "stellar",
       "category": "Development",
       "synopsis": "Multi-agent spatial canvas",
+      "mimeTypes": [
+        "x-scheme-handler/stellar"
+      ],
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "syncDesktopName": true,
       "icon": "build/icons"

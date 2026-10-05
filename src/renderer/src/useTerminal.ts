@@ -5,7 +5,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { t } from "../../shared/i18n";
 import { toast } from "./useToast";
-import { registerTerminal, unregisterTerminal } from "./terminal-registry";
+import { registerTerminal, unregisterTerminal, registerTerminalFlusher, unregisterTerminalFlusher } from "./terminal-registry";
 import { MaskQueue } from "./mask-buffer";
 import { resolveTerminalShortcutKeydown } from "./terminal-shortcut-dispatch";
 import type { ShortcutOverrides } from "./shortcut-registry";
@@ -20,6 +20,14 @@ import {
 import { TURN_END_BUFFER_MAX, feedTurnEndChunk, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { decideTerminalFit } from "./terminal-fit-decision";
+import {
+  UNFOCUSED_FLUSH_MS,
+  appendPendingDraw,
+  createPendingDraw,
+  decideTerminalDraw,
+  flushPendingDraw,
+  type PendingDraw,
+} from "./terminal-render";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -239,6 +247,9 @@ export function useTerminal(
   /** Spawn-time task this card serves — becomes AGENT_CANVAS_TASK_ID only when set. */
   taskId: string | null,
   visible: boolean,
+  /** Top of the z-order (TerminalCard's `isFocused`). A focused, visible card
+   *  draws every flush; an unfocused one is batched (terminal-render.ts). */
+  focused: boolean,
   zoom: number,
   /** Follow-up fase C — ref estável (App → TerminalCard → aqui). O
    * listener de keydown se registra uma vez; lê `.current` a cada tecla
@@ -258,6 +269,12 @@ export function useTerminal(
   const [resumeInvalidNotice, setResumeInvalidNotice] = useState<{ reason: "missing" | "empty"; staleResumeId: string } | null>(
     null,
   );
+  /** Aviso "esta CLI não separa por perfil" (task fb6542e6): chega por
+   * `pty:home-notice` quando o card abre, num perfil isolated, um provider
+   * SEM pasta de config própria (cursor/antigravity/commandcode) — o perfil
+   * isolado simplesmente não vale para ele. Transitório de propósito, como o
+   * `resumeInvalidNotice`: vale para a vida deste processo, não persiste. */
+  const [homeNotice, setHomeNotice] = useState<{ providerId: string } | null>(null);
   // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
   // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
   // carregando/processando o histórico, fora do controle deste app), e
@@ -322,6 +339,12 @@ export function useTerminal(
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
+  /** When the UI returns to a board whose PTY kept running, `pty:spawn`
+   * returns the ring retained in main (`scrollback`). It is written into the
+   * xterm as soon as the instance exists (Effect 2); until then, any LIVE byte
+   * that arrives is queued here so it does not cross the replay out of order.
+   * `null` means no pending replay. */
+  const pendingReplayRef = useRef<{ scrollback: string; queued: string[] } | null>(null);
   /** Next xterm `onData` was preceded by a human gesture (key / paste). */
   const humanGesturePendingRef = useRef(false);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
@@ -339,6 +362,14 @@ export function useTerminal(
   const attachRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+  /** Raw output held back from the xterm while the card is off the viewport or
+   *  mid-batch as the unfocused card — see `terminal-render.ts`. */
+  const pendingDrawRef = useRef<PendingDraw>(createPendingDraw());
+  /** Set by Effect 1 (which owns the xterm) so Effect 4 can flush or resume
+   *  batching on a `visible` flip without depending on the write machinery. */
+  const drawControlRef = useRef<{ flush: () => void; schedule: () => void; cancel: () => void } | null>(null);
   // Pedido ao vivo (2026-08-31) — "no claude aparece o path da imagem,
   // quero mascarado (visual só)". `writeImagePathToPty` (registerDomListeners
   // abaixo) escreve o path absoluto real no PTY — a CLI rodando ali
@@ -391,10 +422,69 @@ export function useTerminal(
     // needle sem achar o match — evita segurar output real de verdade
     // indefinidamente se o eco não vier byte-a-byte igual por algum
     // motivo (ex.: o processo rodando ali não tem echo local ligado).
-    function writeMasked(data: string) {
+    function writeMasked(data: string, onDone?: () => void) {
       const out = maskQueueRef.current.consume(data);
-      if (out) termRef.current?.write(out);
+      const term = termRef.current;
+      if (!out || !term) {
+        onDone?.();
+        return;
+      }
+      if (onDone) term.write(out, onDone);
+      else term.write(out);
     }
+
+    // Draw gate (terminal-render.ts). A card off the canvas viewport must not
+    // parse or repaint at all (PERF.md §2.3: `term.write` ran unconditionally),
+    // and a visible-but-unfocused card batches into one write per frame. The
+    // held bytes are written, in arrival order, exactly once; the per-card ring
+    // in main stays the durability copy while a card is off screen.
+    let drawFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    function cancelDrawFlush() {
+      if (drawFlushTimer) {
+        clearTimeout(drawFlushTimer);
+        drawFlushTimer = null;
+      }
+    }
+    function flushDraw() {
+      cancelDrawFlush();
+      const { text, next } = flushPendingDraw(pendingDrawRef.current);
+      pendingDrawRef.current = next;
+      if (text) writeMasked(text);
+    }
+    /**
+     * The read path (`read_card`, terminal-registry.ts) drains the held bytes
+     * into the xterm and waits for xterm to process them, so an off-viewport
+     * card answers with what the process actually printed. Same drain as
+     * `flushDraw` — the buffer is emptied either way, so the return-to-view
+     * repaint never repeats these bytes.
+     */
+    function flushDrawAsync(): Promise<void> {
+      cancelDrawFlush();
+      const { text, next } = flushPendingDraw(pendingDrawRef.current);
+      pendingDrawRef.current = next;
+      if (!text) return Promise.resolve();
+      return new Promise((resolve) => writeMasked(text, resolve));
+    }
+    function scheduleDrawFlush() {
+      if (drawFlushTimer) return;
+      drawFlushTimer = setTimeout(() => {
+        drawFlushTimer = null;
+        flushDraw();
+      }, UNFOCUSED_FLUSH_MS);
+    }
+    function enqueueDraw(data: string) {
+      pendingDrawRef.current = appendPendingDraw(pendingDrawRef.current, data);
+      const mode = decideTerminalDraw({ visible: visibleRef.current, focused: focusedRef.current });
+      if (mode === "skip") {
+        // Hold the bytes; the timer must never fire while the card is off screen.
+        cancelDrawFlush();
+        return;
+      }
+      if (mode === "now") flushDraw();
+      else scheduleDrawFlush();
+    }
+    drawControlRef.current = { flush: flushDraw, schedule: scheduleDrawFlush, cancel: cancelDrawFlush };
+    registerTerminalFlusher(id, flushDrawAsync);
 
     // Constantes de timer e a máquina de estados da barra vivem em
     // `terminal-activity-decision.ts` — este efeito só aplica. Medido
@@ -449,7 +539,15 @@ export function useTerminal(
     }
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
-      writeMasked(data);
+      // Pending replay (a background session reattached): the xterm does not
+      // exist yet, and writing now would land OUT of order. Queue it; Effect 2
+      // flushes the ring and then these bytes.
+      const pending = pendingReplayRef.current;
+      if (pending) {
+        pending.queued.push(data);
+        return;
+      }
+      enqueueDraw(data);
       setHasReceivedOutput(true);
       const turnEndPattern = turnEndRef.current.pattern;
       if (turnEndPattern) {
@@ -497,6 +595,12 @@ export function useTerminal(
       // warning can be lost exactly during the boot race this channel fixes.
       if (eventId === id) setResumeInvalidNotice({ reason, staleResumeId });
     });
+    // Aviso de perfil (task fb6542e6) — pela MESMA razão do resume-invalid:
+    // o main emite durante o spawn, antes de o ptyId existir, então casa pelo
+    // id ESTÁVEL do card (o mesmo que vira AGENT_CANVAS_CARD_ID).
+    const offHomeNotice = window.pty.onHomeNotice((eventId, noticeProviderId) => {
+      if (eventId === id) setHomeNotice({ providerId: noticeProviderId });
+    });
 
     // Register every event listener before invoking spawn. Main can emit the
     // dedicated resume-invalid notification synchronously while it validates
@@ -516,6 +620,12 @@ export function useTerminal(
         return;
       }
       ptyIdRef.current = result.id;
+      // Background session — the reattach returned the ring retained in main.
+      // Hold it so Effect 2 (which creates the xterm) flushes it before any
+      // live byte.
+      if ("scrollback" in result && typeof result.scrollback === "string") {
+        pendingReplayRef.current = { scrollback: result.scrollback, queued: [] };
+      }
       if (initialInput && !result.consumedBrief) void window.pty.write(id, initialInput, "delivery");
       setPtyId(result.id);
     });
@@ -528,7 +638,12 @@ export function useTerminal(
       offTurnInput();
       offSessionFound();
       offResumeInvalid();
+      offHomeNotice();
       clearIdleTimer();
+      cancelDrawFlush();
+      pendingDrawRef.current = createPendingDraw();
+      drawControlRef.current = null;
+      unregisterTerminalFlusher(id);
       applyActivityRef.current = () => {};
       turnSignalSeenRef.current = false;
       turnOpenRef.current = false;
@@ -538,6 +653,7 @@ export function useTerminal(
       setPtyId(null);
       setHasReceivedOutput(false);
       setIsActive(false);
+      pendingReplayRef.current = null;
     };
     // resumeId/continueLast/model/systemPrompt are deliberately NOT deps.
     // Confirmed via CDP: App.tsx's resumeIdDiscovered() writes a freshly
@@ -621,6 +737,18 @@ export function useTerminal(
     termRef.current = term;
     fitRef.current = fit;
     registerTerminal(id, term);
+    // Background session — flush the retained ring BEFORE any live byte and,
+    // after it, the bytes that arrived in the reattach window (queued by Effect
+    // 1 so they do not cross the replay). Written directly into the xterm on
+    // purpose: this is HISTORY, and must not reopen the activity bar nor
+    // re-trigger turn-end detection.
+    const replay = pendingReplayRef.current;
+    if (replay) {
+      pendingReplayRef.current = null;
+      if (replay.scrollback) term.write(replay.scrollback);
+      for (const queued of replay.queued) term.write(queued);
+      if (replay.scrollback || replay.queued.length > 0) setHasReceivedOutput(true);
+    }
     // xterm's public split, not a payload heuristic: `onKey` is a
     // keystroke (DOM event); `onData` is that PLUS automatic replies
     // (CPR / DSR / DA / mouse SGR / focus — InputHandler `triggerDataEvent`
@@ -1051,7 +1179,17 @@ export function useTerminal(
   // whole fix). No cleanup needed: this effect doesn't register anything
   // of its own, it only ever calls a function Effect 3 owns.
   useEffect(() => {
-    if (visible) attachRef.current?.();
+    if (!visible) {
+      // Leaving the viewport: stop the batch timer, but KEEP the held bytes —
+      // they are drawn, in order, the first time the card is visible again.
+      drawControlRef.current?.cancel();
+      return;
+    }
+    attachRef.current?.();
+    // Draw what was skipped while off the viewport (or finish a coalesced
+    // batch): a card that comes back must repaint from the first missed byte.
+    if (focusedRef.current) drawControlRef.current?.flush();
+    else drawControlRef.current?.schedule();
   }, [visible]);
 
   function fitNow() {
@@ -1073,5 +1211,5 @@ export function useTerminal(
     applyActivityRef.current("interrupt");
   }
 
-  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, homeNotice, hasReceivedOutput, isActive, fitNow, interrupt };
 }

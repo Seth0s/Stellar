@@ -30,13 +30,14 @@ import {
 } from "./cloud-auth-decision";
 import { createCloudApi, type CloudApi } from "./cloud-api";
 import { createCloudTokenStore } from "./cloud-tokens";
+import type { CloudPlan } from "./plan-decision";
 
 export type CloudProvider = "github" | "email";
 
 export type CloudStatus =
   | { state: "logged-out"; apiBaseUrl: string; lastError: string | null }
   | { state: "pending"; apiBaseUrl: string; provider: CloudProvider }
-  | { state: "logged-in"; apiBaseUrl: string; account: CloudAccount; expiresAtMs: number };
+  | { state: "logged-in"; apiBaseUrl: string; account: CloudAccount; plan: CloudPlan | null; expiresAtMs: number };
 
 export type CloudAuthConfig = {
   apiBaseUrl: string;
@@ -74,6 +75,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
 
   let access: { token: string; obtainedAtMs: number; expiresInSec: number } | null = null;
   let account: CloudAccount | null = null;
+  let plan: CloudPlan | null = null;
   let lastError: string | null = null;
 
   type Pending = {
@@ -90,7 +92,14 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
 
   function currentStatus(): CloudStatus {
     if (account && access) {
-      return { state: "logged-in", apiBaseUrl: api.baseUrl, account, expiresAtMs: access.obtainedAtMs + access.expiresInSec * 1000 };
+      return {
+        state: "logged-in",
+        apiBaseUrl: api.baseUrl,
+        account,
+        // null = the server sent no plan block: unknown, left to the server.
+        plan,
+        expiresAtMs: access.obtainedAtMs + access.expiresInSec * 1000,
+      };
     }
     if (pending) return { state: "pending", apiBaseUrl: api.baseUrl, provider: pending.provider };
     return { state: "logged-out", apiBaseUrl: api.baseUrl, lastError };
@@ -104,6 +113,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   function clearSession(): void {
     access = null;
     account = null;
+    plan = null;
   }
 
   function stopPending(): void {
@@ -132,7 +142,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       emit();
       return;
     }
-    const res = await api.me(token);
+    const res = await api.meWithPlan(token);
     if (!res.ok) {
       // Access acabou de ser obtido; falha aqui é rede/contrato, não credencial.
       lastError = res.error.message;
@@ -140,7 +150,8 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       emit();
       return;
     }
-    account = res.value;
+    account = res.value.account;
+    plan = res.value.plan;
     lastError = null;
     emit();
   }

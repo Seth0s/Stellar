@@ -70,6 +70,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* A linha de controles tem de caber SEMPRE dentro do bloco: um filho largo
+     (pílula de status longa) não pode empurrar o microfone/enviar para fora da
+     borda. `min-width: 0` deixa os filhos encolherem abaixo do conteúdo. */
+  min-width: 0;
 }
 
 .spacer {
@@ -90,7 +94,10 @@
   font-size: 12px;
   cursor: pointer;
   max-width: 140px;
-  flex-shrink: 0;
+  /* Encolhe quando falta espaço (o rótulo trunca com reticências) — nunca
+     empurra os controles para fora do bloco. */
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .targetBtn:hover {
@@ -457,7 +464,24 @@
   color: var(--muted);
   white-space: nowrap;
   cursor: pointer;
-  flex-shrink: 0;
+  /* A pílula TRUNCA em vez de esticar a barra (2026-10-05, adendo do dono no
+     print): largura máxima + reticências, com o texto inteiro no tooltip; o
+     microfone e o enviar continuam `flex-shrink: 0` e NUNCA saem da borda. */
+  min-width: 0;
+  max-width: 60%;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+/* O rótulo e o motivo encolhem com reticências; ambos param de crescer no teto
+   da pílula. O texto completo vive no `title` do botão. */
+.statusLabel,
+.statusDetail {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status.sending {
@@ -466,6 +490,13 @@
 
 .status.delivered {
   color: var(--good);
+}
+
+/* Estado NEUTRO do `unknown` (2026-10-05): tratado como enviado enquanto não há
+   evidência em contrário — cor de repouso, NUNCA o amarelo de alerta. Sem esta
+   regra a pílula herdaria o tom do tema e o neutro ficaria ambíguo. */
+.status.provisional {
+  color: var(--muted);
 }
 
 .status.parked,
@@ -477,11 +508,8 @@
   color: var(--danger);
 }
 
-/* Linha extra dos estados PERSISTENTES (qual card, motivo real, o que tentar).
-   O `.status` é `nowrap`; aqui a linha QUEBRA em vez de esticar a pílula pela
-   barra toda — ela continua inline, só mais alta quando precisa. */
-.statusDetail {
-  white-space: normal;
-  text-align: left;
-  max-width: 40ch;
-}
+/* A linha de detalhe dos estados persistentes (qual card, motivo real, o que
+   tentar) fica DEFINIDA acima, junto do rótulo: ela TRUNCA com reticências em
+   vez de quebrar, porque a linha de controles precisa caber dentro do bloco em
+   qualquer largura — o texto inteiro vai no `title` do botão. */
+

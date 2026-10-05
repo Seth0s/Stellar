@@ -124,6 +124,16 @@ export type FileStore = {
   time: SessionTimeSource;
   /** Ausente = a LEITURA deste provider não foi medida (ver `SqliteStore`). */
   read?: FileReadSpec;
+  /**
+   * Where the session's FIRST PROMPT is written, as a sibling of the record.
+   * `file` uses `{id}` like `read.exists`; `field` is the key on the file's
+   * first JSON line (default `prompt`). It is EXACT ownership evidence: the
+   * first prompt is the brief the app handed to that card, so two cards of the
+   * same provider+cwd spawned in the same instant can be told apart by CONTENT
+   * instead of by creation order. Absent = no content channel, and pairing
+   * falls back to order (declared low confidence).
+   */
+  prompt?: { file: string; field?: string };
 };
 
 /** O store de uma CLI cujo índice de sessões é um BANCO que ela mesma mantém

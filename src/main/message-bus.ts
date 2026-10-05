@@ -1,5 +1,5 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
-import { unlinkSync, statSync, linkSync } from "node:fs";
+import { existsSync, unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -16,7 +16,7 @@ import {
 } from "./agent-facing-authorship";
 import { formatCardAuthoredDelivery } from "./pasted-content-decision";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, shouldPromoteUnconfirmed, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import {
   cancelPendingFromRequester,
   decideOriginDeliveryRate,
@@ -57,6 +57,8 @@ import {
   decideIdleWithoutReport,
   IDLE_WITHOUT_REPORT_POLL_MS,
   isAnswerLanded,
+  looksLikeReportShape,
+  screenReportPointerBody,
 } from "./idle-without-report-decision";
 import { decideCardStatus, describeCardStatus, hasAgentReadingLine, isShellProvider } from "./card-status-decision";
 import {
@@ -113,9 +115,16 @@ import {
   normalizeStringList,
 } from "./task-contract-decision";
 import { isSandboxAvailable } from "./sandbox";
-import { decideTerritoryConflict, territoryEntriesOverlap, type ActiveTaskTerritory } from "./territory-conflict-decision";
+import {
+  decideTerritoryConflict,
+  describeSharedCoOwners,
+  territoryEntriesOverlap,
+  type ActiveTaskTerritory,
+  type TerritoryRefusal,
+  type TerritoryWarning,
+} from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
-import { decideLinkMode, decideReservationDelivery, reorderReservations } from "./task-reservation-decision";
+import { decideCardBusyForReservation, decideLinkMode, decideReservationDelivery, firstReadyReservation, reorderReservations, RESERVATION_STUCK_MS } from "./task-reservation-decision";
 import { deriveTaskPhase, type TaskPhaseFacts } from "./task-phase-decision";
 import { resolveTaskIdPrefix, shortTaskId } from "./task-id-prefix-decision";
 import { projectTransitionForOutput } from "./task-transition-output";
@@ -132,7 +141,15 @@ import {
   runTaskGates,
   stampGateEvidenceJson,
   stripAgentGateEvidence,
+  type GateRunEvidence,
 } from "./gate-runner";
+import { readDeclaredFilesFromReport, type DeclaredFiles } from "./gate-isolation-decision";
+import {
+  describeGateContradiction,
+  describeGateResultSuffix,
+  gateRunSummaryFromEvidence,
+  GATE_NOTICE_WAIT_MS,
+} from "./gate-notice-decision";
 import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
 import { decideSpawnMediaPath, type SpawnMediaType } from "./spawn-media-decision";
 import {
@@ -176,6 +193,14 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 import { argvCarriesDeclaredBrief, midTurnQueueAutoDelivers, providerById, providerCapacity } from "./providers";
+import {
+  contextWarning,
+  describeContextWarning,
+  healthAlerts,
+  readCardHealth,
+  type CardHealth,
+  type HealthAlert,
+} from "./card-health";
 import { decideSpawnProfile } from "./spawn-profile-decision";
 import { describeSpawnBriefDelivery, type SpawnBriefMode } from "./spawn-brief-delivery-decision";
 import { FIRST_OUTPUT_DEADLINE_MS, decideSilentBoot } from "./silent-boot-decision";
@@ -203,10 +228,18 @@ import {
   deriveParticipationDivergence,
   deriveTaskStatus,
   hasLiveImplementer,
+  isDependencySettled,
   isJudgmentStatus,
+  isTerminalStatus,
   storedStatusAfterImplementerLink,
   type StatusActor,
 } from "../task-status-derive";
+import {
+  decideSupersedeAuthorship,
+  describeSupersededDependencyNotice,
+  resolveSupersedeTarget,
+  SUPERSEDED_STATUS,
+} from "./task-supersede-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -740,6 +773,9 @@ export type SpawnAgentResult =
        * despacha precise abrir o brief pra saber. Presente apenas quando a
        * task tem deps não-done no momento do despacho. */
       note?: string;
+      /** A territory overlap that PASSED with a warning (a new/specific target
+       *  under another active task's broad glob) — informative, never a gate. */
+      territoryWarning?: string;
     }
   | { ok: false; error: string };
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
@@ -1040,6 +1076,11 @@ export type BusRequest =
       cmd: "update_task";
       taskId?: string;
       status?: string;
+      /** Id of the task that REPLACES this one. Required when `status:
+       * "superseded"` (the write is refused without it, naming the field) and
+       * the target must exist on the SAME board. Only the board's marked
+       * orchestrator or the human may write `superseded`. */
+      supersededBy?: string | null;
       cardId?: string | null;
       /** Set/clear the task's own cwd for later auto-dispatch. `null`
        * clears back to board-root fallback; omit leaves unchanged. */
@@ -1083,6 +1124,10 @@ export type BusRequest =
        * Omitida em qualquer outro status = não mexe; ao SAIR de `blocked`, a
        * pergunta é limpa. */
       question?: unknown;
+      /** Orchestrator override of the territory guard (a non-empty reason makes
+       *  a would-be refusal pass and is recorded on the task's trail). Only
+       *  read when this write ACTIVATES the task (attaches a card). */
+      overrideTerritory?: string;
     }
   | {
       /** Responde a pergunta de uma task `blocked` (task 22f0a649) — pelo
@@ -1158,6 +1203,9 @@ export type BusRequest =
        * qualquer dep pendente reserva, todas done (ou sem deps) entrega. */
       mode?: "reserve" | "deliver";
       requesterId?: string;
+      /** Orchestrator override of the territory guard on delivery (a non-empty
+       *  reason makes a would-be refusal pass and is recorded). */
+      overrideTerritory?: string;
     }
   | { cmd: "list_reservations"; cardId?: string }
   | { cmd: "reorder_reservations"; cardId?: string; taskIds?: string[] }
@@ -1261,6 +1309,9 @@ export type BusRequest =
        * spawn-idempotency-decision.ts.
        */
       idempotencyKey?: string;
+      /** Orchestrator override of the territory guard (a non-empty reason makes
+       *  a would-be refusal pass and is recorded on the task's trail). */
+      overrideTerritory?: string;
     }
   | {
       cmd: "spawn_card";
@@ -1566,6 +1617,11 @@ export function createMessageBus(
      * exatamente o risco de entregar isto pela metade.
      */
     getCardLastWorkGrantedAt: (cardId: string) => number | null;
+    /** Retained ANSI-stripped output tail of a card, or null for an unknown
+     * id. Lets the idle scan tell "the turn wrote a report to the screen but
+     * never called the tool" apart from ordinary silence. Optional so test
+     * doubles stay source-compatible. */
+    getCardRecentOutput?: (cardId: string) => string | null;
     /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica
      * na caixa sem submeter" — `typeAndSubmit`'s portão de prontidão
      * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
@@ -1808,6 +1864,10 @@ export function createMessageBus(
     /** Notify the Fila card after an MCP close/open so the history panel
      * refreshes. Optional — tests that don't mount a window omit it. */
     onSprintsChanged?: (boardId: string) => void;
+    /** The gate runner notifies when EACH command starts (and with `null` at
+     * the end) so the Fila redraws the live progress. Optional: without it the
+     * progress exists in memory, it is just not pushed. */
+    onGateProgress?: (taskId: string, boardId: string | null) => void;
     /** Current task_cards links from the card side. A secondary reviewer
      * card can close a participation round without being the principal
      * card of the task. */
@@ -1854,6 +1914,10 @@ export function createMessageBus(
     reorderReservedTaskCards?: (cardId: string, taskIds: readonly string[]) => void;
     /** Implementer links VIVOS de uma task (reservado OU active). */
     listLiveImplementersForTask?: (taskId: string) => { card_id: string; reservation_state: string | null }[];
+    /** Releases EVERY live link (reserved and active) of the task and clears
+     * `tasks.card_id`, without touching the status (a superseded task does not
+     * go back to `pending`). Returns how many rows it released. */
+    releaseAllImplementerLinks?: (taskId: string, reason: string, releasedBy: string | null) => number;
     /** Move toda a fila de reservas de um card para outro (close_card). */
     moveReservedTaskCards?: (fromCardId: string, toCardId: string) => number;
     /** TROCA DE CARD (task e8802e32) — delega ao store a transacao que libera
@@ -2238,6 +2302,17 @@ export function createMessageBus(
   const NO_EPISODE_ANCHOR = 0;
   const idleWithoutReportNotified = new Map<string, number>();
   /**
+   * CARD HEALTH — per card, the set of health levels ALREADY warned (keys from
+   * `healthAlerts`: `quota:80`, `quota:95`, `context`). "Once per level": while
+   * the key is here the alert does not repeat; when the reading drops back
+   * below the level the key leaves, so the alert can fire again if the card
+   * fills up once more.
+   */
+  const notifiedHealthAlerts = new Map<string, Set<string>>();
+  /** Tasks already reported to the orchestrator as "ready and stuck" (once per
+   *  task). See `scanStuckReservations`. */
+  const reservationStuckNotified = new Set<string>();
+  /**
    * A RESPOSTA DO CARD A QUEM O DIRIGE (task fc68f565) — a outra forma de
    * cumprir o episódio, para quem não pode chamar `report`.
    *
@@ -2288,6 +2363,12 @@ export function createMessageBus(
     /** When the verdict settled `parked` — the anchor that decides whether the
      * queue item was later consumed (turn end AFTER this) or not. */
     parkedAt?: number;
+    /** When the confirm loop CLOSED its verdict (any outcome). The anchor for
+     * the cheap `unknown` → `delivered` promotion: it sits AFTER every byte the
+     * delivery itself wrote (body/Enter/clear all renew `lastWorkGrantedAt`), so
+     * only work granted AFTER it — a declared turn end, or a new human/delivery
+     * input — can promote (see `shouldPromoteUnconfirmed`). */
+    settledAt?: number;
   };
   const deliveryRecords = new Map<string, TrackedDelivery>();
   /** Sliding-window samples for agent `send` rate ceiling (requester × target). */
@@ -2356,7 +2437,7 @@ export function createMessageBus(
     const linked: CloseCardLinkedTask[] = [];
     for (const taskId of taskIds) {
       const task = callbacks.getTask(taskId);
-      if (!task || isJudgmentStatus(task.status)) continue;
+      if (!task || isTerminalStatus(task.status)) continue;
       const cards = task.cards ?? callbacks.getTaskCards(taskId) ?? [];
       linked.push({
         taskId,
@@ -2409,7 +2490,7 @@ export function createMessageBus(
     for (;;) {
       const row = callbacks.getReport(cardId, after);
       if (!row) break;
-      let parsed: unknown = null;
+      let parsed: unknown;
       try {
         // Lido pelo MESMO decodificador da entrada (task 10cf58d0): uma linha
         // legada gravada como string-de-JSON passa a valer o objeto que sempre
@@ -2529,6 +2610,40 @@ export function createMessageBus(
   }
 
   /**
+   * The files each card of the BOARD declared it changed (`filesChanged`) —
+   * the input to the gate-isolation decision. It includes the OTHER cards,
+   * because their declaration is what makes a DISPUTE detectable.
+   *
+   * DECLARED LIMIT: the scope is the task's BOARD. A card of another board on
+   * the SAME repository does not enter, so a dispute crossing boards is not
+   * seen here — stated, not pretended. Reading every board on each gate would
+   * be too expensive for the gain; the measured case (five cards of one board
+   * on the same checkout) is covered.
+   */
+  function collectDeclaredFiles(task: TaskRow): DeclaredFiles[] {
+    try {
+      const cardIds = new Set<string>();
+      if (task.card_id) cardIds.add(task.card_id);
+      if (task.board_id) {
+        const tasks = callbacks.listTasksByBoard(task.board_id);
+        if (Array.isArray(tasks)) for (const t of tasks) if (t.card_id) cardIds.add(t.card_id);
+      }
+      const out: DeclaredFiles[] = [];
+      for (const cardId of cardIds) {
+        const row = callbacks.getReport(cardId);
+        if (!row) continue;
+        const paths = readDeclaredFilesFromReport(row.report_json);
+        if (paths.length > 0) out.push({ cardId, paths });
+      }
+      return out;
+    } catch {
+      // Reading the attribution must never break the report path: without it the
+      // runner falls back to `shared` mode, the default behavior.
+      return [];
+    }
+  }
+
+  /**
    * Gate runner (2026-09-19) — o APP roda os gates declarados da task e
    * carimba a evidência MEDIDA (stdout/stderr/exit-code reais) em
    * `result_json.gateRun`. O número deixa de vir do agente: um
@@ -2539,6 +2654,9 @@ export function createMessageBus(
    * responde agora; a suíte roda em subprocesso isolado, serializada pelo
    * lock por repositório (`gate-runner.ts`), e a evidência aparece no
    * próximo `get_task`/`list_tasks` (view `full`), não no retorno imediato.
+   * The promise is RETURNED so the report notice can wait for the result and
+   * carry it on the same line — and so the Fila receives live progress through
+   * `onGateProgress`.
    *
    * Um gate que FALHA não muda status nem veredito — o app registra o que
    * mediu e a decisão continua humana/revisora (auto-`done` é decidido
@@ -2546,12 +2664,16 @@ export function createMessageBus(
    * nada é inventado. Se a task sumir antes do fim, a evidência é
    * descartada com ela — não há onde carimbar.
    */
-  function startTaskGates(task: TaskRow | undefined): void {
-    if (!task) return;
+  function startTaskGates(task: TaskRow | undefined): Promise<GateRunEvidence | null> | null {
+    if (!task) return null;
     const gates = contractFromTaskRow(task).gates;
-    if (!gates || gates.length === 0) return;
-    if (!task.cwd) return;
-    void runTaskGates({
+    if (!gates || gates.length === 0) return null;
+    if (!task.cwd) return null;
+    const boardId = task.board_id ?? null;
+    // The board may declare tool directories its gates read OUTSIDE the task
+    // repository. They are validated and mounted read-only by the runner.
+    const boardGateToolPaths = boardId ? readBoardContext(boardContextDir, boardId).gateToolPaths ?? [] : [];
+    return runTaskGates({
       taskId: task.id,
       // O card implementer entra no HOLDER do lock (a Fila mostra quem segura).
       cardId: task.card_id ?? null,
@@ -2561,15 +2683,22 @@ export function createMessageBus(
       // dela nada roda, e a evidência diz por quê. Sem board, sem raiz — e
       // sem raiz o runner RECUSA (não existe execução sem lugar declarado).
       declaredRoot: boardDeclaredRoot(task.board_id),
-      // O território vai só para ROTULAR o diff capturado (dentro/fora) —
-      // nunca para filtrar. Medido: 75,5% dos arquivos que os agentes
-      // declaram caem fora do território, e o desvio é o que mais interessa
-      // ver no diff (task 7096e8af).
+      // The territory enters to LABEL the diff (inside/outside) and to ADD to
+      // the isolated set the dirty territory files that were not declared —
+      // never to FILTER what the task declared.
       territory: contractFromTaskRow(task).territory,
+      // Per-card attribution: the `filesChanged` declared on the board decide
+      // whether the gates run in a worktree holding only this task's diff,
+      // instead of measuring the whole shared checkout.
+      declaredFiles: collectDeclaredFiles(task),
+      gateToolPaths: boardGateToolPaths,
+      // Live progress: pushes the Fila on every command that STARTS, so the
+      // chip shows "rodando gates i/N · <command>".
+      onProgress: () => callbacks.onGateProgress?.(task.id, boardId),
     })
       .then((evidence) => {
         const latest = callbacks.getTask(task.id);
-        if (!latest) return;
+        if (!latest) return evidence;
         callbacks.upsertTask({
           ...latest,
           result_json: stampGateEvidenceJson(latest.result_json, evidence),
@@ -2577,12 +2706,14 @@ export function createMessageBus(
           actor: "app",
           statusProposed: false,
         });
-        // SEGUNDO aviso (task 6266d3e7): "gates medidos pelo app: N/M".
-        notifyGatesMeasured(task.id);
+        // No notice here: the result travels on the report-notice line, and
+        // only a contradiction becomes a self-standing message.
+        return evidence;
       })
       .catch(() => {
         // Nem chegou a executar (erro de resolução/spawn fora do
         // subprocesso): isso não é evidência de gate nenhum. Não carimba.
+        return null;
       });
   }
 
@@ -2658,6 +2789,9 @@ export function createMessageBus(
       requestedReason: row.requested_reason ?? null,
       requestedBy: row.requested_by ?? null,
       requestedAt: row.requested_at ?? null,
+      // The target that replaced this task. `null` means it is not a
+      // superseded task; it is written only together with `status: "superseded"`.
+      supersededBy: row.superseded_by ?? null,
       // Task 22f0a649 — a pergunta estruturada de `blocked`, lida do
       // `result_json` (nenhuma coluna nova). `null` = não há pergunta; um
       // `blocked` sem isto é RECUSADO na escrita, então não deveria existir.
@@ -3122,6 +3256,35 @@ export function createMessageBus(
   }
 
   /**
+   * A PROMOÇÃO BARATA de `unconfirmed` (2026-10-05): um fim de turno, ou novo
+   * trabalho concedido, datado DEPOIS do laço fechar o veredito prova que o card
+   * fez algo depois da entrega — e é o sinal que o laço de poucos segundos não
+   * pôde ver quando o `submitStartedPattern` não casou naquele instante (a
+   * mensagem chegou, mas a tela não deu a evidência a tempo). Promove a
+   * `delivered`; ver `shouldPromoteUnconfirmed` para o porquê da âncora
+   * `settledAt` e para por que `null` não promove.
+   *
+   * É preguiçoso de propósito: roda no ponto de LEITURA (`get_delivery` /
+   * `list_deliveries`), como o precedente do parque — quem quer o veredito
+   * consulta, e o estado é recalculado sobre fatos atuais, sem timer por entrega.
+   */
+  function promoteUnconfirmedOnActivity(record: TrackedDelivery) {
+    if (record.delivery !== "unconfirmed" || record.settledAt === undefined) return;
+    const turnEndedAt =
+      typeof callbacks.getCardTurnEndedAt === "function" ? callbacks.getCardTurnEndedAt(record.target) ?? null : null;
+    const workGrantedAt =
+      typeof callbacks.getCardLastWorkGrantedAt === "function"
+        ? callbacks.getCardLastWorkGrantedAt(record.target) ?? null
+        : null;
+    if (shouldPromoteUnconfirmed({ settledAt: record.settledAt, turnEndedAt, workGrantedAt })) {
+      record.delivery = "delivered";
+      if (record.confirm && record.confirm.result === "unknown") {
+        record.confirm = { ...record.confirm, result: "sent" };
+      }
+    }
+  }
+
+  /**
    * Unified form for any tool whose job is to accept a PTY message, not
    * to sit in the human-input / write-readiness gates. Chains onto the
    * existing per-card FIFO (`deliveryQueues`) and returns immediately.
@@ -3186,6 +3349,7 @@ export function createMessageBus(
         (confirm) => {
           if (record.delivery === "cancelled" || confirm === undefined) return;
           record.confirm = confirm;
+          record.settledAt = Date.now();
           record.delivery = decideDeliveryOutcome(confirm.result);
           // O instante do park é a âncora de "consumido?": numa fila que se
           // entrega sozinha, um FIM DE TURNO depois daqui significa que o
@@ -3195,6 +3359,7 @@ export function createMessageBus(
         () => {
           if (record.delivery === "cancelled") return;
           record.confirm = { result: "error", attempts: 0, enters: 0, composerCleared: false };
+          record.settledAt = Date.now();
           record.delivery = "unconfirmed";
         },
       )
@@ -3208,6 +3373,69 @@ export function createMessageBus(
       receipt: { ok: true, delivery: "queued", ...(reason ? { reason } : {}), id },
       done,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // CARD HEALTH — the orchestrator learns, without reading the screen by
+  // accident, when a card is out of context or out of plan quota. The reading
+  // comes from the COPY the app already keeps (`getCardRecentOutput`, the same
+  // ANSI-stripped tail `read_card` returns) and from the provider's
+  // DECLARATION (`capacity.health`) — never a live database. See
+  // `card-health.ts`.
+  // -------------------------------------------------------------------------
+
+  /** Reads a card's health from the provider's declaration. Pure: it warns nobody. */
+  function readHealthOf(cardId: string, provider: string): CardHealth {
+    return readCardHealth(
+      providerCapacity(provider)?.health,
+      callbacks.getCardRecentOutput?.(cardId) ?? null,
+      Date.now(),
+    );
+  }
+
+  /**
+   * Reads the health AND enqueues to the card's board ORCHESTRATOR the levels
+   * just crossed — once per level (see `notifiedHealthAlerts`).
+   */
+  function readAndTrackCardHealth(cardId: string, provider: string, label: string): CardHealth {
+    const capability = providerCapacity(provider)?.health;
+    const health = readCardHealth(capability, callbacks.getCardRecentOutput?.(cardId) ?? null, Date.now());
+    const alerts = healthAlerts({ health, capability, cardLabel: label, provider });
+    const activeKeys = new Set(alerts.map((a) => a.key));
+    const previous = notifiedHealthAlerts.get(cardId) ?? new Set<string>();
+    const fresh = alerts.filter((a) => !previous.has(a.key));
+    if (activeKeys.size === 0) notifiedHealthAlerts.delete(cardId);
+    else notifiedHealthAlerts.set(cardId, activeKeys);
+    if (fresh.length > 0) notifyOrchestratorHealth(cardId, fresh);
+    return health;
+  }
+
+  function notifyOrchestratorHealth(cardId: string, alerts: HealthAlert[]): void {
+    const boardId = callbacks.getCardBoardId(cardId);
+    if (!boardId) return;
+    const orch = callbacks.getBoardOrchestratorCardId(boardId);
+    if (!orch || orch === cardId) return;
+    if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(orch)) return;
+    for (const alert of alerts) enqueueCardDelivery(orch, alert.message, { steer: false });
+  }
+
+  /** The health engine for EVERY terminal card — used by the watchdog. */
+  function scanCardHealth(): void {
+    if (typeof callbacks.listCards !== "function") return;
+    for (const card of callbacks.listCards() ?? []) {
+      if (card.kind !== "terminal" && card.kind !== "chat") continue;
+      if (!providerCapacity(card.provider)?.health) continue;
+      readAndTrackCardHealth(card.id, card.provider, card.displayName || card.id);
+    }
+  }
+
+  /**
+   * The STRUCTURED warning a task DELIVERY attaches to the tool response
+   * (`contextWarning`) when the card's context is already past its threshold —
+   * `null` otherwise. It does NOT refuse: it only warns the caller.
+   */
+  function deliveryContextWarning(cardId: string, provider: string) {
+    return contextWarning(readHealthOf(cardId, provider), providerCapacity(provider)?.health);
   }
 
   /** Round-trip de sticky — mesmo timeout e mesma forma do `readCardText`
@@ -3349,7 +3577,16 @@ export function createMessageBus(
    * enqueue form from 5206f7e is what makes that safe again: the old
    * `await typeAndSubmit` blocked the tool and corrupted turns.
    */
-  function notifySpawnerOfReport(cardId: string): void {
+  function notifySpawnerOfReport(
+    cardId: string,
+    declaredTaskId?: string | null,
+    /** Gate in flight for this report: the notice waits for the result
+     * (bounded) and carries it on the SAME line; on a contradiction the line
+     * gives way to a self-standing message. `reportOk` is what the report
+     * declared (`ok !== false`). Absent/null = no gates, the notice goes out
+     * as always. */
+    gateWait?: { promise: Promise<GateRunEvidence | null>; reportOk: boolean } | null,
+  ): void {
     const spawnerId = resolveNotifyTarget(cardId);
     if (!spawnerId) {
       console.warn(
@@ -3359,37 +3596,61 @@ export function createMessageBus(
     }
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    // ID CURTO + TÍTULO da task (task 6266d3e7) — o aviso dizia só o card. O
-    // agente lê "task 0871b484 (…)" e pode pedir read_report/get_task direto.
-    const task = (callbacks.listTasks() ?? []).find((t) => t.card_id === cardId);
+    // The notice names the task the report DECLARED; with no declaration, the
+    // card's active implementer task. Never the first task linked to the card:
+    // a card that ran A then B would otherwise be reported as still on A.
+    const taskId =
+      declaredTaskId ??
+      (callbacks.listTaskCardsForCard(cardId) ?? []).find((l) => l.role === TASK_CARD_IMPLEMENTER_ROLE)?.task_id ??
+      null;
+    const task = taskId ? callbacks.getTask(taskId) : undefined;
     const taskLine = task ? ` — task ${shortTaskId(task.id)} ("${taskTitle(task.prompt)}")` : "";
-    // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
-    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, `${REPORT_AVAILABLE_POINTER_BODY}${taskLine}`));
+    const base = `${REPORT_AVAILABLE_POINTER_BODY}${taskLine}`;
+    if (!gateWait) {
+      // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
+      enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, base));
+      return;
+    }
+    // ONE notice only: it waits for the gate — bounded, so a long suite does
+    // not hold the pointer — and carries the result on the SAME line. Never
+    // `await` on the report path: delivery stays fire-and-forget (f073f59).
+    void waitForGateWithinCap(gateWait.promise).then((evidence) => {
+      if (!evidence) {
+        enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, `${base}${describeGateResultSuffix(null)}`));
+        return;
+      }
+      const contradiction = describeGateContradiction({
+        taskId: task?.id ?? taskId ?? cardId,
+        title: task ? taskTitle(task.prompt) : "",
+        reportOk: gateWait.reportOk,
+        evidence,
+      });
+      if (contradiction) {
+        // The contradiction is the ONLY self-standing message: it replaces the
+        // notice line, with the task short id, the command, the mode and the
+        // trailing output.
+        enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(null, contradiction));
+        return;
+      }
+      enqueueCardDelivery(
+        spawnerId,
+        formatAgentFacingAuthorship(label, `${base}${describeGateResultSuffix(gateRunSummaryFromEvidence(evidence))}`),
+      );
+    });
   }
 
-  /**
-   * SEGUNDO aviso, curto (task 6266d3e7): quando o gateRun medido pelo APP
-   * termina, diz quantos comandos passaram e qual falhou. Chamado pelo caminho
-   * do gate em index.ts. Silencioso sem task/card/leitor.
-   */
-  function notifyGatesMeasured(taskId: string): void {
-    const task = callbacks.getTask(taskId);
-    if (!task) return;
-    const parsedResult: unknown = (() => {
-      try {
-        return task.result_json ? JSON.parse(task.result_json) : null;
-      } catch {
-        return null;
-      }
-    })();
-    const summary = gateRunSummaryFromResult(parsedResult);
-    if (!summary) return;
-    const spawnerId = task.card_id ? resolveNotifyTarget(task.card_id) : null;
-    if (!spawnerId || !listTerminalCards().some((c) => c.id === spawnerId)) return;
-    const body = summary.ok
-      ? `gates measured by the app: ${summary.passed}/${summary.total} green`
-      : `gates measured by the app: ${summary.passed}/${summary.total} — failed: ${summary.failedCommand ?? "?"}`;
-    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(null, body));
+  /** Wait for the gate promise, but only up to `GATE_NOTICE_WAIT_MS`; past the
+   * ceiling it resolves `null` ("still running", and the result stays on the
+   * task). Never rejects — `startTaskGates` already resolves `null` on failure. */
+  function waitForGateWithinCap(promise: Promise<GateRunEvidence | null>): Promise<GateRunEvidence | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), GATE_NOTICE_WAIT_MS);
+      timer.unref?.();
+      void promise.then((evidence) => {
+        clearTimeout(timer);
+        resolve(evidence);
+      });
+    });
   }
 
   /**
@@ -3416,7 +3677,7 @@ export function createMessageBus(
    * vai ao ORQUESTRADOR do board (não ao spawner: é o dono do board que decide
    * o que fazer), com o id do CARD e o id da TASK — nunca um chute de id.
    */
-  function notifySessionUnresolved(cardId: string, reason: "ambiguous" | "not-ours"): void {
+  function notifySessionUnresolved(cardId: string, reason: "ambiguous" | "not-ours" | "paired-by-order"): void {
     const links = callbacks.listTaskCardsForCard?.(cardId) ?? [];
     for (const link of links) {
       if (link.released_at != null) continue;
@@ -3426,11 +3687,29 @@ export function createMessageBus(
       const orchestratorId = callbacks.getBoardOrchestratorCardId(task.board_id);
       if (!orchestratorId || !callbacks.isCardAlive(orchestratorId)) continue;
       const notice =
-        `[de: stellar] card ${cardId} is running task ${task.id} but its session id could not be attributed on disk ` +
-        `(${reason}) — with no session id it would come back WITHOUT context if the app restarts. ` +
-        "Likely more than one session of this provider in the same cwd; resolve it by hand if it matters.";
+        reason === "paired-by-order"
+          ? `[de: stellar] card ${cardId} claimed a session id for task ${task.id} by ORDER ` +
+            "(identical or absent briefs), so its ownership is NOT proven — after a restart it may resume another " +
+            "card's conversation. Verify it by hand."
+          : `[de: stellar] card ${cardId} is running task ${task.id} but its session id could not be attributed on disk ` +
+            `(${reason}) — with no session id it would come back WITHOUT context if the app restarts. ` +
+            "Likely more than one session of this provider in the same cwd; resolve it by hand if it matters.";
       enqueueCardDelivery(orchestratorId, formatAgentFacingAuthorship(null, notice), { steer: false });
     }
+  }
+
+  /**
+   * The warn side of a trust prompt the app did NOT answer (outside the board's
+   * declared root, or a provider that declares no confirm input). The
+   * orchestrator of the card's board is told through the SAME delivery queue as
+   * every other notice: it waits for a human mid-line on the target and
+   * confirms the submit, instead of writing straight into the PTY.
+   */
+  function notifyTrustPromptUnconfirmed(cardId: string, message: string): void {
+    const boardId = typeof callbacks.getCardBoardId === "function" ? callbacks.getCardBoardId(cardId) ?? null : null;
+    const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
+    if (!orchestratorId || orchestratorId === cardId || !callbacks.isCardAlive(orchestratorId)) return;
+    enqueueCardDelivery(orchestratorId, formatAgentFacingAuthorship(null, message), { steer: false });
   }
 
   /**
@@ -3679,7 +3958,7 @@ export function createMessageBus(
       // linha entrou (`reports` é append-only por `seq`), então a comparação
       // com a âncora responde "houve report NESTE episódio?".
       const lastReportAt = callbacks.getReport(cardId)?.updated_at ?? null;
-      const decision = decideIdleWithoutReport({
+      const idleFacts = {
         alive: callbacks.isCardAlive(cardId),
         waitingOnConsent: waitingOnConsent.has(cardId),
         // Um card VIVO sempre tem a âncora: o fato nasce com o entry, no
@@ -3709,11 +3988,23 @@ export function createMessageBus(
         // DECLARADO encerrado e nenhuma saída depois dele. Fato declarado, não
         // silêncio — por isso o portão não espera o piso quando isto é true.
         declaredIdle: turnEndedAt !== null && (lastActivityAt === null || lastActivityAt <= turnEndedAt),
-        hasLinkedRunningTask: !!linkedTask && !isJudgmentStatus(linkedTask.status),
+        hasLinkedRunningTask: !!linkedTask && !isTerminalStatus(linkedTask.status),
         alreadyNotified: idleWithoutReportNotified.get(cardId) === episodeAnchor,
         msSinceLastActivity: idleMs,
         hasAgentReader,
-      });
+      };
+      let decision = decideIdleWithoutReport(idleFacts);
+      // A report written on screen: only a card that would already be warned
+      // pays for this check, and it reads the main-retained output tail against
+      // the task's reportSchema keys — no renderer round-trip.
+      if (decision.action !== "skip" && linkedTask) {
+        const tail = callbacks.getCardRecentOutput?.(cardId) ?? "";
+        const taskRow = typeof callbacks.getTask === "function" ? callbacks.getTask(linkedTask.id) : undefined;
+        const schema = taskRow ? contractFromTaskRow(taskRow).reportSchema ?? [] : [];
+        if (tail.length > 0 && schema.length > 0 && looksLikeReportShape(tail, schema)) {
+          decision = decideIdleWithoutReport({ ...idleFacts, screenLooksLikeReport: true });
+        }
+      }
       if (decision.action === "skip") continue;
       // Stamp BEFORE enqueue so a slow FIFO cannot double-fire on the next poll.
       idleWithoutReportNotified.set(cardId, episodeAnchor);
@@ -3723,11 +4014,13 @@ export function createMessageBus(
       // abandono. O texto de cada uma mora em agent-facing-authorship.ts.
       notifySpawnerOfUnreportedIdle(
         cardId,
-        decision.action === "notify_no_agent"
-          ? unreportedNoAgentPointerBody()
-          : decision.action === "notify_unproven"
-            ? unreportedUnprovenIdlePointerBody(idleMs ?? 0)
-            : unreportedIdlePointerBody(),
+        decision.action === "notify_screen_report"
+          ? screenReportPointerBody()
+          : decision.action === "notify_no_agent"
+            ? unreportedNoAgentPointerBody()
+            : decision.action === "notify_unproven"
+              ? unreportedUnprovenIdlePointerBody(idleMs ?? 0)
+              : unreportedIdlePointerBody(),
       );
     }
   }
@@ -4060,7 +4353,17 @@ export function createMessageBus(
 
   async function dispatchRequest(req: BusRequest, ingressChannel: ReportIngressChannel | null): Promise<BusResponse> {
     if (req.cmd === "list") {
-      return { ok: true, cards: callbacks.listCards() };
+      // list_cards gains `context`/`quota` per card. Only terminal/chat cards
+      // have a provider and a screen; the rest answer `null` for both — honest
+      // absence, never an invented number. The read also marks crossed levels.
+      const cards = callbacks.listCards().map((card) => {
+        if (card.kind !== "terminal" && card.kind !== "chat") {
+          return { ...card, context: null, quota: null };
+        }
+        const health = readAndTrackCardHealth(card.id, card.provider, card.displayName || card.id);
+        return { ...card, context: health.context, quota: health.quota };
+      });
+      return { ok: true, cards };
     }
 
     if (req.cmd === "prototypes_info") {
@@ -4271,6 +4574,9 @@ export function createMessageBus(
       if (!req.id) return { ok: false, error: "missing delivery id" };
       const record = deliveryRecords.get(req.id);
       if (!record) return { ok: false, error: `no delivery with id "${req.id}"` };
+      // Promoção preguiçosa: um `unconfirmed` pode ter virado `delivered` desde
+      // a última leitura (fim de turno / trabalho novo depois da entrega).
+      promoteUnconfirmedOnActivity(record);
       return {
         ok: true,
         delivery: record.delivery,
@@ -4283,6 +4589,9 @@ export function createMessageBus(
     }
 
     if (req.cmd === "list_deliveries") {
+      // Mesma promoção preguiçosa do `get_delivery`, para o veredito por
+      // requester/target não ficar preso num `unconfirmed` já superado.
+      for (const record of deliveryRecords.values()) promoteUnconfirmedOnActivity(record);
       const filtered = filterDeliveryRecords(deliveryRecords.values(), {
         ...(req.requesterId !== undefined ? { requesterId: req.requesterId } : {}),
         ...(req.target !== undefined ? { target: req.target } : {}),
@@ -4795,11 +5104,17 @@ export function createMessageBus(
         spawnedAtMs: readiness?.spawnedAtMs ?? null,
         firstOutputDeadlineMs: FIRST_OUTPUT_DEADLINE_MS,
       });
+      // CARD HEALTH: context used and plan/quota, read from the screen copy via
+      // the provider's declaration. `null` when it exposes neither — the read
+      // also marks crossed levels (once per level).
+      const health = readAndTrackCardHealth(target, card.provider ?? "", card.displayName || target);
       return {
         ok: true,
         status,
         provider: card.provider ?? null,
         note: describeCardStatus(status),
+        context: health.context,
+        quota: health.quota,
       };
     }
 
@@ -4810,6 +5125,11 @@ export function createMessageBus(
       // existia, e o main não tinha nenhuma noção de turno.
       callbacks.markCardTurnComplete(req.cardId);
       callbacks.notifyTurnComplete(req.cardId);
+      // End of turn is a trigger for the reservation engine: a dependency may
+      // have closed while this card was mid-turn, and the engine saw the card
+      // busy and did not deliver. With the turn over the card can be free, so
+      // the engine decides. The turn is a fact of the card, not of the provider.
+      deliverReservationForCard(req.cardId);
       return { ok: true };
     }
 
@@ -4900,7 +5220,7 @@ export function createMessageBus(
       // (nenhum teste pegava — os rigs passavam linha `status: "running"`,
       // que produção não consegue mais gravar). Agora o fato viaja com o
       // nome dele e não há como "manter o campo antigo" sem o tsc reclamar.
-      const inParticipation = !!linkedTask && !isJudgmentStatus(linkedTask.status) && hasLiveImplementer(linkedTask.card_id, callbacks.isCardAlive);
+      const inParticipation = !!linkedTask && !isTerminalStatus(linkedTask.status) && hasLiveImplementer(linkedTask.card_id, callbacks.isCardAlive);
       const participatingTask = inParticipation ? linkedTask : undefined;
       const decision = decideReportAcceptance({
         requesterId: req.requesterId,
@@ -5088,11 +5408,6 @@ export function createMessageBus(
         if (remaining.length === 0) pendingReportWaiters.delete(req.requesterId);
         else pendingReportWaiters.set(req.requesterId, remaining);
       }
-      // AGENT half: pointer into the orchestrator's PTY (enqueue, never
-      // await — report must return now). OS popup stays removed. Fires
-      // even when a wait:true waiter already got the JSON — that waiter
-      // is the agent RPC; the human on the orchestrator card is not.
-      notifySpawnerOfReport(req.requesterId);
       // Accepted report ends the SINAL 3 episode — a later idle wait for
       // follow-up must not re-fire the "idle sem report" pointer.
       idleWithoutReportNotified.delete(req.requesterId);
@@ -5113,11 +5428,33 @@ export function createMessageBus(
           });
         }
       }
-      // Gate runner — um report ACEITO (sucesso declarado) de uma task com
-      // gates declarados dispara a execução MEDIDA pelo app, em vez de o
-      // orquestrador confiar no número que o agente digitou. `accept_failure`
-      // fica de fora por definição: o agente já declarou que NÃO entregou.
-      if (decision.action === "accept") startTaskGates(participatingTask);
+      // Gate runner — an ACCEPTED report of a task with declared gates fires
+      // the app-MEASURED execution, instead of the orchestrator trusting the
+      // number the agent typed. `accept_failure` ALSO runs the gates: a report
+      // ok:false with a green gate is as real a contradiction as the opposite,
+      // and it is the ONLY self-standing message the orchestrator receives.
+      // The result changes neither status nor verdict.
+      const gatePromise =
+        decision.action === "accept" || decision.action === "accept_failure"
+          ? startTaskGates(participatingTask)
+          : null;
+      const reportClaimsSuccess = !(
+        incomingReport !== null &&
+        typeof incomingReport === "object" &&
+        !Array.isArray(incomingReport) &&
+        (incomingReport as Record<string, unknown>).ok === false
+      );
+      // AGENT half: pointer into the orchestrator's PTY (enqueue, never await
+      // — report must return now). Fires even when a wait:true waiter already
+      // got the JSON: that waiter is the agent RPC; the human on the
+      // orchestrator card is not. With gates, the SAME notice waits for the
+      // result (bounded) and carries it on the line; on a contradiction it
+      // becomes the self-standing message.
+      notifySpawnerOfReport(
+        req.requesterId,
+        reportTaskId,
+        gatePromise ? { promise: gatePromise, reportOk: reportClaimsSuccess } : null,
+      );
       // ITEM 21 — no fim da task, o que ficou UNTRACKED no cwd e o relatório
       // NÃO declarou em `files`/`filesChanged`, e que nasceu DEPOIS de a task
       // começar, é pendência de limpeza. SINAL, nunca acusação, e nunca uma
@@ -5562,6 +5899,57 @@ export function createMessageBus(
         });
         if (judgment.action === "refuse") return { ok: false, error: judgment.error };
       }
+      // SUPERSEDED — a terminal status of its own for a task swapped for
+      // another one. Target validation and AUTHORSHIP happen before any write:
+      // `supersededBy` is required and must exist on the SAME board; only the
+      // board's MARKED orchestrator or the human may write it; an implementer
+      // never can (participation beats the mark). See `task-supersede-decision.ts`.
+      let supersededTargetId: string | null = null;
+      if (statusProposed && req.status === SUPERSEDED_STATUS) {
+        const supersedeBoardId = existing.board_id ?? declaredBoardId ?? null;
+        const rawTarget = typeof req.supersededBy === "string" ? req.supersededBy.trim() : "";
+        if (!rawTarget) {
+          const missing = resolveSupersedeTarget({
+            taskId: req.taskId,
+            taskBoardId: supersedeBoardId,
+            targetId: null,
+            targetBoardId: undefined,
+          });
+          return missing.ok
+            ? { ok: false, error: "supersededBy is required", field: "supersededBy" as const }
+            : { ok: false, error: missing.error, field: missing.field };
+        }
+        const resolvedTarget = resolveTaskRef(rawTarget);
+        if (!resolvedTarget.ok) {
+          const unknown = resolveSupersedeTarget({
+            taskId: req.taskId,
+            taskBoardId: supersedeBoardId,
+            targetId: rawTarget,
+            targetBoardId: undefined,
+          });
+          return unknown.ok
+            ? { ok: false, error: resolvedTarget.error, field: "supersededBy" as const }
+            : { ok: false, error: unknown.error, field: unknown.field };
+        }
+        const target = resolveSupersedeTarget({
+          taskId: req.taskId,
+          taskBoardId: supersedeBoardId,
+          targetId: resolvedTarget.resolvedId,
+          targetBoardId: resolvedTarget.task.board_id,
+        });
+        if (!target.ok) return { ok: false, error: target.error, field: target.field };
+        supersededTargetId = target.targetId;
+        const cardsForSupersede = callbacks.getTaskCards(req.taskId) ?? [];
+        const authorship = decideSupersedeAuthorship({
+          taskId: req.taskId,
+          requesterId: req.requesterId,
+          requesterRoleOnTask:
+            roleOnTask(cardsForSupersede, req.requesterId) ??
+            (existing.card_id === req.requesterId ? TASK_CARD_IMPLEMENTER_ROLE : null),
+          orchestratorCardId: supersedeBoardId ? callbacks.getBoardOrchestratorCardId(supersedeBoardId) : null,
+        });
+        if (authorship.action === "refuse") return { ok: false, error: authorship.error };
+      }
       // AUTORIA DO PONTEIRO PRINCIPAL (task 05055482 — porta 2): `cardId`
       // troca `tasks.card_id` — e até aqui qualquer chamador apontava para
       // SI MESMO, movendo o ponteiro e criando a linha de implementer
@@ -5711,11 +6099,19 @@ export function createMessageBus(
       // stamps `orchestrator`, never `human` (false trail) and never
       // plain `agent` (would lose the audit distinction). Non-judgment
       // updates and unmarked callers stay `agent`.
-      let writeActor: "agent" | "orchestrator" = "agent";
+      let writeActor: "agent" | "orchestrator" | "human" = "agent";
       if (statusProposed && req.status !== undefined && isJudgmentStatus(req.status) && req.requesterId) {
         const taskBoardId = existing.board_id ?? callbacks.getCardBoardId(req.requesterId);
         const orchId = taskBoardId ? callbacks.getBoardOrchestratorCardId(taskBoardId) : null;
         if (orchId && orchId === req.requesterId) writeActor = "orchestrator";
+      }
+      // SUPERSEDED — authorship belongs to the marked orchestrator (delegated
+      // signature, stamped `orchestrator`, never `human`) or to the named
+      // human. A plain card never reaches here (refused above by
+      // `decideSupersedeAuthorship`).
+      if (statusProposed && req.status === SUPERSEDED_STATUS) {
+        if (req.requesterId === "human:ui") writeActor = "human";
+        else writeActor = "orchestrator";
       }
       // CAMINHO DE CONSERTO (2026-09-19) — a task órfã que `create_task`
       // deixou de produzir existe no banco (23 nesta sessão), invisível na
@@ -5746,6 +6142,17 @@ export function createMessageBus(
         }
         cwdForWrite = cwdDecision.cwd;
       }
+      // DOOR 3 of 3 — `update_task(cardId)` is the third way a task starts
+      // executing: the card the orchestrator opened with a free brief and links
+      // HERE. Same guard as the other two doors, refused BEFORE anything is
+      // stored, over the task as this write will leave it.
+      if (typeof req.cardId === "string" && req.cardId.trim().length > 0) {
+        const guard = territoryGuard(
+          { ...existing, territory_json, cwd: cwdForWrite, board_id },
+          req.overrideTerritory ?? null,
+        );
+        if (!guard.ok) return { ok: false, error: guard.error };
+      }
       const updated: TaskRow = {
         ...existing,
         prompt,
@@ -5762,6 +6169,11 @@ export function createMessageBus(
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
+        // The target only exists in the `superseded` status; proposing ANY
+        // other status clears it (a task that is alive again is no longer
+        // "replaced"). Without a status proposal, the existing value stays.
+        superseded_by:
+          statusProposed && req.status !== SUPERSEDED_STATUS ? null : supersededTargetId ?? existing.superseded_by ?? null,
         updated_at: now,
         actor: writeActor,
         // Writer card (requester), not the task's implementer — was
@@ -5780,12 +6192,28 @@ export function createMessageBus(
       // também seria despachar duas vezes. The app never reassigns or
       // respawns on fail.
       const decision = callbacks.upsertTask(updated);
+      // SUPERSEDED — a superseded task releases RESERVATIONS and TERRITORY:
+      // every live implementer link (reserved or active) is released and the
+      // principal pointer cleared, WITHOUT returning the task to `pending`
+      // (the funnel would un-supersede it). Territory falls with it because
+      // "active" is read from "an implementer is executing". Then each
+      // dependent that still points at it is notified — the engine does NOT
+      // rewrite the dependency on its own.
+      if (statusProposed && req.status === SUPERSEDED_STATUS && decision.status === SUPERSEDED_STATUS && supersededTargetId) {
+        callbacks.releaseAllImplementerLinks?.(req.taskId, `superseded by ${supersededTargetId}`, req.requesterId ?? null);
+        notifyDependentsOfSupersede(req.taskId, supersededTargetId);
+      }
       // RESERVA (task 377a6029): `update_task cardId` é RESERVA, não entrega —
       // grava o vínculo como `reserved` (nada é digitado no card). É o
       // "contorno" que já existia (cardId sem entrega), agora com estado
       // explícito: a task entra na fila do card e começa quando as deps
       // fecharem e o card estiver livre.
-      if (typeof req.cardId === "string" && req.cardId.trim().length > 0 && callbacks.reserveTaskCard) {
+      if (
+        !(statusProposed && req.status === SUPERSEDED_STATUS) &&
+        typeof req.cardId === "string" &&
+        req.cardId.trim().length > 0 &&
+        callbacks.reserveTaskCard
+      ) {
         callbacks.reserveTaskCard(req.taskId, req.cardId, profileFromCardRow(callbacks.getAnyCard(req.cardId)));
       }
       // SOLTAR O VÍNCULO — `update_task cardId:null` é o DETACH declarado (o
@@ -6165,6 +6593,19 @@ export function createMessageBus(
       // estreitamento de `req.cardId`/`req.taskId` não sobrevive ao escopo.
       const taskId = req.taskId;
       const cardId = req.cardId;
+      // CARD HEALTH: delivering to a card whose context is ABOVE the threshold
+      // is not refused — the tool response is WARNED. `null` below the
+      // threshold, and then the field is absent (no noise on a normal delivery).
+      const contextHealthWarning = deliveryContextWarning(
+        cardId,
+        callbacks.listCards().find((c) => c.id === cardId)?.provider ?? "",
+      );
+      let linkTerritoryWarning: string | null = null;
+      const withDeliveryWarnings = <T extends Record<string, unknown>>(res: T): T => ({
+        ...res,
+        ...(contextHealthWarning ? { contextWarning: contextHealthWarning } : {}),
+        ...(linkTerritoryWarning ? { territoryWarning: linkTerritoryWarning } : {}),
+      });
       // Papel ANTERIOR deste card NESTA task, lido ANTES da escrita. Um re-link
       // com o MESMO papel não é informação nova (o handler faz upsert — avisar
       // seria ruído); um papel DIFERENTE é fato novo e vira aviso.
@@ -6190,7 +6631,7 @@ export function createMessageBus(
         callbacks.linkTaskCard(taskId, cardId, role, profile);
         // O aviso sai DEPOIS da escrita: o card que acorda com ele vai chamar
         // `get_task` e precisa que a linha de papel já exista.
-        return { ok: true, taskId, cardId, role, notice: decideNotice() };
+        return withDeliveryWarnings({ ok: true, taskId, cardId, role, notice: decideNotice() });
       }
       const profile = profileFromCardRow(callbacks.getAnyCard(cardId));
       // RESERVA vs ENTREGA (task 377a6029) — fecha o defeito E7/E9b: sem `mode`,
@@ -6201,9 +6642,30 @@ export function createMessageBus(
         status: callbacks.getTask(id)?.status ?? null,
       }));
       const linkMode = decideLinkMode({ mode: req.mode ?? null, deps: depViews });
+      // DOOR 2 of 3 — a DELIVERY is where a live card starts executing the
+      // task, so the territory guard runs here too, on the SAME decision as the
+      // spawn door. A reserve-only link delivers nothing yet and is not guarded.
+      if (linkMode === "deliver") {
+        const guard = territoryGuard(task, req.overrideTerritory ?? null);
+        if (!guard.ok) return { ok: false, error: guard.error };
+        linkTerritoryWarning = territoryWarningText(guard.warnings);
+      }
+      const isReservedHere = (callbacks.listReservationsForCard?.(cardId) ?? []).some((r) => r.task_id === taskId);
       if (linkMode === "reserve") {
         if (!callbacks.reserveTaskCard) return { ok: false, error: "reservation is unavailable in this session" };
         callbacks.reserveTaskCard(taskId, cardId, profile);
+        // A ready reservation on a free card does not wait for a trigger: one
+        // whose dependencies already closed has no future `onTaskDone` to wake
+        // it. Run the engine now; if nothing leaves (busy card) it stays queued.
+        // With a dependency still open there is nothing to do yet.
+        const allDepsSettled = depViews.every((d) => isDependencySettled(d.status));
+        if (allDepsSettled) {
+          deliverDueReservations();
+          const stillReserved = (callbacks.listReservationsForCard?.(cardId) ?? []).some((r) => r.task_id === taskId);
+          if (!stillReserved) {
+            return withDeliveryWarnings({ ok: true, taskId, cardId, role, mode: "deliver", notice: "delivered: deps were already done and the card was free" });
+          }
+        }
         return {
           ok: true,
           taskId,
@@ -6225,8 +6687,27 @@ export function createMessageBus(
           error: `task "${taskId}" already has an ACTIVE implementer card "${otherActive.card_id}" — refusing a second one (release it first, or reserve this card instead: link_task_card mode:"reserve")`,
         };
       }
+      // `mode:"deliver"` over an existing reservation PROMOTES it. `linkTaskCard`
+      // upserts but does not clear `reservation_state`/`reserved_order`
+      // (store.ts), so without `activateReservedTaskCard` the row stayed
+      // "reserved" and the card received nothing.
+      if (isReservedHere) {
+        callbacks.activateReservedTaskCard?.(taskId, cardId);
+        linkImplementerToTask(task, cardId, "agent", profile);
+        reservationStuckNotified.delete(taskId);
+        const notice = notifyLinkedCard(cardId, taskId, role, req.requesterId);
+        notifyOrchestratorReservationDelivered(task, cardId);
+        return withDeliveryWarnings({ ok: true, taskId, cardId, role, mode: "deliver", notice });
+      }
+      // "skipped" only when the task was already delivered to this card (an
+      // ACTIVE implementer link, not a reservation). A reservation re-link is a
+      // promotion, handled above.
+      const alreadyDelivered = previousRole === role && !isReservedHere;
       linkImplementerToTask(task, cardId, "agent", profile);
-      return { ok: true, taskId, cardId, role, mode: "deliver", notice: decideNotice() };
+      const notice = alreadyDelivered
+        ? `skipped: already linked as ${role} — a repeated link is not new information`
+        : notifyLinkedCard(cardId, taskId, role, req.requesterId);
+      return withDeliveryWarnings({ ok: true, taskId, cardId, role, mode: "deliver", notice });
     }
 
     // GAVETA (task 377a6029): a fila de reservas de um card, EM ORDEM, com o
@@ -6237,7 +6718,7 @@ export function createMessageBus(
       // Uma reserva já JULGADA não é mais "trabalho na fila" — não aparece na
       // gaveta (o vínculo pode sobreviver ao julgamento; ver `deliverDueReservations`).
       const rows = (callbacks.listReservationsForCard?.(cardId) ?? []).filter(
-        (r) => !isJudgmentStatus(callbacks.getTask(r.task_id)?.status ?? ""),
+        (r) => !isTerminalStatus(callbacks.getTask(r.task_id)?.status ?? ""),
       );
       const depsView = (taskId: string) =>
         depIdsFromJson(callbacks.getTask(taskId)?.deps_json ?? null).map((id) => ({
@@ -6255,6 +6736,9 @@ export function createMessageBus(
           // "aguardando revisão" a partir da MESMA regra do resto do app, não
           // de uma segunda leitura de status.
           phase: t ? deriveTaskPhase(phaseFactsFor(t)) : null,
+          // The substitution target, when the row belongs to a superseded
+          // task. `null` in the normal case.
+          supersededBy: t?.superseded_by ?? null,
           deps: depsView(r.task_id),
         };
       });
@@ -6651,22 +7135,17 @@ export function createMessageBus(
         });
         if (reviewerSpawn.action === "refuse") return { ok: false, error: reviewerSpawn.error };
       }
-      // Regra (b), sticky de território (2026-09-20) — um implementador
-      // amarrado a uma task não nasce sobre território que outra task
-      // ATIVA do MESMO board já reivindica. Reviewer fica de fora: revisão
-      // lê o trabalho alheio, não escreve o território declarado dele.
-      // Território ausente na candidata é o caso comum (não declarado é
-      // normal) — checado ANTES de tocar `listTasks`, para não pedir aos
-      // callbacks algo que uma task sem território nunca precisou.
-      const territoryForConflict = taskForBrief ? territoryFromSql(taskForBrief.territory_json) : null;
-      if (taskForBrief && territoryForConflict && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief.board_id) {
-        const conflict = decideTerritoryConflict({
-          taskId: taskForBrief.id,
-          territory: territoryForConflict,
-          cwd: taskForBrief.cwd ?? boardDeclaredRoot(taskForBrief.board_id) ?? null,
-          activeTasks: activeTaskTerritories(taskForBrief.board_id, taskForBrief.id),
-        });
-        if (!conflict.ok) return { ok: false, error: conflict.error };
+      // DOOR 1 of 3 — an implementer bound to a task is not born over territory
+      // another ACTIVE task on the same board claims. The reviewer is exempt:
+      // review reads someone else's work, it does not write the declared
+      // territory. The guard also handles the per-path `shared` mode, the
+      // orchestrator override and the glob × new-file rule (see
+      // `territoryGuard`). Absent territory is the common case.
+      let territoryWarnings: TerritoryWarning[] = [];
+      if (taskForBrief && role !== TASK_CARD_REVIEWER_ROLE) {
+        const guard = territoryGuard(taskForBrief, req.overrideTerritory ?? null);
+        if (!guard.ok) return { ok: false, error: guard.error };
+        territoryWarnings = guard.warnings;
       }
       const deliveredBrief =
         briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief
@@ -6834,7 +7313,18 @@ export function createMessageBus(
           callbacks.linkTaskCard(briefDecision.taskId, spawnResult.cardId, role, profile);
         } else if (briefDecision.taskId) {
           const latest = callbacks.getTask(briefDecision.taskId);
-          if (latest) linkImplementerToTask(latest, spawnResult.cardId, "agent", profile);
+          if (latest) {
+            // Neighbour defect: `spawn_agent {taskId}` over a task RESERVED on
+            // this card delivered the brief through argv, but the link stayed
+            // `reservation_state='reserved'` — `linkTaskCard` upserts and does
+            // NOT clear the reservation. The drawer engine would then deliver
+            // the SAME task a second time at the end of the turn. Promoting the
+            // reservation to ACTIVE here closes that (`deliverReservationForCard`
+            // and `link_task_card` deliver already activate before linking; only
+            // the spawn path was missing it).
+            callbacks.activateReservedTaskCard?.(latest.id, spawnResult.cardId);
+            linkImplementerToTask(latest, spawnResult.cardId, "agent", profile);
+          }
         }
       }
       // Nota de deps no RETORNO (task 095158e9, item b) — INFORMAR não é
@@ -6845,7 +7335,7 @@ export function createMessageBus(
       // sem I/O); reviewer não recebe dep pointer, então a nota também não
       // se aplica a ele.
       const depIds = taskForBrief && role !== TASK_CARD_REVIEWER_ROLE ? depIdsFromJson(taskForBrief.deps_json) : [];
-      const pendingDeps = depIds.filter((depId) => callbacks.getTask(depId)?.status !== "done").length;
+      const pendingDeps = depIds.filter((depId) => !isDependencySettled(callbacks.getTask(depId)?.status)).length;
       const withDepNote = (result: SpawnAgentResult): SpawnAgentResult =>
         result.ok && pendingDeps > 0
           ? {
@@ -6878,7 +7368,11 @@ export function createMessageBus(
                 }),
               }
             : result;
-        const final = withDepNote(decorated);
+        const withTerritory: SpawnAgentResult =
+          decorated.ok && territoryWarnings.length > 0
+            ? { ...decorated, territoryWarning: territoryWarnings.map((w) => w.message).join("\n") }
+            : decorated;
+        const final = withDepNote(withTerritory);
         if (idempotencyEntry) {
           if (final.ok) idempotencyEntry.result = final;
           // Tentativa que NÃO criou card não prende a chave: a retentativa do
@@ -7103,6 +7597,12 @@ export function createMessageBus(
     // Promove a `delivered` um item da fila autoentregue cujo turno terminou
     // depois do park (não há aviso ao remetente — task d42c119a).
     settleParkedDeliveriesOnExit(cardId);
+    // E a MESMA promoção barata para os `unconfirmed` deste card: fecha o
+    // veredito no instante em que os fatos (turnEndedAt / workGrantedAt) ainda
+    // estão vivos, antes de a entry do PTY sumir.
+    for (const record of deliveryRecords.values()) {
+      if (record.target === cardId) promoteUnconfirmedOnActivity(record);
+    }
     // Exit owns the failure signal now — drop any idle-without-report stamp.
     idleWithoutReportNotified.delete(cardId);
     const waiters = pendingCardExits.get(cardId);
@@ -7135,7 +7635,7 @@ export function createMessageBus(
     if (!hasReport) {
       // CAMADA 3 — stored may be `pending` while participation was live;
       // exit without report on a linked non-judgment task is still failure.
-      if (linkedTask && !isJudgmentStatus(linkedTask.status)) {
+      if (linkedTask && !isTerminalStatus(linkedTask.status)) {
         const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
         const startedAt = implementerStartedAt.get(cardId);
         implementerStartedAt.delete(cardId);
@@ -7522,12 +8022,34 @@ export function createMessageBus(
         cwd: t.cwd ?? boardDeclaredRoot(t.board_id) ?? null,
       })),
     });
-    const base =
+    const baseWithCrossings =
       crossings.length === 0
         ? withContract
         : withContract
           ? `${withContract}\n\n${describeContractCrossing(crossings)}`
           : describeContractCrossing(crossings);
+    // SHARED CO-OWNERS: when this task declared a path `shared`, its brief names
+    // the OTHER active tasks on the same path, so each implementer knows who it
+    // coordinates with — the whole point of the mode. Pure: the others list is
+    // already filtered by the caller.
+    const sharedCoOwners = describeSharedCoOwners({
+      taskId: task.id,
+      territory: contract.territory,
+      cwd: task.cwd ?? boardDeclaredRoot(task.board_id) ?? null,
+      others: (typeof callbacks.listTasks === "function" ? callbacks.listTasks() ?? [] : []).map((t) => ({
+        taskId: t.id,
+        territory: territoryFromSql(t.territory_json),
+        cwd: t.cwd ?? boardDeclaredRoot(t.board_id) ?? null,
+      })),
+    });
+    const sharedBlock = sharedCoOwners
+      ? `[de: stellar] SHARED TERRITORY — another active implementer holds the same path(s); coordinate before editing:\n${sharedCoOwners}`
+      : null;
+    const base = sharedBlock
+      ? baseWithCrossings
+        ? `${baseWithCrossings}\n\n${sharedBlock}`
+        : sharedBlock
+      : baseWithCrossings;
     // Task d14086f8 (item 9, perna 3) — a SUGESTÃO do perfil, e SÓ quando ela
     // existe. SEM DEFAULT: sem perfil, sem papel, sem entrada no arquivo ou sem
     // default para aquele papel => linha NENHUMA (o brief não menciona perfil,
@@ -7656,7 +8178,7 @@ export function createMessageBus(
     const boardRoot = boardDeclaredRoot(boardId);
     return callbacks
       .listTasks()
-      .filter((t) => t.board_id === boardId && t.id !== excludeTaskId && !isJudgmentStatus(t.status))
+      .filter((t) => t.board_id === boardId && t.id !== excludeTaskId && !isTerminalStatus(t.status))
       .filter((t) => hasExecutingImplementer(t))
       .map((t) => ({
         taskId: t.id,
@@ -7665,6 +8187,78 @@ export function createMessageBus(
         // declarado, a raiz do board. Mesmo resolvedor do CONTRACT CROSSING.
         cwd: t.cwd ?? boardRoot ?? null,
       }));
+  }
+
+  /**
+   * The TERRITORY GUARD, shared by the three doors that can put a second
+   * EXECUTING implementer on a task: `spawn_agent(taskId)`,
+   * `link_task_card(implementer, deliver)` and `update_task(cardId)`. All three
+   * run the same `decideTerritoryConflict`, so they cannot disagree, with the
+   * on-disk existence fact the glob × new-file rule needs and the orchestrator
+   * override (a non-empty reason makes a would-be refusal pass AND is recorded
+   * on the task's trail). `ok:true` with empty warnings when the task declares
+   * no territory or has no board — nothing to guard.
+   */
+  function territoryGuard(
+    task: TaskRow,
+    overrideReason?: string | null,
+  ): { ok: true; warnings: TerritoryWarning[] } | { ok: false; error: string } {
+    const territory = territoryFromSql(task.territory_json);
+    if (!territory || !task.board_id) return { ok: true, warnings: [] };
+    const decision = decideTerritoryConflict({
+      taskId: task.id,
+      territory,
+      cwd: task.cwd ?? boardDeclaredRoot(task.board_id) ?? null,
+      activeTasks: activeTaskTerritories(task.board_id, task.id),
+      pathExists: (p) => existsSync(p),
+      override: overrideReason ?? null,
+    });
+    if (!decision.ok) return { ok: false, error: decision.error };
+    if (decision.overridden) {
+      recordTerritoryOverride(task, decision.overridden.reason, decision.overridden.conflict);
+    }
+    return { ok: true, warnings: decision.warnings };
+  }
+
+  /** Records an orchestrator territory override on the task's trail — a
+   *  stamped `result_json` entry, visible in `get_task`: the guard passed only
+   *  because a human-readable reason was given. */
+  function recordTerritoryOverride(task: TaskRow, reason: string, conflict: TerritoryRefusal): void {
+    const latest = callbacks.getTask(task.id) ?? task;
+    const entry = { reason, conflictingTaskId: conflict.conflictingTaskId, at: Date.now() };
+    callbacks.upsertTask({
+      ...latest,
+      result_json: stampTerritoryOverrideJson(latest.result_json, entry),
+      updated_at: Date.now(),
+      actor: "orchestrator",
+      statusProposed: false,
+    });
+  }
+
+  /** Merge a `territoryOverride` entry into a task's `result_json` (creating
+   *  the object when absent), leaving any other field untouched. */
+  function stampTerritoryOverrideJson(
+    resultJson: string | null,
+    entry: { reason: string; conflictingTaskId: string; at: number },
+  ): string {
+    let base: Record<string, unknown> = {};
+    if (resultJson) {
+      try {
+        const parsed: unknown = JSON.parse(resultJson);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          base = parsed as Record<string, unknown>;
+        }
+      } catch {
+        base = {};
+      }
+    }
+    return JSON.stringify({ ...base, territoryOverride: entry });
+  }
+
+  /** The AGENT-FACING line a passed-with-warning territory guard leaves on the
+   *  tool response/brief. `null` when there is nothing to say. */
+  function territoryWarningText(warnings: TerritoryWarning[]): string | null {
+    return warnings.length === 0 ? null : warnings.map((w) => w.message).join("\n");
   }
 
   /** Called by the write funnel (index.ts → task-write-funnel.ts) — the
@@ -7688,82 +8282,182 @@ export function createMessageBus(
     deliverDueReservations();
   }
 
+  /** One card's reservation queue, in order, with judged tasks filtered out;
+   *  null when the card has no reservations. */
+  function reservationOrderForCard(cardId: string) {
+    const rows = callbacks.listReservationsForCard?.(cardId) ?? [];
+    if (rows.length === 0) return null;
+    const order = rows
+      .map((r) => ({ row: r, task: callbacks.getTask(r.task_id) }))
+      // A judged task (done/failed) is never delivered: a reserved link can
+      // outlive the judgment, and without this cut the engine would "deliver" a
+      // task that already finished.
+      .filter(({ task }) => task !== undefined && !isTerminalStatus(task.status))
+      .map(({ row, task }) => ({
+        taskId: row.task_id,
+        state: "reserved" as const,
+        deps: depIdsFromJson(task!.deps_json).map((id) => ({
+          id,
+          status: callbacks.getTask(id)?.status ?? null,
+        })),
+      }));
+    return { rows, order };
+  }
+
   /**
-   * O MOTOR da entrega automática (task 377a6029). Para cada card com reservas,
-   * entrega a PRIMEIRA cuja deps fecharam — mas SÓ quando o card está LIVRE
-   * (sem task active e com fim de turno medido). Card ocupado espera o próximo
-   * `onTaskDone`, nunca interrompe. Entrega = ativa a reserva + o MESMO aviso do
-   * link + aviso ao orquestrador.
+   * O MOTOR de UM card: entrega a PRIMEIRA reserva pronta (deps fechadas) SÓ
+   * quando o card está LIVRE. Card ocupado não recebe — e é exatamente por
+   * isso que este motor precisa de mais de um gatilho: `onTaskDone` (a dep
+   * fechou), o FIM DE TURNO do card (defeito medido 2026-10-05: a dep fechou
+   * com o card no meio de um turno, e nada reavaliava depois) e a criação da
+   * reserva (deps já done). Entrega = ativa a reserva + o MESMO aviso do link
+   * + aviso ao orquestrador.
    */
+  function deliverReservationForCard(cardId: string): void {
+    if (!callbacks.listReservationsForCard) return;
+    if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(cardId)) return;
+    const built = reservationOrderForCard(cardId);
+    if (!built) return;
+    const decision = decideReservationDelivery({ order: built.order, cardBusy: isCardBusy(cardId) });
+    if (decision.taskId === null) return;
+    const task = callbacks.getTask(decision.taskId);
+    if (!task) return;
+    // NEVER deliver a task that is ALREADY ACTIVE on this card: the
+    // `linkTaskCard` done by a `spawn_agent {taskId}` did not clear the
+    // reservation, and the engine would deliver the same task a second time at
+    // the end of the turn. The promotion clears the queue, but this guard is
+    // the second line: if the link is already ACTIVE there is nothing to deliver.
+    const alreadyActive = (callbacks.listLiveImplementersForTask?.(decision.taskId) ?? []).some(
+      (l) => l.card_id === cardId && l.reservation_state == null,
+    );
+    if (alreadyActive) return;
+    callbacks.activateReservedTaskCard?.(decision.taskId, cardId);
+    linkImplementerToTask(task, cardId, "app");
+    // Entregue: aposenta o aviso de "pronta e parada" desta task.
+    reservationStuckNotified.delete(decision.taskId);
+    notifyLinkedCard(cardId, decision.taskId, TASK_CARD_IMPLEMENTER_ROLE);
+    notifyOrchestratorReservationDelivered(task, cardId);
+  }
+
+  /** The reservation engine for every card. Used by `onTaskDone` and the
+   *  watchdog; the end-of-turn path calls it for the single card that ended. */
   function deliverDueReservations(): void {
     if (!callbacks.listReservationsForCard) return;
     const cards = typeof callbacks.listCards === "function" ? callbacks.listCards() ?? [] : [];
-    for (const card of cards) {
-      const rows = callbacks.listReservationsForCard(card.id) ?? [];
-      if (rows.length === 0) continue;
-      if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(card.id)) continue;
-      const order = rows
-        .map((r) => ({ row: r, task: callbacks.getTask(r.task_id) }))
-        // Uma reserva já JULGADA (done/failed) NUNCA é entregue: um vínculo
-        // reservado pode sobreviver ao julgamento (o `onTaskDone` não limpa
-        // `task_cards`), e sem este corte o motor "entregaria" uma task que já
-        // terminou. Mesma família do defeito medido em 2026-10-04.
-        .filter(({ task }) => task !== undefined && !isJudgmentStatus(task.status))
-        .map(({ row, task }) => ({
-          taskId: row.task_id,
-          state: "reserved" as const,
-          deps: depIdsFromJson(task!.deps_json).map((id) => ({
-            id,
-            status: callbacks.getTask(id)?.status ?? null,
-          })),
-        }));
-      const decision = decideReservationDelivery({ order, cardBusy: isCardBusy(card.id) });
-      if (decision.taskId === null) continue;
-      const task = callbacks.getTask(decision.taskId);
-      if (!task) continue;
-      callbacks.activateReservedTaskCard?.(decision.taskId, card.id);
-      linkImplementerToTask(task, card.id, "app");
-      notifyLinkedCard(card.id, decision.taskId, TASK_CARD_IMPLEMENTER_ROLE);
-      notifyOrchestratorReservationDelivered(task, card.id);
-    }
+    for (const card of cards) deliverReservationForCard(card.id);
   }
 
-  /** Card LIVRE? Sem task active (implementer vivo que NÃO é reserva) E com fim
-   * de turno medido sem atividade depois dele. Nunca medido ⇒ ocupado (espera). */
+  /** Is the card free? No active task (a live implementer that is not a
+   *  reservation), a declared turn end and no work after it. The decision
+   *  itself lives in `decideCardBusyForReservation`. */
   function isCardBusy(cardId: string): boolean {
     const reservedIds = new Set((callbacks.listReservationsForCard?.(cardId) ?? []).map((r) => r.task_id));
     const links = callbacks.listTaskCardsForCard(cardId) ?? [];
-    const hasActive = links.some(
+    const hasActiveImplementer = links.some(
       (l) =>
         l.role === TASK_CARD_IMPLEMENTER_ROLE &&
         !reservedIds.has(l.task_id) &&
-        !isJudgmentStatus(callbacks.getTask(l.task_id)?.status ?? ""),
+        !isTerminalStatus(callbacks.getTask(l.task_id)?.status ?? ""),
     );
-    if (hasActive) return true;
     const turnEndedAt = typeof callbacks.getCardTurnEndedAt === "function" ? callbacks.getCardTurnEndedAt(cardId) : null;
-    if (turnEndedAt === null) return true;
-    // REPAINT ≠ WORK (DEFEITO MEDIDO 2026-10-04) — a reserva B2 não era
-    // entregue com a dep já `done` porque o card era julgado ocupado por
-    // `lastActivityAt` (BYTES): um TUI parado REPINTA e mantém o relógio de
-    // bytes fresco para sempre, então `last > turnEndedAt` era verdadeiro sem
-    // fim. O fato que separa "chegou trabalho novo" de "o card repintou" é
-    // `getCardLastWorkGrantedAt` — renovado SÓ por input humano ou entrega
-    // (`pty-registry.ts`'s `grantsWork`). Sem esse fato disponível (rig
-    // legado), cai no relógio antigo para não mudar comportamento de teste.
-    const workGrantedAt = typeof callbacks.getCardLastWorkGrantedAt === "function" ? callbacks.getCardLastWorkGrantedAt(cardId) : undefined;
+    const workGrantedAt =
+      typeof callbacks.getCardLastWorkGrantedAt === "function"
+        ? callbacks.getCardLastWorkGrantedAt(cardId)
+        : undefined;
+    // Legacy rig without the work fact: fall back to the byte clock.
     if (workGrantedAt === undefined) {
+      if (hasActiveImplementer) return true;
+      if (turnEndedAt === null) return true;
       const last = typeof callbacks.getCardLastActivityAt === "function" ? callbacks.getCardLastActivityAt(cardId) : null;
       return typeof last === "number" && last > turnEndedAt;
     }
-    return workGrantedAt !== null && workGrantedAt > turnEndedAt;
+    return decideCardBusyForReservation({ hasActiveImplementer, turnEndedAt, workGrantedAt });
   }
 
   function notifyOrchestratorReservationDelivered(task: TaskRow, cardId: string): void {
     if (!task.board_id) return;
     const orch = callbacks.getBoardOrchestratorCardId(task.board_id);
     if (!orch || !callbacks.isCardAlive(orch)) return;
-    const notice = `[de: stellar] task ${task.id} delivered to card ${cardId} (reservation)`;
+    // CARD HEALTH in the reservation engine: the delivery still happens, but
+    // when the card was already past its context threshold the orchestrator's
+    // notice carries the warning — never delivered blind again.
+    const provider = callbacks.listCards().find((c) => c.id === cardId)?.provider ?? "";
+    const warn = deliveryContextWarning(cardId, provider);
+    const notice =
+      `[de: stellar] task ${task.id} delivered to card ${cardId} (reservation)` +
+      (warn ? ` — WARNING: ${describeContextWarning(warn)}` : "");
     enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+  }
+
+  /** Notifies the board ORCHESTRATOR of every dependent that still points at
+   * the superseded task: "dependency X was superseded by Y — replace the
+   * dependency". The engine does NOT rewrite the edge (the swap is the
+   * orchestrator's decision); it only stops blocking. Once per dependent, and
+   * only while the dependent is not terminal. */
+  function notifyDependentsOfSupersede(supersededTaskId: string, substituteTaskId: string): void {
+    if (typeof callbacks.listTasks !== "function") return;
+    for (const t of callbacks.listTasks() ?? []) {
+      if (t.id === supersededTaskId || isTerminalStatus(t.status)) continue;
+      const deps: string[] = t.deps_json ? JSON.parse(t.deps_json) : [];
+      if (!deps.includes(supersededTaskId)) continue;
+      const boardId = t.board_id;
+      if (!boardId) continue;
+      const orch = callbacks.getBoardOrchestratorCardId(boardId);
+      if (!orch || !callbacks.isCardAlive(orch)) continue;
+      const notice = describeSupersededDependencyNotice({
+        dependentTaskId: t.id,
+        supersededTaskId,
+        substituteTaskId,
+      });
+      enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+    }
+  }
+
+  /** Notice for a ready reservation that did not leave a free card. Once per
+   *  task, with the reason; never repeated. */
+  function notifyOrchestratorReservationStuck(task: TaskRow, cardId: string, reason: string): void {
+    if (!task.board_id) return;
+    const orch = callbacks.getBoardOrchestratorCardId(task.board_id);
+    if (!orch || !callbacks.isCardAlive(orch)) return;
+    const notice = `[de: stellar] reservation for task ${task.id} on card ${cardId} did not start: ${reason}`;
+    enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+  }
+
+  /**
+   * Reservation watchdog: it first DELIVERS what it can (the scan is an engine
+   * trigger, not only a warning). If a ready reservation still sits on a free
+   * card past `RESERVATION_STUCK_MS`, the orchestrator is notified once, with
+   * the reason — the backstop for a delivery the engine could not make.
+   */
+  function scanStuckReservations(): void {
+    if (!callbacks.listReservationsForCard) return;
+    // The scan delivers: it covers a card that became free without an
+    // end-of-turn re-evaluation, and a reservation that became ready with no
+    // other trigger.
+    deliverDueReservations();
+    const cards = typeof callbacks.listCards === "function" ? callbacks.listCards() ?? [] : [];
+    const now = Date.now();
+    for (const card of cards) {
+      const built = reservationOrderForCard(card.id);
+      if (!built) continue;
+      if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(card.id)) continue;
+      const ready = firstReadyReservation(built.order);
+      if (!ready) continue;
+      // A busy card is working; it is not "ready and idle".
+      if (isCardBusy(card.id)) continue;
+      const row = built.rows.find((r) => r.task_id === ready.taskId);
+      const since = row?.linked_at ?? 0;
+      if (now - since < RESERVATION_STUCK_MS) continue;
+      if (reservationStuckNotified.has(ready.taskId)) continue;
+      reservationStuckNotified.add(ready.taskId);
+      const task = callbacks.getTask(ready.taskId);
+      if (!task) continue;
+      notifyOrchestratorReservationStuck(
+        task,
+        card.id,
+        `ready for ${Math.round((now - since) / 60_000)} min with the card free`,
+      );
+    }
   }
 
   /** The single dispatch path for a dependent task. Two triggers reach
@@ -7780,7 +8474,7 @@ export function createMessageBus(
    * Missing provider / divergent cwd → refuse in place (pending + visible
    * reason), never invent `claude` or a path. */
   function dispatchIfUnblocked(task: TaskRow, allTasks: TaskRow[]): boolean {
-    if (isJudgmentStatus(task.status) || task.status !== "pending" || !task.board_id) return false;
+    if (isTerminalStatus(task.status) || task.status !== "pending" || !task.board_id) return false;
     if (task.card_id && callbacks.isCardAlive(task.card_id)) return false;
     // Regra (b) — a live card linked only through `task_cards` (no
     // `card_id` on the task) is just as much "someone is already on this".
@@ -7795,7 +8489,7 @@ export function createMessageBus(
     const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
     if (deps.length === 0) return false;
     if (!callbacks.isBoardAutonomous(task.board_id)) return false;
-    const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
+    const allDone = deps.every((depId) => isDependencySettled(allTasks.find((t) => t.id === depId)?.status));
     if (!allDone) return false;
     // The authoritative row, not the caller's snapshot: `onTaskDone` builds
     // its list once and a concurrent write (the `update_task` that declares
@@ -7852,23 +8546,13 @@ export function createMessageBus(
       );
       return false;
     }
-    // Regra (b), sticky de território (2026-09-20) — auto-dispatch é spawn
-    // igual a `spawn_agent`; mesma recusa quando o território da task colide
-    // com o de outra task ATIVA do mesmo board. Território ausente é o caso
-    // comum — checado antes de tocar `listTasks`, mesma disciplina do
-    // `spawn_agent` acima.
-    const territoryForConflict = territoryFromSql(latest.territory_json);
-    if (territoryForConflict) {
-      const territoryConflict = decideTerritoryConflict({
-        taskId: latest.id,
-        territory: territoryForConflict,
-        cwd: latest.cwd ?? declaredRoot ?? null,
-        activeTasks: activeTaskTerritories(task.board_id, latest.id),
-      });
-      if (!territoryConflict.ok) {
-        recordDispatchRefusal(latest, territoryConflict.error);
-        return false;
-      }
+    // Auto-dispatch is a spawn like `spawn_agent`, so it runs the SAME
+    // territory guard — including the per-path `shared` mode and the glob ×
+    // new-file rule. Absent territory is the common case.
+    const territoryGuardDecision = territoryGuard(latest, null);
+    if (!territoryGuardDecision.ok) {
+      recordDispatchRefusal(latest, territoryGuardDecision.error);
+      return false;
     }
 
     dispatchingTaskIds.add(task.id);
@@ -8203,19 +8887,42 @@ export function createMessageBus(
   server.listen(sockPath);
 
   // SINAL 3 — cheap rescan; the pure gate refuses until the 180s floor.
+  // The SAME 5s pass scans CARD HEALTH: a regex over the ANSI-stripped tail the
+  // app already keeps, cheap enough not to need its own timer — and it is what
+  // lets the orchestrator know BEFORE, without reading the screen by accident.
   const idleWithoutReportTimer = setInterval(() => {
     try {
       scanIdleWithoutReport();
     } catch (err) {
       console.error("message-bus: idle-without-report scan failed:", err);
     }
+    try {
+      scanCardHealth();
+    } catch (err) {
+      console.error("message-bus: card-health scan failed:", err);
+    }
   }, IDLE_WITHOUT_REPORT_POLL_MS);
   // Unref so the timer alone cannot keep a draining process alive.
   idleWithoutReportTimer.unref?.();
 
+  // Reservation watchdog: run the engine and, if a ready reservation still does
+  // not leave a free card, notify the orchestrator once with the reason.
+  const RESERVATION_WATCHDOG_POLL_MS = 60_000;
+  const reservationWatchdogTimer = setInterval(() => {
+    try {
+      scanStuckReservations();
+    } catch (err) {
+      console.error("message-bus: reservation watchdog scan failed:", err);
+    }
+  }, RESERVATION_WATCHDOG_POLL_MS);
+  reservationWatchdogTimer.unref?.();
+
   function close() {
     clearInterval(idleWithoutReportTimer);
+    clearInterval(reservationWatchdogTimer);
     idleWithoutReportNotified.clear();
+    notifiedHealthAlerts.clear();
+    reservationStuckNotified.clear();
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
     pendingOpens.clear();
     for (const { timer } of pendingCloseCards.values()) clearTimeout(timer);
@@ -8493,14 +9200,19 @@ export function createMessageBus(
     resolveCardExit,
     /** Test seam — SINAL 3 scan (same pure gate the poller runs). */
     scanIdleWithoutReport,
+    /** Test seam — card health (the same pass the poller runs). */
+    scanCardHealth,
+    /** Test seam — watchdog da gaveta (reserva pronta + card livre). */
+    scanStuckReservations,
     notifyConcurrencyCapChanged,
     notifyHumanMovedTask,
     /** NÃO-SILÊNCIO do contexto perdido (task ea71065e) — o registry avisa o
      * bus quando o watcher de sessão não conseguiu atribuir o id a um card de
      * task; o bus entrega o aviso ao ORQUESTRADOR do board. */
     notifySessionUnresolved,
-    /** SEGUNDO aviso do report (task 6266d3e7): "gates medidos pelo app: N/M". */
-    notifyGatesMeasured,
+    /** A trust prompt left unanswered (outside the root / no confirm input) is
+     * reported to the board orchestrator through the delivery queue. */
+    notifyTrustPromptUnconfirmed,
     /** Task 22f0a649 — a Fila (IPC humano) responde pelo MESMO corpo do MCP,
      * com `actor:"human"`. Ver o doc de `answerBlockedTask`. */
     answerBlockedTask,
@@ -8510,6 +9222,10 @@ export function createMessageBus(
     // `notifyConcurrencyCapChanged` above — index.ts never re-implements
     // dispatch on its side.
     onTaskDone,
+    /** Re-evaluate the reservation engine for one card after its turn ended.
+     *  The main process can detect a screen turn-end with no board mounted, so
+     *  this is the entry point for that path. */
+    onTurnEnd: (cardId: string) => deliverReservationForCard(cardId),
     close,
   };
 }

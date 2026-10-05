@@ -32,9 +32,11 @@ import {
   filterJsonSettings,
   filterTomlSettings,
   isDenied,
+  isTemplatedContentPath,
   type SettingsFilter,
   type WorkHomeRule,
 } from "./work-home-tools";
+import { templatePathValuesInText } from "./work-home-path-values";
 import {
   projectLogicalPath,
   remapPathToLogical,
@@ -155,7 +157,12 @@ export function collectWorkHome(input: CollectWorkHomeInput): CollectWorkHomeRes
         warnings.push(`${relForDeny}: nenhuma chave de comportamento declarada — não sai`);
         return false;
       }
-      addBytes(remap.logical, Buffer.from(filtered, "utf-8"), st.mode & 0o777);
+      // Caminhos absolutos DENTRO do settings viram marcadores (adendo A3b).
+      // Só o settings filtrado; prosa de skill/memória não é tocada.
+      const templated = isTemplatedContentPath(remap.logical)
+        ? templatePathValuesInText(filtered, { homeDir: input.homeDir, projectClones: input.projectClones ?? [] })
+        : filtered;
+      addBytes(remap.logical, Buffer.from(templated, "utf-8"), st.mode & 0o777);
     } else {
       addBytes(remap.logical, bytes, st.mode & 0o777);
     }
@@ -224,7 +231,15 @@ export function collectWorkHome(input: CollectWorkHomeInput): CollectWorkHomeRes
         credentialNames: input.stellar.credentialNames,
         homeDir: input.homeDir,
       });
-      addBytes(`{stellar}/provider-bundle.json`, Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`, "utf-8"), 0o644);
+      // Decisão do dono (§5): segredo NÃO é assunto do sync — `credentialsRequired`
+      // (mesmo só nomes) sai do pacote da casa. O `PortableProviderBundle`
+      // continua com o campo para os seus usos próprios; a casa o omite aqui.
+      const serialized = JSON.stringify(
+        bundle,
+        (key, value) => (key === "credentialsRequired" ? undefined : value),
+        2,
+      );
+      addBytes(`{stellar}/provider-bundle.json`, Buffer.from(`${serialized}\n`, "utf-8"), 0o644);
       return;
     }
 

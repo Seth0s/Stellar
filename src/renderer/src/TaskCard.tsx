@@ -34,6 +34,7 @@ import {
   describeStatusDivergence,
   describeStatusAskNotice,
   describeReviewWantedNotice,
+  describeSupersededChip,
   blockedQuestionOf,
   describeBlockedAge,
   BLOCKED_TASK_STATUS,
@@ -69,7 +70,10 @@ import {
   TASK_DIFF_SUMMARY_KEYS,
   type TaskDiffView,
 } from "./task-diff-presentation";
+import { describeGateChip, type GateChipTone } from "./task-gate-view";
+import { groupDiffFiles, type DiffRow } from "./task-gate-detail";
 import styles from "./TaskCard.module.css";
+import { TeamQueueSection } from "./TeamQueueSection";
 import { getLocale, t } from "../../shared/i18n";
 
 /** RODADA 3 (contrato de partes §2.3, item 1) — "a diferença visual mais
@@ -83,6 +87,8 @@ const COLUMN_COLOR: Record<TaskColumn, string> = {
   doing: "var(--foam)",
   done: "var(--good)",
   failed: "var(--danger)",
+  // Superseded is NEUTRAL: nobody failed.
+  superseded: "var(--muted)",
 };
 
 /** RODADA 3 (contrato §2.3, item 8) — empty column messages via i18n. */
@@ -91,7 +97,8 @@ const COLUMN_EMPTY_KEY = {
   doing: "task.empty.doing",
   done: "task.empty.done",
   failed: "task.empty.failed",
-} as const satisfies Record<TaskColumn, "task.empty.todo" | "task.empty.doing" | "task.empty.done" | "task.empty.failed">;
+  superseded: "task.empty.superseded",
+} as const satisfies Record<TaskColumn, "task.empty.todo" | "task.empty.doing" | "task.empty.done" | "task.empty.failed" | "task.empty.superseded">;
 
 /** Column header keys — JSX only; agent-facing COLUMN_TITLE stays in the model. */
 const COLUMN_HEADER_KEY = {
@@ -99,7 +106,8 @@ const COLUMN_HEADER_KEY = {
   doing: "task.column.doing",
   done: "task.column.done",
   failed: "task.column.failed",
-} as const satisfies Record<TaskColumn, "task.column.todo" | "task.column.doing" | "task.column.done" | "task.column.failed">;
+  superseded: "task.column.superseded",
+} as const satisfies Record<TaskColumn, "task.column.todo" | "task.column.doing" | "task.column.done" | "task.column.failed" | "task.column.superseded">;
 
 /** DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 — rodapé de escopo. Vive no
  * `footerContent` do `CardFrame`. Contagem "N em outros boards" é texto
@@ -231,6 +239,30 @@ function PhaseChip({ phase }: { phase: TaskPhase }) {
   );
 }
 
+/** Gate chip — live progress or the app-measured verdict. The tooltip carries
+ * the command, the mode and the trailing output when red; the computation
+ * lives in `task-gate-view.ts`. */
+const GATE_CLASS: Record<GateChipTone, string> = {
+  running: styles.gateRunning,
+  good: styles.gateGood,
+  danger: styles.gateDanger,
+};
+
+function GateChip({ gate, progress }: { gate: TaskBoardItem["gateRun"]; progress: TaskBoardItem["gateProgress"] }) {
+  const chip = describeGateChip(gate, progress);
+  if (!chip) return null;
+  return (
+    <span
+      className={`${styles.gateChip} ${GATE_CLASS[chip.tone]}`}
+      data-part="gate-chip"
+      data-tone={chip.tone}
+      title={chip.title}
+    >
+      {chip.label}
+    </span>
+  );
+}
+
 /** Um item do quadro — DESIGN-BACKLOG.md §2.1 peça 4, "anatomia da task
  * conforme o protótipo v5": alça de arraste + rank, id curto, idade, selo
  * de origem, pílulas coloridas, chips de card, trilha de etapa
@@ -248,6 +280,7 @@ function TaskItem({
   hovered,
   onApproveCompletion,
   onDragPointerDown,
+  onOpenTask,
 }: {
   task: TaskBoardItem;
   now: number;
@@ -261,6 +294,10 @@ function TaskItem({
    * `groupTasksByColumn`, isto só numera o que já está certo. */
   rank: number;
   onApproveCompletion: (taskId: string) => void;
+  /** Opens the modal of ANOTHER task (the target of the "superseded by #Y"
+   * chip). Comes from `TaskCardInner` (owner of `openTaskId`), the same flow as
+   * the external request. */
+  onOpenTask: (taskId: string) => void;
   /** FASE 2, peça 3 — inicia o arraste (mesmo gesto pointerdown/move/up
    * que `CardFrame.tsx`'s `onHeaderPointerDown` já usa pra mover um card
    * inteiro, reaproveitado aqui pra mover uma TASK dentro do quadro — não
@@ -273,6 +310,9 @@ function TaskItem({
   // FASE (task 6266d3e7) — mesma derivação do filtro rápido do card (uma só
   // regra: `deriveTaskPhase` no módulo puro).
   const phase = deriveTaskPhaseForBoardItem(task);
+  // Neutral "superseded by #Y" chip, clickable to the substitute. Without a
+  // target it falls back to the plain phase chip (never invents one).
+  const supersededChip = phase === "superseded" ? describeSupersededChip(task.supersededBy) : null;
   const cardRoles = task.cards.map((c) => c.role);
   const purposeChip = derivePurposeChip(task.purpose, task.deps, task.depPurposes, cardRoles);
   const stage = deriveStage(task, task.report !== null);
@@ -363,7 +403,24 @@ function TaskItem({
           {formatTaskAge(task.createdAt, now)}
         </span>
       </div>
-      <PhaseChip phase={phase} />
+      {supersededChip && task.supersededBy ? (
+        <button
+          type="button"
+          data-no-drag
+          data-part="superseded-chip"
+          className={`${styles.phaseChip} ${styles.phaseMuted} ${styles.supersededChip}`}
+          title={t("task.superseded.chip", { id: shortTaskId(task.supersededBy) })}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenTask(task.supersededBy!);
+          }}
+        >
+          {supersededChip}
+        </button>
+      ) : (
+        <PhaseChip phase={phase} />
+      )}
+      <GateChip gate={task.gateRun} progress={task.gateProgress} />
       {/* No purpose → no chip. Absence is NORMAL; do not invent a label. */}
       {purposeChip && (
         <div className={styles.purposeChip} data-part="purpose-chip">
@@ -484,6 +541,39 @@ function TaskItem({
   );
 }
 
+/** One row of the observed-diff list — status | truncated path | territory
+ * tag, a left-aligned grid. The untracked note is an icon whose text is the
+ * tooltip, so it never becomes a second line per row. */
+function DiffFileRow({ row }: { row: DiffRow }) {
+  const territory =
+    row.territory === "inside"
+      ? t(TASK_DIFF_KEYS.inside)
+      : row.territory === "outside"
+        ? t(TASK_DIFF_KEYS.outside)
+        : t(TASK_DIFF_KEYS.unlabeled);
+  return (
+    <div className={styles.diffRow} data-part="task-diff-file" data-territory={row.territory}>
+      <span className={styles.diffStatus}>{row.status.trim() || "·"}</span>
+      <span className={styles.diffPath} title={row.path}>
+        {row.name}
+      </span>
+      <span className={styles.diffTag}>{territory}</span>
+      {row.untracked ? (
+        <span
+          className={styles.diffNew}
+          data-part="task-diff-untracked"
+          title={t(TASK_DIFF_KEYS.untracked)}
+          aria-label={t(TASK_DIFF_KEYS.untracked)}
+        >
+          <Icon name="newFile" size={11} />
+        </span>
+      ) : (
+        <span />
+      )}
+    </div>
+  );
+}
+
 /** Fila click — all task fields, prompt edit via `updatePrompt`, and the
  * live divergence that a board row can otherwise hide in a clamp. Portaled
  * to `document.body` so screen-projected card transform never clips it.
@@ -562,6 +652,11 @@ function TaskDetailModal({
       setBusy(false);
     }
   }
+
+  // The files list can be long: past the threshold it groups by folder and each
+  // row drops to its file name, so the path truncates far less often.
+  const diffGroups = diff ? groupDiffFiles(diff.files) : null;
+  const diffRows: DiffRow[] = diff ? diff.files.map((f) => ({ ...f, name: f.path })) : [];
 
   return createPortal(
     <div
@@ -669,21 +764,17 @@ function TaskDetailModal({
                 </div>
               )}
               {diff.files.length > 0 && (
-                <div className={styles.detailList} data-part="task-diff-files">
-                  {diff.files.map((f) => (
-                    <div key={f.path} className={styles.detailVerdict} data-part="task-diff-file" data-territory={f.territory}>
-                      <span className={styles.chipId}>{f.status.trim() || "·"}</span>
-                      <span className={styles.detailVerdictWhen}>{f.path}</span>
-                      <span className={styles.age}>
-                        {f.territory === "inside"
-                          ? t(TASK_DIFF_KEYS.inside)
-                          : f.territory === "outside"
-                            ? t(TASK_DIFF_KEYS.outside)
-                            : t(TASK_DIFF_KEYS.unlabeled)}
-                      </span>
-                      {f.untracked && <span className={styles.age}>{t(TASK_DIFF_KEYS.untracked)}</span>}
-                    </div>
-                  ))}
+                <div className={`${styles.detailScroll} ${styles.detailScrollTall}`} data-part="task-diff-files">
+                  {diffGroups
+                    ? diffGroups.map((group) => (
+                        <div key={group.folder || "/"} data-part="task-diff-group">
+                          {group.folder && <div className={styles.diffGroupLabel}>{group.folder}</div>}
+                          {group.rows.map((row) => (
+                            <DiffFileRow key={row.path} row={row} />
+                          ))}
+                        </div>
+                      ))
+                    : diffRows.map((row) => <DiffFileRow key={row.path} row={row} />)}
                 </div>
               )}
               {diff.patchTruncated && (
@@ -694,7 +785,7 @@ function TaskDetailModal({
               {/* O patch é MOSTRADO como veio (texto cru num <pre>), nunca
                   re-renderizado como um diff-viewer — "aponte para ele". */}
               {diff.patch && (
-                <pre className={styles.detailPromptBlock} data-part="task-diff-patch">
+                <pre className={`${styles.detailPromptBlock} ${styles.detailScroll} ${styles.detailScrollTall}`} data-part="task-diff-patch">
                   {diff.patch}
                 </pre>
               )}
@@ -703,16 +794,18 @@ function TaskDetailModal({
 
           <section>
             <div className={styles.detailSectionTitle}>{t("task.detail.prompt")}</div>
-            <div className={styles.detailPromptBlock} data-part="task-detail-prompt-original">
-              <span className={styles.detailPromptLabel}>{t("task.detail.promptOriginal")}</span>
-              {parsed.original || t("task.noPrompt")}
-            </div>
-            {parsed.additions.map((addition, i) => (
-              <div key={`${addition.at}-${i}`} className={styles.detailPromptBlock} data-part="task-detail-prompt-added">
-                <span className={styles.detailPromptLabel}>{t("task.detail.promptAdded", { when: formatPromptWhen(addition.at) })}</span>
-                {addition.text}
+            <div className={`${styles.detailScroll} ${styles.detailScrollTall}`} data-part="task-detail-prompt">
+              <div className={styles.detailPromptBlock} data-part="task-detail-prompt-original">
+                <span className={styles.detailPromptLabel}>{t("task.detail.promptOriginal")}</span>
+                {parsed.original || t("task.noPrompt")}
               </div>
-            ))}
+              {parsed.additions.map((addition, i) => (
+                <div key={`${addition.at}-${i}`} className={styles.detailPromptBlock} data-part="task-detail-prompt-added">
+                  <span className={styles.detailPromptLabel}>{t("task.detail.promptAdded", { when: formatPromptWhen(addition.at) })}</span>
+                  {addition.text}
+                </div>
+              ))}
+            </div>
             {!readOnly && (
               <>
                 <textarea
@@ -761,7 +854,7 @@ function TaskDetailModal({
             {task.verdicts.length === 0 ? (
               <div className={styles.detailEmpty}>{t("task.detail.noVerdicts")}</div>
             ) : (
-              <div className={styles.detailList}>
+              <div className={`${styles.detailList} ${styles.detailScroll} ${styles.detailScrollShort}`} data-part="task-detail-verdicts">
                 {task.verdicts.map((v, i) => {
                   // A rodada chega LIDA do main (task 156e6d08): `v.verdict` é
                   // o que se pode atribuir a ESTA task e `v.rule` diz por quê.
@@ -795,7 +888,13 @@ function TaskDetailModal({
 
           <section>
             <div className={styles.detailSectionTitle}>{t("task.detail.history")}</div>
-            {trail ? <div className={styles.transitionTrail}>{trail}</div> : <div className={styles.detailEmpty}>{t("task.detail.noHistory")}</div>}
+            {trail ? (
+              <div className={styles.detailScroll} data-part="task-detail-history-scroll">
+                <div className={styles.transitionTrail}>{trail}</div>
+              </div>
+            ) : (
+              <div className={styles.detailEmpty}>{t("task.detail.noHistory")}</div>
+            )}
           </section>
 
           <section>
@@ -1755,6 +1854,10 @@ function TaskCardInner({
    * (`getBoundingClientRect`/`clientX`/`clientY`), não uma segunda. */
   function locateDropTarget(taskId: string, clientX: number, clientY: number): { column: TaskColumn; index: number } | null {
     for (const col of COLUMN_ORDER) {
+      // The "superseded" column is NOT a drop target: the status requires a
+      // `supersededBy` (only the orchestrator/human write it) and is not a drag
+      // destination.
+      if (col === "superseded") continue;
       const el = columnBodyRefs.current[col];
       if (!el) continue;
       const rect = el.getBoundingClientRect();
@@ -2035,6 +2138,7 @@ function TaskCardInner({
                           hovered={task.id === hoveredTaskId}
                           onApproveCompletion={viewingFrozen ? () => {} : onApproveCompletion}
                           onDragPointerDown={(e) => beginTaskDrag(task, e)}
+                          onOpenTask={(id) => setOpenTaskId(id)}
                         />
                       </Fragment>
                     ))}
@@ -2050,6 +2154,7 @@ function TaskCardInner({
           </div>
         ))}
       </div>
+      <TeamQueueSection boardId={activeBoardId} onOpenTask={(id) => setOpenTaskId(id)} />
       {sprintsOpen && (
         <SprintsPanel
           boardId={activeBoardId}

@@ -17,7 +17,14 @@ import { fileURLToPath } from "node:url";
 
 export async function resolve(specifier, context, nextResolve) {
   try {
-    return await nextResolve(specifier, context);
+    const result = await nextResolve(specifier, context);
+    // A `.json` import from a `.ts` module (the dynamic provider catalog) omits
+    // the `type: "json"` attribute that Vite/tsc imply but raw Node ESM requires.
+    // Add it here so a smoke can import the real registry without touching src.
+    if (result.url.endsWith(".json") && !result.importAttributes?.type) {
+      return { ...result, importAttributes: { ...(result.importAttributes ?? {}), type: "json" } };
+    }
+    return result;
   } catch (err) {
     if (err.code !== "ERR_MODULE_NOT_FOUND" || !specifier.startsWith(".")) throw err;
     const base = fileURLToPath(new URL(specifier, context.parentURL));

@@ -5,6 +5,7 @@ import { readinessCache, runReadinessProbe } from "./provider-readiness-probe";
 import { MIN_CONTENT_BYTES, type SessionStore } from "./session-store-spec";
 import { CARD_MESSAGE_CONTENT_NOTICE } from "./pasted-content-decision";
 import type { ConfigHomeDecl } from "./config-home-decision";
+import type { HealthCapability } from "./card-health";
 
 /**
  * Os SEIS providers nativos, como constantes nomeadas — o autocomplete
@@ -469,6 +470,18 @@ export type ProviderCapacity = {
    */
   oneShot?: OneShotCapability;
 
+  /**
+   * CARD HEALTH — how to read, from the screen copy the app already keeps, the
+   * context tokens in use and the provider's plan/quota line. See
+   * `card-health.ts` for the whole rationale. ABSENT = this provider exposes
+   * nothing, and the honest answer is `{ context: null, quota: null }` — never
+   * an invented number.
+   *
+   * DECLARED, never an `if (provider === …)`: the patterns and the window are
+   * measured per CLI, in the same place as `effort`/`model`/`session`.
+   */
+  health?: HealthCapability;
+
   /** Como o id de sessão entra no argv — ver `SessionCapability`. O que
    * `shouldImposeSessionId`/`canImposeSessionId` leem (2026-09-19): a
    * resposta é do provider, nativo ou dinâmico, não de uma lista. */
@@ -541,6 +554,34 @@ export type ProviderCapacity = {
 const MEASURED_MID_TURN_QUEUES: Readonly<Record<ProviderId, NonNullable<ProviderCapacity["delivery"]["midTurnQueue"]>>> = {
   commandcode: {
     parkedPattern: /\bqueued\s*\(\d+\)[\s\S]*?›/i,
+  },
+};
+
+/**
+ * MEASURED CARD HEALTH the shipped catalog does not declare. Same reason and
+ * same place as `MEASURED_MID_TURN_QUEUES` above: `commandcode` is DYNAMIC
+ * (from `data/providers.builtin.json`), and its health reading was measured
+ * after that JSON existed — the table is applied at REGISTRATION
+ * (`registerDynamicProviders`), never to the spec, so the live def and
+ * `providerCapacity` agree and the spec→def round-trip stays intact.
+ *
+ * Only QUOTA is declared, and the reason CONTEXT is not is a measurement worth
+ * stating: the spinner token count (`… • ↓ 8.0k`, `… • ↓ 12.4k` on live cards)
+ * is the TURN's volume — it resets and grows every turn, so it is NOT the
+ * session context and must never be shown as one. commandcode's real context
+ * indicator (`Context left before auto-compact N%`, `~X until auto-compact`)
+ * exists in the CLI but draws only at high usage and was absent from every
+ * screen read, so there is no recorded sample to pin a pattern to; and the
+ * session store's per-message `usage` tokens carry no window, so no threshold
+ * could be honest. Context stays undeclared — `null`, never a wrong number.
+ */
+const MEASURED_HEALTH: Readonly<Record<ProviderId, HealthCapability>> = {
+  commandcode: {
+    quota: {
+      // The whole footer LINE becomes `quota.text` (it carries "13.3 credits left").
+      pattern: /Plan:\s*([\d.]+)%\s*used/i,
+      source: "commandcode plan footer",
+    },
   },
 };
 
@@ -733,10 +774,19 @@ type InstallCommand = { posix: string; windows: string };
 /** What `buildArgs` gets: every spawn option EXCEPT the brief. */
 export type ProviderFlagOpts = Omit<SpawnOpts, "brief">;
 
+/** A provider's declared trust dialog: the pattern that detects it and the
+ * input that confirms it. `confirmInput: null` means the app must NOT
+ * auto-confirm (a bare Enter can land on the cancel button), so the prompt is
+ * detected and reported but left for a human. */
+export type TrustPromptDecl = { pattern: RegExp; confirmInput: string | null };
+
 export type ProviderDef = {
   id: ProviderId;
   label: string;
   binaryNames: string[];
+  /** Declared trust dialog, read generically by pty-registry — never a
+   * per-provider branch. Absent = this provider has no such dialog. */
+  trustPrompt?: TrustPromptDecl;
   /**
    * Flags only — never the brief. `spawnArgv` appends the brief after
    * these, in the declared form, so the ORDER (brief last, behind `--`
@@ -816,12 +866,30 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     // MEDIDO (A3c, 2026-10-04): CLAUDE_CONFIG_DIR aparece 80× no binário
     // v2.1.289 e é o que muda a pasta de config/login do Claude.
     configHome: { env: "CLAUDE_CONFIG_DIR" },
+    // The dialog's default focus is Cancel, so a bare Enter cancels the launch
+    // (exit 1): detected, but never auto-confirmed.
+    trustPrompt: { pattern: /Quick safety check: Is this a project you created or one you trust\?/, confirmInput: null },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "append-system-prompt" },
       // MEDIDO: `-p <prompt> --output-format json` → objeto JSON, texto em
       // `.result` (ver `OneShotCapability`).
       oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
+      // CARD HEALTH — measured from a real claude card screen: its footer
+      // carries `[███] 72% 720k/1m | 5h [...] …`. The `720k/1m` pair IS the
+      // context-window fill, and the CLI prints BOTH numbers — so the window is
+      // read from the screen, never hard-coded, and the bar's own `72%`
+      // corroborates it. The warn fraction (0.7) is a declared decision: 70% of
+      // the window is "little headroom" for handing the card more work.
+      health: {
+        context: {
+          // Used/window bar: groups 1/2 = used, groups 3/4 = window. Requiring
+          // the slash keeps the spinner's `↓ 1.2k tokens` (turn volume) out.
+          pattern: /([\d.]+)([km])\s*\/\s*([\d.]+)([km])/i,
+          warnFraction: 0.7,
+          source: "claude status-bar context fill (used/window)",
+        },
+      },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
       // Range re-measured 2026-09-12 against `claude --help` (v2.1.269) —
@@ -851,7 +919,20 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       },
       delivery: {
         briefMechanism: "positional",
-        submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
+        // MEDIDO AO VIVO (2026-10-05, board do dono, Claude Code v2.1.289): a
+        // TUI fecha o rodapé com uma linha de SPINNER, e é ela o único sinal de
+        // "o turno começou". Amostras reais colhidas de um card claude trabalhando
+        // (`read_card`):
+        //   `✶ Drizzling… (6m 58s · ↓ 34.5k tokens)`
+        //   `✽ Drizzling… (7m 13s · ↓ 36.1k tokens)`
+        // O verbo é ALEATÓRIO (a lista antiga de verbos fixos — Working, Thinking,
+        // Swooping… — nunca cobria o que a TUI de hoje sorteia, e por isso o
+        // veredito caía em `unknown` para mensagem que chegou); o que é estável é
+        // o GLIFO de spinner + gerúndio + `…`. `esc to interrupt` e a lista de
+        // verbos MEDIDA antes continuam na união: versões/configurações que os
+        // mostram seguem casando, e a nova alternativa só ACRESCENTA recall — a
+        // polaridade (evidência positiva) não muda.
+        submitStartedPattern: /(?:esc to interrupt)|(?:[✢✣✤✥✦✧✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿]\s*[A-Z][a-z]+…)|(?:\b(?:Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering)\b)/i,
         // O hook `Stop` EFÊMERO que o `buildArgs` acima instala (`--settings`
         // → `acbridge turn-complete`): o sinal chega NOMEADO por IPC
         // (`pty:turn-complete`), não por leitura de tela.
@@ -1200,6 +1281,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     id: "antigravity",
     label: "Antigravity",
     binaryNames: ["agy"],
+    // A newly spawned card stops on this dialog before reading its brief; the
+    // default confirms on Enter.
+    trustPrompt: { pattern: /Do you trust the contents of this project\?/, confirmInput: "\r" },
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
@@ -1369,12 +1453,24 @@ export function registerDynamicProviders(
     // Fila de mid-turn MEDIDA pelo app (Ver MEASURED_MID_TURN_QUEUES): entra
     // no REGISTRO, não no spec — o def vivo e `providerCapacity` concordam, e
     // um override do usuário que já declare a fila dele nunca é sobrescrito.
-    const measured = MEASURED_MID_TURN_QUEUES[def.id];
+    const measuredQueue = MEASURED_MID_TURN_QUEUES[def.id];
+    const measuredHealth = MEASURED_HEALTH[def.id];
+    const needsQueue = !!measuredQueue && !def.capacity.delivery.midTurnQueue;
+    // Same rule as the queue: only when the provider did not declare its own
+    // health, and into the REGISTRY — the spec/JSON and the round-trip are
+    // untouched.
+    const needsHealth = !!measuredHealth && !def.capacity.health;
     const resolved =
-      measured && !def.capacity.delivery.midTurnQueue
+      needsQueue || needsHealth
         ? {
             ...def,
-            capacity: { ...def.capacity, delivery: { ...def.capacity.delivery, midTurnQueue: measured } },
+            capacity: {
+              ...def.capacity,
+              ...(needsQueue && measuredQueue
+                ? { delivery: { ...def.capacity.delivery, midTurnQueue: measuredQueue } }
+                : {}),
+              ...(needsHealth && measuredHealth ? { health: measuredHealth } : {}),
+            },
           }
         : def;
     const existing = PROVIDERS.findIndex((p) => p.id === def.id);
@@ -1477,6 +1573,11 @@ export function shouldImposeSessionId(
 
 export function providerById(id: string): ProviderDef | undefined {
   return PROVIDERS.find((p) => p.id === id);
+}
+
+/** The trust dialog this provider declares, or null when it declares none. */
+export function providerTrustPrompt(id: string): TrustPromptDecl | null {
+  return providerById(id)?.trustPrompt ?? null;
 }
 
 export function providerCapacity(id: string): ProviderCapacity | undefined {

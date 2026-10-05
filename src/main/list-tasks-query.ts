@@ -66,6 +66,9 @@ export type ListedTask = {
   requestedReason: string | null;
   requestedBy: string | null;
   requestedAt: number | null;
+  /** Id of the task that replaced this one, when `status` is `superseded`;
+   * `null` in every other case. */
+  supersededBy: string | null;
   sprintId: string | null;
   transitions?: unknown;
   cards?: unknown;
@@ -294,6 +297,9 @@ export type ListedTaskSummary = {
   deps: unknown;
   updatedAt: number;
   gateRun: GateRunSummary | null;
+  /** Present only when the task was superseded (it does not grow the normal
+   * summary). The target that replaced it. */
+  supersededBy?: string | null;
 };
 
 /** `summary` = a allowlist acima (default desde a task 6266d3e7); `full` = a
@@ -309,5 +315,6 @@ export function projectListedTask(task: ListedTask, view: ListTasksView): Listed
     deps: task.deps,
     updatedAt: task.updatedAt,
     gateRun: task.gateRun ?? null,
+    ...(task.supersededBy ? { supersededBy: task.supersededBy } : {}),
   };
 }

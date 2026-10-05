@@ -1,0 +1,238 @@
+{
+  "checks": 46,
+  "failed": 0,
+  "defects": [],
+  "blocked": [],
+  "results": [
+    {
+      "label": "migração criou o perfil pessoal",
+      "ok": true,
+      "actual": "personal"
+    },
+    {
+      "label": "providers.json da raiz migrou para profiles/<id>/",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "providers.json NÃO ficou na raiz",
+      "ok": true,
+      "actual": false
+    },
+    {
+      "label": "perfil Empresa criado",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil Empresa em modo isolated",
+      "ok": true,
+      "actual": "isolated"
+    },
+    {
+      "label": "app reabriu no perfil Empresa",
+      "ok": true,
+      "actual": "e5c2a902-7f34-49da-b7ae-f467d5e9d499"
+    },
+    {
+      "label": "A logado na conta (GitHub)",
+      "ok": true,
+      "actual": "Alice GitHub"
+    },
+    {
+      "label": "A: prévia da casa responde",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 2 — A sincroniza a casa (push)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 2 — perfil de A registrado no servidor (cloudProfileId)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B logado na MESMA conta",
+      "ok": true,
+      "actual": "Alice GitHub"
+    },
+    {
+      "label": "PASSO 3 — B vincula ao MESMO perfil de servidor de A",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — B recebe a prévia da casa",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — B aplica a casa de A",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — CLAUDE.md de B veio de A (tag A)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — memória no clone certo de B",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — credencial de A NÃO viajou",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 3 — credencial de B continua a de B",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 4 — A publica",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 4 — B mescla sozinho (0 conflitos)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 4 — a edição de A chegou em B",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 4 — B manteve a própria edição",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 5 — o conflito aparece para a escolha",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 9 — o app lista as máquinas da conta (>=2)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 9 — exatamente uma é 'esta máquina'",
+      "ok": true,
+      "actual": 1
+    },
+    {
+      "label": "PASSO 9 — desconectar outra máquina devolve ok",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A cria o time",
+      "ok": true,
+      "actual": "acme"
+    },
+    {
+      "label": "A convida por e-mail",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A convida por login GitHub",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B logado como o membro (bob-gh)",
+      "ok": true,
+      "actual": "Bob GitHub"
+    },
+    {
+      "label": "B aceita o convite",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil de time aparece em B (ativo)",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "perfil de time em isolated",
+      "ok": true,
+      "actual": "isolated"
+    },
+    {
+      "label": "A publica a base",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "base publicada NÃO inclui memória",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B vê a skill do time com prefixo team-acme-",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B aplica a base com prefixo",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "troca reabriu no perfil pessoal",
+      "ok": true,
+      "actual": "345ceeb4-a902-4018-8796-35afb0812326"
+    },
+    {
+      "label": "casa do perfil Empresa não vazou para o pessoal",
+      "ok": true,
+      "actual": false
+    },
+    {
+      "label": "login é por perfil: pessoal não herdou a sessão",
+      "ok": true,
+      "actual": "logged-out"
+    },
+    {
+      "label": "A revoga um convite",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A remove o membro",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "B recebe 404 do endpoint de time",
+      "ok": true,
+      "actual": false
+    },
+    {
+      "label": "PASSO 9 — o perfil de time de B ficou detached",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "PASSO 9 — o perfil de time de A (removedor) continua ativo",
+      "ok": true,
+      "actual": true
+    },
+    {
+      "label": "A faz logout",
+      "ok": true,
+      "actual": "logged-out"
+    }
+  ]
+}

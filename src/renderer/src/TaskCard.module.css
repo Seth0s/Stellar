@@ -1326,6 +1326,67 @@
   font-size: var(--text-3);
 }
 
+/* PER-FIELD INTERNAL SCROLL — a long field (file list, prompt, patch, verdicts,
+   transitions) scrolls inside itself instead of stretching the whole dialog and
+   pushing the page scroll out. The cap is a local token, so each field picks
+   its height without hand-written px. */
+.detailScroll {
+  max-height: var(--detail-scroll-max, 220px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.detailScrollShort {
+  --detail-scroll-max: 160px;
+}
+.detailScrollTall {
+  --detail-scroll-max: 280px;
+}
+
+/* OBSERVED-DIFF GRID — status | path | territory tag, left-aligned; the path
+   truncates with an ellipsis instead of wrapping. The untracked note is an
+   icon in its own column, never a second line per row. */
+.diffRow {
+  display: grid;
+  grid-template-columns: 1.4em minmax(0, 1fr) auto 1.1em;
+  align-items: baseline;
+  gap: var(--space-2);
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-3);
+  padding: var(--space-1) 0;
+}
+.diffStatus {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.diffPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.diffTag {
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: var(--text-2);
+}
+.diffNew {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warn);
+  cursor: help;
+}
+.diffGroupLabel {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  margin-top: var(--space-2);
+}
+
 /* HOVER vindo da GAVETA (task 6266d3e7) — o item correspondente acende
    enquanto o ponteiro está no item da gaveta. Cor própria (`--violet`, a mesma
    do conector tracejado) para o humano ligar os dois. */
@@ -1363,6 +1424,42 @@
 }
 .phaseWarn {
   color: var(--warn);
+}
+/* The "superseded by #Y" chip — neutral and clickable (opens the substitute);
+ * it inherits the `.phaseChip` anatomy. */
+.supersededChip {
+  cursor: pointer;
+  background: none;
+  font-family: inherit;
+}
+.supersededChip:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+/* GATE CHIP — same anatomy as the phase chip; the TONE says the state:
+   running, green or red. Tokens only. */
+.gateChip {
+  align-self: flex-start;
+  font-size: var(--text-3);
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  letter-spacing: var(--tracking-label);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gateRunning {
+  color: var(--foam);
+}
+.gateGood {
+  color: var(--good);
+}
+.gateDanger {
+  color: var(--danger);
 }
 
 /* FILTRO RÁPIDO "aguardando revisão" com contador (task 6266d3e7). */

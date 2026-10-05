@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — importar tasks</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.ghost{height:36px;padding:0 14px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:13px;cursor:pointer}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:36px;padding:0 16px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.src{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #232838;background:#0f1218;color:#d6dae4;font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.step{display:flex;align-items:center;gap:10px;font-size:13px}
+.n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none}
+.sel{height:34px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:12.5px;width:100%}
+.row{display:flex;align-items:flex-start;gap:12px;padding:12px;border-top:1px solid #1d2130}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Importar tasks · Idy Platform</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+    <aside style="width: 280px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 22px 18px; box-sizing: border-box; background: #0e1016; border-right: 1px solid #1a1e28">
+      <div style="display: flex; flex-direction: column; gap: 14px" aria-label="Etapas">
+        <div class="step" style="color: #a3aabb"><span class="n" style="background: #14301f; color: #8ee6a8">✓</span>Fonte</div>
+        <div class="step" style="color: #a3aabb"><span class="n" style="background: #14301f; color: #8ee6a8">✓</span>Conectar</div>
+        <div class="step" style="color: #ffffff; font-weight: 600"><span class="n" style="background: #4a5fe0; color: #fff">3</span>Mapear</div>
+        <div class="step" style="color: #8d94a6"><span class="n" style="border: 1px solid #3a4052; box-sizing: border-box">4</span>Revisar e importar</div>
+      </div>
+      <div style="height: 1px; background: #1d2130"></div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 12px; color: #8d94a6">Fonte escolhida</span>
+        <div class="src" style="border-color: #5a6be0; background: #161c30"><span style="width: 26px; height: 26px; border-radius: 7px; background: #3b1f3d; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #f2a6ef">S</span><span style="flex: 1; display: flex; flex-direction: column"><span>Slack</span><span style="font-size: 11.5px; color: #8d94a6">workspace idy · #backlog</span></span></div>
+        <span style="font-size: 12px; color: #8d94a6; margin-top: 8px">Também dá para importar de</span>
+        <div class="src"><span style="width: 26px; height: 26px; border-radius: 7px; background: #1d2240; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #b9c4ff">L</span>Linear</div>
+        <div class="src"><span style="width: 26px; height: 26px; border-radius: 7px; background: #13263f; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #8fc2ff">J</span>Jira</div>
+        <div class="src"><span style="width: 26px; height: 26px; border-radius: 7px; background: #222630; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #e8eaf0">G</span>GitHub Issues</div>
+        <div class="src"><span style="width: 26px; height: 26px; border-radius: 7px; background: #20242f; display: grid; place-items: center; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #c9cede">csv</span>CSV ou JSON</div>
+      </div>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <div style="flex: 1; min-height: 0; overflow: auto; padding: 26px 32px; display: flex; flex-direction: column; gap: 20px">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <h1 style="margin: 0; font-size: 22px; font-weight: 600">Como as mensagens viram tasks</h1>
+          <p style="margin: 0; font-size: 13.5px; color: #a3aabb">#backlog tem 214 mensagens nos últimos 30 dias. Defina quais entram e como cada campo é preenchido.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+          <div style="display: flex; flex-direction: column; gap: 6px"><label for="r1" style="font-size: 12.5px; color: #c9cede">Quais mensagens</label><select id="r1" class="sel"><option>Com a reação :ticket:</option><option>Todas as que começam com "TODO"</option><option>Todas do canal</option></select></div>
+          <div style="display: flex; flex-direction: column; gap: 6px"><label for="r2" style="font-size: 12.5px; color: #c9cede">Período</label><select id="r2" class="sel"><option>Últimos 30 dias</option><option>Desde o começo do canal</option></select></div>
+        </div>
+
+        <div style="border-radius: 12px; border: 1px solid #20242f; background: #12151d; overflow: hidden">
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .06em; color: #8d94a6"><span>NO SLACK</span><span></span><span>NA TASK</span></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span>Primeira linha</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Destino da primeira linha"><option>Título</option></select></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span>Mensagem + thread</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Destino da mensagem"><option>Contrato (objetivo)</option></select></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span>Quem marcou :ticket:</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Destino de quem marcou"><option>Dono (se for membro do time)</option><option>Deixar sem dono</option></select></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span>Reação :white_check_mark:</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Destino da reação de concluído"><option>Já concluída (entra arquivada)</option><option>Ignorar</option></select></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span>Links de arquivo (src/…)</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Destino dos links"><option>Território sugerido</option><option>Ignorar</option></select></div>
+          <div style="display: grid; grid-template-columns: 200px 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid #1d2130; font-size: 13px"><span style="color: #a3aabb">Tipo de trabalho</span><span style="color: #8d94a6">→</span><select class="sel" aria-label="Tipo de trabalho"><option>Deduzir pelo texto (bug → Corrigir)</option><option>Sempre Implementar</option></select></div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 10px"><h2 style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Prévia · 23 tasks</h2><span style="font-size: 12px; color: #8d94a6">3 já existem e serão puladas</span></div>
+          <div style="border-radius: 12px; border: 1px solid #20242f; background: #12151d; overflow: hidden">
+            <label class="row" style="border-top: 0"><input type="checkbox" checked style="margin-top: 3px"><span style="flex: 1; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 13.5px">Relatório de presença sai com horário UTC</span><span style="font-size: 12px; color: #8d94a6">Carla · ontem · 4 respostas · Corrigir · território src/reports/**</span></span></label>
+            <label class="row"><input type="checkbox" checked style="margin-top: 3px"><span style="flex: 1; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 13.5px">Exportar lista de membros para CSV</span><span style="font-size: 12px; color: #8d94a6">Ana · há 3 dias · Implementar · sem dono</span></span></label>
+            <label class="row" style="opacity: .55"><input type="checkbox" disabled style="margin-top: 3px"><span style="flex: 1; display: flex; flex-direction: column; gap: 4px"><span style="font-size: 13.5px">Fila de retries com backoff em 429</span><span style="font-size: 12px; color: #f2c96a">já importada como #58</span></span></label>
+          </div>
+        </div>
+      </div>
+      <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 14px 32px; border-top: 1px solid #1d2130">
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #c9cede; flex: 1"><input type="checkbox" checked>Continuar importando: novas mensagens com :ticket: viram task sozinhas</label>
+        <button class="ghost">Voltar</button>
+        <button class="primary">Revisar 23 tasks</button>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
