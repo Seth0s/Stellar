@@ -17,6 +17,23 @@ export function unregisterTerminal(cardId: string) {
   terminals.delete(cardId);
 }
 
+/**
+ * Per-card "apply the bytes held back from the xterm" callback, installed by
+ * `useTerminal`. A card off the viewport does not write to its xterm (see
+ * `terminal-render.ts`), so its buffer is behind by the held bytes; a reader
+ * must drain those into the xterm BEFORE reading or it would report a stale
+ * screen. The flush resolves once xterm has processed the write.
+ */
+const pendingFlushers = new Map<string, () => Promise<void>>();
+
+export function registerTerminalFlusher(cardId: string, flush: () => Promise<void>) {
+  pendingFlushers.set(cardId, flush);
+}
+
+export function unregisterTerminalFlusher(cardId: string) {
+  pendingFlushers.delete(cardId);
+}
+
 /** Test-only (SCREEN_SPACE_PROJECTION_PLAN.md, Trilha A's verify
  * harness — `smoke-terminal-font-zoom.mjs`) — the real `fontSize` the
  * live xterm.js instance has (fixed at `BASE_FONT_SIZE`, useTerminal.ts —
@@ -76,6 +93,19 @@ export function getTerminalText(cardId: string, lines?: number): string | null {
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
   const start = lines && lines > 0 ? Math.max(0, out.length - lines) : 0;
   return out.slice(start).join("\n");
+}
+
+/**
+ * The read used by `read_card`: drain any bytes held back from the xterm into
+ * it FIRST, await xterm processing, then read. Without the flush a card that is
+ * off the canvas viewport would answer with its last-drawn screen instead of
+ * what the process actually printed. The drain is the same one the return-to-view
+ * path uses, so nothing is drawn twice when the card comes back on screen.
+ */
+export async function readTerminalText(cardId: string, lines?: number): Promise<string | null> {
+  const flush = pendingFlushers.get(cardId);
+  if (flush) await flush();
+  return getTerminalText(cardId, lines);
 }
 
 /**

@@ -52,6 +52,17 @@ export function isProfileKind(value: unknown): value is ProfileKind {
   return typeof value === "string" && (PROFILE_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * The link between a team profile and the account team. Stored in the LOCAL
+ * registry (the server holds its own truth) only so the app knows which team
+ * house to pull and which slug to use in the prefix of materialized files.
+ */
+export type ProfileTeam = {
+  id: string;
+  slug: string;
+  name: string;
+};
+
 export type ProfileEntry = {
   /** `profile_id` (§3) — opaco, é também o nome da pasta em `profiles/`. */
   id: string;
@@ -65,6 +76,26 @@ export type ProfileEntry = {
    * `profiles.json` da A1 continuar válido sem bump de versão.
    */
   homeMode: ProviderHomeMode;
+  /**
+   * Team of the account this profile belongs to. PRESENT only on a linked team
+   * profile; absent means a personal profile or a turned-off team. Absence is
+   * absence: no team and no slug are invented.
+   */
+  team?: ProfileTeam;
+  /**
+   * `true` once the member left the team or was removed: the profile stays
+   * LOCAL and OFF (nothing is deleted without confirmation). PRESENT only when
+   * true.
+   */
+  detached?: boolean;
+  /**
+   * The id of this profile on the SERVER (`POST`/`GET /v1/profiles`), once the
+   * local profile has been registered there. The local `id` stays the local
+   * key (the folder name); this is the id every house sync must use — the
+   * server never knows the local id. ABSENT until the first sync links it (or
+   * the person picks one); absence is absence, never the local id as a guess.
+   */
+  cloudProfileId?: string;
 };
 
 /** O padrão por tipo de perfil (P5): pessoal no sistema, time isolado. */
@@ -89,6 +120,15 @@ export function normalizeProfileName(name: string): string {
   return name.trim();
 }
 
+function parseProfileTeam(value: unknown): ProfileTeam | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (!isOpaqueId(rec.id)) return null;
+  if (typeof rec.slug !== "string" || rec.slug.trim() === "") return null;
+  if (!isValidProfileName(rec.name)) return null;
+  return { id: rec.id, slug: rec.slug.trim(), name: normalizeProfileName(rec.name) };
+}
+
 function parseProfileEntry(value: unknown): ProfileEntry | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const rec = value as Record<string, unknown>;
@@ -99,7 +139,16 @@ function parseProfileEntry(value: unknown): ProfileEntry | null {
   if (typeof createdAt !== "number" || !Number.isFinite(createdAt) || createdAt < 0) return null;
   // `homeMode` ausente (arquivo da A1) NÃO é inválido: deriva do `kind`.
   const homeMode: ProviderHomeMode = isProviderHomeMode(rec.homeMode) ? rec.homeMode : defaultHomeModeForKind(rec.kind);
-  return { id: rec.id, name: normalizeProfileName(rec.name), kind: rec.kind, createdAt, homeMode };
+  // Absent `team`/`detached` (an older registry file) do NOT invalidate the
+  // entry: absence is absence. A malformed `team` is DROPPED, never repaired.
+  const team = parseProfileTeam(rec.team);
+  const base: ProfileEntry = { id: rec.id, name: normalizeProfileName(rec.name), kind: rec.kind, createdAt, homeMode };
+  if (team) base.team = team;
+  if (rec.detached === true) base.detached = true;
+  // The server profile id is opaque (a UUID); a value that is not one is
+  // DROPPED, never repaired into something plausible.
+  if (isOpaqueId(rec.cloudProfileId)) base.cloudProfileId = rec.cloudProfileId;
+  return base;
 }
 
 /**
@@ -324,6 +373,40 @@ export function createProfileEntry(
   homeMode: ProviderHomeMode = defaultHomeModeForKind(kind),
 ): ProfileEntry {
   return { id, name: normalizeProfileName(name), kind, createdAt, homeMode };
+}
+
+/** A TEAM profile entry: kind `team`, `isolated` house and the team link. It
+ *  never puts `team` on a profile that is not a team one. */
+export function createTeamProfileEntry(
+  id: string,
+  name: string,
+  createdAt: number,
+  team: ProfileTeam,
+  homeMode: ProviderHomeMode = "isolated",
+): ProfileEntry {
+  return { id, name: normalizeProfileName(name), kind: "team", createdAt, homeMode, team };
+}
+
+/** Local profile already linked to this team, if any. */
+export function profileForTeam(registry: ProfilesRegistry, teamId: string): ProfileEntry | null {
+  return registry.profiles.find((p) => p.team?.id === teamId) ?? null;
+}
+
+/**
+ * Local name for a team's profile, avoiding a name already in use: the team
+ * name, then "<name> (<slug>)" and finally a numeric suffix. What the person
+ * sees on the Home screen is unique — a profile is never overwritten because of
+ * a repeated name, and a different name is never invented silently.
+ */
+export function teamProfileName(registry: ProfilesRegistry, team: { name: string; slug: string }): string {
+  const taken = new Set(registry.profiles.map((p) => p.name.toLowerCase()));
+  const base = normalizeProfileName(team.name) || team.slug;
+  const candidates = [base, `${base} (${team.slug})`, `${base} (2)`, `${base} (3)`];
+  for (const candidate of candidates) {
+    const trimmed = candidate.slice(0, MAX_PROFILE_NAME_LENGTH);
+    if (isValidProfileName(trimmed) && !taken.has(trimmed.toLowerCase())) return trimmed;
+  }
+  return `${base} (${Date.now()})`.slice(0, MAX_PROFILE_NAME_LENGTH);
 }
 
 /**

@@ -17,6 +17,10 @@ import {
   formatAttachmentSize,
   type AttachmentKind,
 } from "./attachments";
+import {
+  UNCONFIRMED_ESCALATE_MS,
+  isProvisionalUnknown,
+} from "./composer-status-decision";
 import styles from "./GlobalComposer.module.css";
 
 /**
@@ -101,11 +105,18 @@ type Attachment = {
 
 // `queued` never reaches the UI as a final state — pollDelivery keeps
 // ticking until the FIFO resolves it one way or another (or gives up).
-type SendState = "idle" | "sending" | Exclude<BusDelivery, "queued" | "cancelled">;
+// `provisional` (2026-10-05) é o estado NEUTRO de um `unconfirmed`/`unknown`:
+// a barra trata a mensagem como enviada — sem alerta nem "tentar de novo" — e
+// só escala para `unconfirmed` (o alerta) se, depois de ~20 s, nenhum sinal
+// positivo nem atividade tiver sido lido (`composer-status-decision.ts`).
+type SendState = "idle" | "sending" | "provisional" | Exclude<BusDelivery, "queued" | "cancelled">;
 
 const STATUS_LABEL_KEYS: Record<Exclude<SendState, "idle">, MessageKey> = {
   sending: "composer.status.sending",
   delivered: "composer.status.delivered",
+  // Reusa a chave existente de sucesso: `unknown` é tratado como "enviado"
+  // enquanto não há evidência em contrário (catalogs.ts não é tocado aqui).
+  provisional: "composer.status.delivered",
   parked: "composer.status.parked",
   unconfirmed: "composer.status.unconfirmed",
   failed: "composer.status.failed",
@@ -114,6 +125,7 @@ const STATUS_LABEL_KEYS: Record<Exclude<SendState, "idle">, MessageKey> = {
 const STATUS_ICON: Record<Exclude<SendState, "idle">, IconName> = {
   sending: "spinner",
   delivered: "check",
+  provisional: "check",
   parked: "clock",
   unconfirmed: "warning",
   failed: "warning",
@@ -343,6 +355,43 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
     }, ttl);
   }, []);
 
+  const escalateTimerRef = useRef<number | undefined>(undefined);
+  /**
+   * A ESCALADA do estado neutro: um `unknown` fica NEUTRO ("enviado") por
+   * `UNCONFIRMED_ESCALATE_MS` e só vira alerta com "tentar de novo" se, passada
+   * a janela, a consulta ainda não virar `delivered` — a promoção barata do
+   * main (`shouldPromoteUnconfirmed`, fim de turno / trabalho novo depois da
+   * entrega) é o que faz a maioria resolver sozinha nesse intervalo. Sem isto, o
+   * `unknown` alarmava na hora e induzia o reenvio que duplicava a mensagem.
+   */
+  const scheduleUnconfirmedEscalation = useCallback(
+    (id: string, mySeq: number) => {
+      window.clearTimeout(escalateTimerRef.current);
+      escalateTimerRef.current = window.setTimeout(() => {
+        void (async () => {
+          if (sendSeqRef.current !== mySeq) return;
+          let latest: unknown = null;
+          try {
+            latest = await window.bus.getDelivery(id);
+          } catch (e) {
+            console.error(e); // consulta falhou ≠ entrega falhou: sem alarme a partir daqui.
+          }
+          if (sendSeqRef.current !== mySeq) return;
+          const settled = latest as { ok?: boolean; delivery?: string } | null;
+          if (settled?.ok && settled.delivery === "delivered") {
+            setSendState("delivered");
+            scheduleDismiss("delivered", mySeq);
+            return;
+          }
+          // Seguiu sem nenhum sinal positivo nem atividade: AÍ sim é alerta.
+          setSendState("unconfirmed");
+          setStatusDetail(describeDeliveryProblem(statusCardRef.current, deliveryConfirmResult(latest)));
+        })();
+      }, UNCONFIRMED_ESCALATE_MS);
+    },
+    [scheduleDismiss],
+  );
+
   // Só de olho por uma janela curta (~2.7s, a soma dos delays abaixo) — o
   // suficiente pro caso comum (card livre, confirma quase na hora) sem fingir
   // que "ainda não confirmou" é a mesma coisa que "deu errado".
@@ -373,6 +422,12 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
           if (res.delivery === "cancelled") {
             setSendState("idle");
             setStatusDetail(null);
+          } else if (isProvisionalUnknown(res.delivery, deliveryConfirmResult(res))) {
+            // `unknown`: NEUTRO agora (trata como enviada, sem "tentar de novo");
+            // só escala a alerta se a janela vencer sem nenhum sinal.
+            setSendState("provisional");
+            setStatusDetail(null);
+            scheduleUnconfirmedEscalation(id, mySeq);
           } else {
             setSendState(res.delivery);
             // O motivo real só existe no ponto em que o laço fechou o veredito —
@@ -396,7 +451,7 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
       };
       tick();
     },
-    [scheduleDismiss],
+    [scheduleDismiss, scheduleUnconfirmedEscalation],
   );
 
   /**
@@ -612,6 +667,9 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
         pollDelivery(res.id, mySeq);
       } else if (res.delivery === "cancelled") {
         setSendState("idle");
+      } else if (isProvisionalUnknown(res.delivery, deliveryConfirmResult(res))) {
+        setSendState("provisional");
+        scheduleUnconfirmedEscalation(res.id, mySeq);
       } else {
         setSendState(res.delivery);
         scheduleDismiss(res.delivery, mySeq);
@@ -624,18 +682,25 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
         scheduleDismiss("failed", mySeq);
       }
     }
-  }, [targetId, targetLabel, text, sendState, attachments, targetKind, targetProvider, pollDelivery, scheduleDismiss]);
+  }, [targetId, targetLabel, text, sendState, attachments, targetKind, targetProvider, pollDelivery, scheduleDismiss, scheduleUnconfirmedEscalation]);
 
   // Clique na pílula dispensa na hora — é o RECONHECIMENTO do usuário, o único
   // caminho (além da próxima tentativa) que tira da tela uma falha persistente.
   const dismissStatus = useCallback(() => {
     window.clearTimeout(dismissTimerRef.current);
+    window.clearTimeout(escalateTimerRef.current);
     ++sendSeqRef.current;
     setStatusDetail(null);
     setSendState("idle");
   }, []);
 
-  useEffect(() => () => window.clearTimeout(dismissTimerRef.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(dismissTimerRef.current);
+      window.clearTimeout(escalateTimerRef.current);
+    },
+    [],
+  );
 
   /** O que falta para poder ditar — a mensagem inteira, com o caminho e (no
    * caso do modelo) o comando exato. É o que o botão DIZ em vez de não
@@ -863,6 +928,7 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
           <textarea
             ref={textareaRef}
             className={styles.textarea}
+            data-role="composer-input"
             rows={1}
             value={text}
             onChange={(e) => {
@@ -893,8 +959,14 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
           />
         </div>
 
-        <div className={styles.toolbar}>
-          <button ref={targetBtnRef} type="button" className={styles.targetBtn} onClick={() => setPickerOpen((o) => !o)}>
+        <div className={styles.toolbar} data-role="composer-toolbar">
+          <button
+            ref={targetBtnRef}
+            type="button"
+            className={styles.targetBtn}
+            data-role="composer-target"
+            onClick={() => setPickerOpen((o) => !o)}
+          >
             {target ? <Icon name={cardIcon(target)} size={13} color={cardColor(target)} /> : <Icon name="findCard" size={13} />}
             <span className={styles.targetLabel}>{target ? target.label || target.id.slice(0, 6) : t("composer.target")}</span>
             <Icon name="chevronDown" size={11} />
@@ -915,6 +987,7 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
                   key={c.id}
                   type="button"
                   className={`${styles.targetRow} ${c.id === targetId ? styles.active : ""}`}
+                  data-card-id={c.id}
                   onClick={() => {
                     setTargetId(c.id);
                     setPickerOpen(false);
@@ -933,12 +1006,15 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
               className={`${styles.status} ${styles[sendState]}`}
               data-role="composer-status"
               onClick={dismissStatus}
-              title={t("composer.status.dismiss")}
+              // A pílula TRUNCA (a linha de controles tem de caber SEMPRE dentro
+              // do bloco — microfone e enviar nunca saem da borda). O texto
+              // inteiro fica no tooltip, junto do que o clique faz.
+              title={`${statusDetail !== null ? `${t(STATUS_LABEL_KEYS[sendState])} · ${statusDetail}` : t(STATUS_LABEL_KEYS[sendState])} — ${t("composer.status.dismiss")}`}
             >
               <span className={sendState === "sending" ? styles.spin : undefined}>
                 <Icon name={STATUS_ICON[sendState]} size={12} />
               </span>
-              {t(STATUS_LABEL_KEYS[sendState])}
+              <span className={styles.statusLabel}>{t(STATUS_LABEL_KEYS[sendState])}</span>
               {statusDetail !== null && <span className={styles.statusDetail}>· {statusDetail}</span>}
             </button>
           )}

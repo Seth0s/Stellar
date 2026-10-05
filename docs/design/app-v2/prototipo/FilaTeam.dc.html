@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — task do time na Fila</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.ghost{height:30px;padding:0 10px;border-radius:7px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:12px;cursor:pointer}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:30px;padding:0 12px;border-radius:7px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.ph{font-size:10.5px;font-weight:600;letter-spacing:.03em;border-radius:5px;padding:2px 7px}
+.term{position:absolute;display:flex;flex-direction:column;border-radius:12px;background:#0f1117;border:1px solid #232838;overflow:hidden}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Idyplatform</span>
+    <span style="font-size: 12px; color: #8d94a6">· Idy Platform</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; position: relative; overflow: hidden; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.06) 1px, transparent 0); background-size: 22px 22px">
+    <div class="term" style="left: 470px; top: 60px; width: 420px; height: 300px">
+      <div style="height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #1d2130; font-size: 12px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ff8c3d"></span>claude · orquestrador</div>
+      <div style="flex: 1; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; color: #8d94a6">› lendo a Fila: 1 task nova do time<br>› contrato: território src/queue/**<br>› gate: npm test</div>
+    </div>
+    <div class="term" style="left: 470px; top: 390px; width: 420px; height: 240px; opacity: .7">
+      <div style="height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #1d2130; font-size: 12px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #e56aa6"></span>command code · implementador</div>
+      <div style="flex: 1; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8d94a6">aguardando</div>
+    </div>
+
+    <section aria-label="Fila" style="position: absolute; left: 40px; top: 40px; width: 380px; display: flex; flex-direction: column; border-radius: 14px; background: #10131a; border: 1px solid #2a3042; box-shadow: 0 20px 50px rgba(0,0,0,.45)">
+      <div style="height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid #1d2130">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#a9b8ff" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"></path></svg>
+        <span style="font-size: 13px; font-weight: 600; flex: 1">Fila</span>
+        <span style="font-size: 11px; color: #f2c96a">1 aguardando revisão</span>
+      </div>
+
+      <div style="padding: 12px 14px 6px; display: flex; align-items: center; gap: 8px">
+        <span style="width: 18px; height: 18px; border-radius: 5px; background: #123a35; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #8ee6d8">I</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8ee6d8">DO TIME · IDY PLATFORM</span>
+      </div>
+      <div style="margin: 0 10px 10px; padding: 12px; border-radius: 10px; background: #141a2a; border: 1px solid #3a4a8a; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="ph" style="background: #1b2546; color: #b9c4ff">PRONTA</span><span style="font-size: 11.5px; color: #8d94a6">atribuída por Ana · agora</span></div>
+        <span style="font-size: 13.5px; font-weight: 600; line-height: 1.35">Fila de retries com backoff em 429</span>
+        <span style="font-size: 12px; color: #a3aabb">src/queue/** · npm test · revisão da Ana</span>
+        <div style="display: flex; gap: 8px; padding-top: 2px">
+          <button class="ghost">Ver contrato</button>
+          <button class="primary">Despachar para um agente</button>
+        </div>
+      </div>
+
+      <div style="padding: 6px 14px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8d94a6">DESTE BOARD</div>
+      <div style="display: flex; flex-direction: column; padding: 0 10px 12px; gap: 2px">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 6px; font-size: 12.5px"><span class="ph" style="background: #3a2f12; color: #f2c96a">REVISÃO</span><span style="flex: 1">Lista de membros com papéis</span><span style="font-size: 10.5px; color: #8ee6d8">time</span></div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 6px; font-size: 12.5px"><span class="ph" style="background: #2b1c10; color: #ffa86b">RODANDO</span><span style="flex: 1">Testes do convite por login</span><span style="font-size: 10.5px; color: #8ee6d8">time</span></div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 6px; font-size: 12.5px; color: #a3aabb"><span class="ph" style="background: #1b1f2b; color: #a3aabb">DEPS</span><span style="flex: 1">Ajustar tradução do e-mail</span></div>
+      </div>
+    </section>
+
+    <div style="position: absolute; right: 40px; bottom: 40px; width: 360px; display: flex; gap: 12px; padding: 14px 16px; border-radius: 12px; background: #141a2a; border: 1px solid #3a4a8a; box-shadow: 0 20px 50px rgba(0,0,0,.45)" role="status">
+      <span style="width: 30px; height: 30px; flex: none; border-radius: 8px; background: #123a35; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #8ee6d8">I</span>
+      <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 13px; font-weight: 600">Ana atribuiu uma task a você</span><span style="font-size: 12px; line-height: 1.45; color: #a3aabb">Entrou na Fila deste board. O status volta para o board do time sozinho.</span></span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

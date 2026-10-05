@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
-export type Toast = { id: number; msg: string };
+export type ToastAction = { label: string; onClick: () => void };
+export type Toast = { id: number; msg: string; action?: ToastAction };
 
 let toasts: Toast[] = [];
 let nextId = 1;
@@ -10,10 +11,10 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-/** Fire-and-forget toast, auto-dismissed after 2400ms — module-level state so any component can call it without prop-drilling a setter. */
-export function toast(msg: string) {
+/** Fire-and-forget toast, auto-dismissed after 2400ms — module-level state so any component can call it without prop-drilling a setter. An optional `action` turns the toast into a shortcut (one labelled button) instead of a dead message. */
+export function toast(msg: string, action?: ToastAction) {
   const id = nextId++;
-  toasts = [...toasts, { id, msg }];
+  toasts = [...toasts, action ? { id, msg, action } : { id, msg }];
   emit();
   setTimeout(() => {
     toasts = toasts.filter((t) => t.id !== id);

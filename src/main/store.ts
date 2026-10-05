@@ -377,6 +377,12 @@ export type TaskRow = {
   requested_reason?: string | null;
   requested_by?: string | null;
   requested_at?: number | null;
+  /** Id of the task that REPLACED this one, when `status = 'superseded'`.
+   * Required in that status (the write is refused without it) and the target
+   * must be a task of the SAME board. `null` in every other status: absence
+   * is the normal case, never an invented target. See
+   * `task-supersede-decision.ts`. */
+  superseded_by?: string | null;
   /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — exatamente UM sprint
    * vivo por vez. Histórico de sprints fechados vive na tabela `sprints`
    * (snapshot congelado), nunca reconsultando status vivo. `null`/ausente
@@ -653,6 +659,9 @@ export type SprintSnapshotTask = {
   implicit_order: number | null;
   created_at: number;
   updated_at: number;
+  /** The substitution target survives the freeze so the frozen board can
+   * render the clickable "superseded by #Y" chip. */
+  superseded_by?: string | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "Historico de sprints — fechamento EXPLICITO".
@@ -1089,6 +1098,13 @@ function migrate(db: Database.Database) {
     } catch (e) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
+  }
+  // The substitution target. Nullable, no backfill: NULL means "not a
+  // superseded task", never an invented target.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN superseded_by TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
   }
   try {
     db.exec(`ALTER TABLE reports ADD COLUMN verdict TEXT`);
@@ -2048,7 +2064,7 @@ export function openStore(userDataDir: string) {
   // reviewer-em-done. Não inventar lock que só cobre um processo.
   const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, superseded_by, sprint_id, created_at, updated_at`;
   // PERF (task c9db1d86, medido na 41813ab3 seq 447) — a listagem que
   // alimenta `list_tasks` com `view:"summary"` pagava o SELECT inteiro e
   // só descartava `prompt`/`result_json` no fim (`projectListedTask`), ou
@@ -2140,8 +2156,8 @@ export function openStore(userDataDir: string) {
   // see TaskRow.purpose. `review` IS on ON CONFLICT (mutable) — risk
   // can escalate mid-flight; see TaskRow.review.
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @review, @territory_json, @gates_json, @allow_commit, @report_schema_json, @spawn_profile, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, superseded_by, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @review, @territory_json, @gates_json, @allow_commit, @report_schema_json, @spawn_profile, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @superseded_by, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
@@ -2155,6 +2171,7 @@ export function openStore(userDataDir: string) {
       diverged_status = excluded.diverged_status, diverged_actor = excluded.diverged_actor,
       requested_status = excluded.requested_status, requested_reason = excluded.requested_reason,
       requested_by = excluded.requested_by, requested_at = excluded.requested_at,
+      superseded_by = excluded.superseded_by,
       sprint_id = excluded.sprint_id, updated_at = excluded.updated_at
   `);
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
@@ -2228,7 +2245,7 @@ export function openStore(userDataDir: string) {
      ORDER BY number DESC, started_at DESC LIMIT 1`,
   );
   const tasksForSprintStmt = db.prepare(
-    `SELECT id, prompt, status, card_id, result_json, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
+    `SELECT id, prompt, status, card_id, result_json, "order", suggested_order, implicit_order, created_at, updated_at, superseded_by FROM tasks WHERE sprint_id = ?`,
   );
   const getBoardExistsStmt = db.prepare(`SELECT id FROM boards WHERE id = ?`);
 
@@ -2288,6 +2305,7 @@ export function openStore(userDataDir: string) {
       implicit_order: number | null;
       created_at: number;
       updated_at: number;
+      superseded_by: string | null;
     }[];
     if (members.length === 0) {
       throw Object.assign(new Error(`sprint ${active.number} is empty — add tasks before closing`), {
@@ -2313,6 +2331,7 @@ export function openStore(userDataDir: string) {
       implicit_order: m.implicit_order,
       created_at: m.created_at,
       updated_at: m.updated_at,
+      superseded_by: m.superseded_by ?? null,
     }));
     const snapshotJson = JSON.stringify(snapshot);
     freezeSprintStmt.run({
@@ -2534,6 +2553,11 @@ export function openStore(userDataDir: string) {
       requested_reason: ask.requestedReason,
       requested_by: ask.requestedBy,
       requested_at: ask.requestedAt,
+      // `superseded_by` is written explicitly on every write (the named
+      // statement requires the parameter). A caller that re-passes the row
+      // (`...existing`) keeps the target; a write without the field preserves
+      // the existing value instead of clearing it silently.
+      superseded_by: rest.superseded_by !== undefined ? rest.superseded_by : (existing?.superseded_by ?? null),
       sprint_id: sprintId,
     };
     upsertTaskStmt.run(persistable);
@@ -2774,9 +2798,9 @@ export function openStore(userDataDir: string) {
       AND CASE
         WHEN tc.linked_at IS NOT NULL AND c.created_at IS NOT NULL
           THEN tc.linked_at >= c.created_at
-        ELSE t.status NOT IN ('done', 'failed')
+        ELSE t.status NOT IN ('done', 'failed', 'superseded')
       END
-      AND (t.status NOT IN ('done', 'failed') OR tc.role = 'reviewer')
+      AND (t.status NOT IN ('done', 'failed', 'superseded') OR tc.role = 'reviewer')
     ORDER BY tc.linked_at ASC, tc.rowid ASC
   `);
   /** Full card-side history (including terminal tasks). Diagnostics and
@@ -2912,6 +2936,36 @@ export function openStore(userDataDir: string) {
         statusHeld,
         declaredStatus,
       };
+    },
+  );
+
+  /**
+   * Releases EVERY live link of a task (reserved and active) and clears the
+   * principal pointer, WITHOUT touching the status. Different from
+   * `releaseTaskCardFromTask`, which returns the task to `pending` when no
+   * implementer is left: here the task has just become `superseded`, and a
+   * `pending` from the funnel would un-supersede it. One transaction: either
+   * every link goes or none. Reservations and territory fall together because
+   * active territory is read from "an implementer is EXECUTING"
+   * (`hasExecutingImplementer`).
+   */
+  const releaseAllLinksStmt = db.prepare(
+    "UPDATE task_cards SET released_at = @released_at, released_reason = @released_reason, released_by = @released_by WHERE task_id = @task_id AND released_at IS NULL",
+  );
+  const clearTaskPrincipalIfReleasedStmt = db.prepare(
+    "UPDATE tasks SET card_id = NULL, updated_at = @updated_at WHERE id = @id",
+  );
+  const releaseAllImplementerLinks = db.transaction(
+    (input: { taskId: string; reason: string; releasedBy: string | null }): number => {
+      const at = Date.now();
+      const changed = releaseAllLinksStmt.run({
+        task_id: input.taskId,
+        released_at: at,
+        released_reason: input.reason,
+        released_by: input.releasedBy,
+      }).changes;
+      clearTaskPrincipalIfReleasedStmt.run({ id: input.taskId, updated_at: at });
+      return changed;
     },
   );
 
@@ -3721,6 +3775,10 @@ export function openStore(userDataDir: string) {
         requested_resume_id: profile?.requestedResumeId ?? null,
         session_id: profile?.sessionId ?? null,
       }),
+    /** Releases EVERY live link (reserved and active) of the task and clears
+     * `tasks.card_id`, without touching the status. See the transaction above. */
+    releaseAllImplementerLinks: (taskId: string, reason: string, releasedBy: string | null): number =>
+      releaseAllImplementerLinks({ taskId, reason, releasedBy }),
     /**
      * RESERVA (task 377a6029): cria/atualiza o vínculo implementer como
      * RESERVADO — nada é entregue. `reserved_order` = fim da fila deste card.

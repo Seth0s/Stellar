@@ -4,10 +4,10 @@ import { cardHasReviewer, normalizeTaskPurpose, type TaskPurpose } from "../../t
 // dependência nenhuma — o renderer não reimplementa a leitura do passado.
 // `import type` some no build; a função é uma linha pura e compartilhada.
 import { isRoundAttributableToTask, type TaskVerdictReadRule } from "../../main/task-verdict-read-decision";
-// A regra da FASE é UMA só, no main (`task-phase-decision.ts`) — o renderer não
-// reimplementa a precedência; monta os FATOS que o preview do board já carrega
-// e delega. Mesmo padrão do import de `task-verdict-read-decision` acima.
-import { deriveTaskPhase, type TaskPhase, type TaskPhaseFacts } from "../../main/task-phase-decision";
+// The phase is decided in the main process (`task-phase-decision.ts`); the
+// renderer only reads the `phase` carried by the board payload — it neither
+// reimplements the precedence nor assembles partial facts here.
+import { deriveBoardTaskPhase, type TaskPhase } from "../../main/task-phase-decision";
 
 export type { TaskPurpose };
 export type { TaskPhase };
@@ -33,15 +33,16 @@ export type { TaskPhase };
  * escondê-la apagaria exatamente as tasks que um humano mais precisa ver.
  * Decisão 3 — "review é ETAPA, não coluna": uma task em review continua
  * `doing`, ver `deriveStage` mais abaixo. */
-export type TaskColumn = "todo" | "doing" | "done" | "failed";
+export type TaskColumn = "todo" | "doing" | "done" | "failed" | "superseded";
 
-export const COLUMN_ORDER: readonly TaskColumn[] = ["todo", "doing", "done", "failed"];
+export const COLUMN_ORDER: readonly TaskColumn[] = ["todo", "doing", "done", "failed", "superseded"];
 
 export const COLUMN_TITLE: Record<TaskColumn, string> = {
   todo: "a fazer",
   doing: "em andamento",
   done: "concluído",
   failed: "falhou",
+  superseded: "substituída",
 };
 
 const COLUMN_I18N: Record<TaskColumn, MessageKey> = {
@@ -49,6 +50,7 @@ const COLUMN_I18N: Record<TaskColumn, MessageKey> = {
   doing: "task.column.doing",
   done: "task.column.done",
   failed: "task.column.failed",
+  superseded: "task.column.superseded",
 };
 
 const STATUS_TO_COLUMN: Record<string, TaskColumn> = {
@@ -56,6 +58,9 @@ const STATUS_TO_COLUMN: Record<string, TaskColumn> = {
   running: "doing",
   done: "done",
   failed: "failed",
+  // A dedicated column, never the failure one: the task was swapped for
+  // another; nobody executed it wrong.
+  superseded: "superseded",
   // Task 22f0a649 — `blocked` é uma task ATIVA esperando uma decisão do dono,
   // não uma task que não começou: fica em "em andamento" com chip e bloco de
   // pergunta próprios (um status que cai em "a fazer" pareceria não-iniciada).
@@ -126,7 +131,7 @@ export function columnForTask(task: { status: string; cardAlive?: boolean }): Ta
 }
 
 export function groupTasksByColumn<T extends TaskOrderable & { status: string; cardAlive?: boolean }>(tasks: readonly T[]): Record<TaskColumn, T[]> {
-  const groups: Record<TaskColumn, T[]> = { todo: [], doing: [], done: [], failed: [] };
+  const groups: Record<TaskColumn, T[]> = { todo: [], doing: [], done: [], failed: [], superseded: [] };
   for (const t of tasks) groups[columnForTask(t)].push(t);
   for (const col of COLUMN_ORDER) groups[col].sort(compareTasks);
   return groups;
@@ -458,7 +463,9 @@ export type WaitingOn = { depId: string; status: string | undefined };
 export function waitingOnDep(deps: readonly string[], depStatuses: Readonly<Record<string, string>>): WaitingOn | null {
   for (const depId of deps) {
     const status = depStatuses[depId];
-    if (status !== "done") return { depId, status };
+    // `superseded` does NOT block: the dep was replaced by another one
+    // (the orchestrator is notified to swap the edge) — `isDependencySettled`.
+    if (status !== "done" && status !== "superseded") return { depId, status };
   }
   return null;
 }
@@ -673,7 +680,7 @@ export function roundsBarTone(rounds: number): "expensive" | "cheap" {
  * fallback de `columnForStatus` pra um status externo/estranho é só de
  * LEITURA, uma coluna nunca recebe esse status de volta ao ser arrastada
  * pra ela). */
-export const COLUMN_TO_STATUS: Record<TaskColumn, string> = { todo: "pending", doing: "running", done: "done", failed: "failed" };
+export const COLUMN_TO_STATUS: Record<TaskColumn, string> = { todo: "pending", doing: "running", done: "done", failed: "failed", superseded: "superseded" };
 
 /** Espaço deixado entre a sort key do vizinho e o novo valor quando não há
  * vizinho de um dos lados (ponta da coluna) — dá folga pra inserções
@@ -820,7 +827,7 @@ export function computeColumnDrop<T extends TaskOrderable & { id: string }>(
  * `status === "running"`, que só era verdade porque o main process fundia
  * liveness dentro de `status`; agora a pergunta é feita ao fato certo. */
 export function isTaskCardLive(status: string, cardAlive: boolean): boolean {
-  return cardAlive && status !== "done" && status !== "failed";
+  return cardAlive && status !== "done" && status !== "failed" && status !== "superseded";
 }
 
 /** Pílulas de meta (delta 5 + rodada 4) — a cor é que carrega o
@@ -1065,43 +1072,23 @@ export function describeSprintCounts(s: Pick<SprintView, "countTodo" | "countDoi
 }
 
 /**
- * FASE DERIVADA NA FILA (task 6266d3e7). O board JÁ carrega a maior parte dos
- * fatos; a fase é montada aqui e decidida pela MESMA função do main
- * (`deriveTaskPhase`), nunca por uma segunda regra. DUAS APROXIMAÇÕES
- * declaradas, porque o push do board NÃO carrega a reserva nem o instante da
- * entrega:
- *  - `hasReservedCard` fica `false` — o payload não tem `reservation_state`
- *    (a reserva vive na gaveta, que é outra leitura). Uma taskreservada
- *    aparece como `ready`, nunca como `reserved` inventado;
- *  - `implementerReportedSinceLastDelivery` é `report !== null` — há um
- *    relatório do card principal; sem o carimbo da última entrega, não dá para
- *    dizer se ele é DESTA entrega (documentado, não escondido).
- * Defeito nunca é mascarado: nos dois casos o resultado é a leitura HONESTA
- * possível com os fatos presentes.
+ * The board payload carries `phase` per task, decided in the main process by
+ * `deriveTaskPhase` from facts the renderer does not hold: the reserved link
+ * (`reservation_state`) and the instant of the last work grant. The renderer
+ * only reads it; it never assembles partial facts into a phase of its own.
  */
 export type BoardPhaseInput = {
-  status: string;
-  deps: readonly string[];
-  depStatuses: Readonly<Record<string, string>>;
-  cardAlive: boolean;
-  report: { verdict: string | null } | null;
-  verdicts: readonly { verdict: string | null }[];
+  /** Structural anchor: a `TaskBoardItem` has `status`, so a board item is
+   * assignable to this type (a type of only optional properties is weak and
+   * TypeScript rejects an object with no property in common). Not read. */
+  status?: string;
+  phase?: TaskPhase | null;
 };
 
-export function phaseFactsFromBoardItem(task: BoardPhaseInput): TaskPhaseFacts {
-  const lastVerdict = task.verdicts.length > 0 ? task.verdicts[task.verdicts.length - 1]!.verdict : null;
-  return {
-    status: task.status,
-    deps: task.deps.map((id) => ({ status: task.depStatuses[id] ?? null })),
-    hasActiveImplementer: task.cardAlive,
-    hasReservedCard: false,
-    implementerReportedSinceLastDelivery: task.report !== null,
-    reviewerChangesRequested: lastVerdict === "reprovado",
-  };
-}
-
 export function deriveTaskPhaseForBoardItem(task: BoardPhaseInput): TaskPhase {
-  return deriveTaskPhase(phaseFactsFromBoardItem(task));
+  // "ready" is `deriveTaskPhase`'s own no-signal value, used when a payload
+  // predates the field — never a second rule decided here.
+  return task.phase ?? "ready";
 }
 
 /** Chave i18n do chip, uma por fase (as chaves já existem em catalogs.ts). */
@@ -1114,6 +1101,7 @@ export const PHASE_LABEL_KEY: Record<TaskPhase, MessageKey> = {
   changes_requested: "task.phase.changes_requested",
   done: "task.phase.done",
   failed: "task.phase.failed",
+  superseded: "task.phase.superseded",
 };
 
 /** Tom do chip — o significado mora na COR (mesma convenção das pílulas de
@@ -1130,7 +1118,17 @@ export const PHASE_TONE: Record<TaskPhase, PhaseTone> = {
   changes_requested: "danger",
   done: "good",
   failed: "danger",
+  // Superseded is NEUTRAL, never red: nobody failed.
+  superseded: "muted",
 };
+
+/** The "superseded by #Y" chip — clickable to the substitute. `null` when
+ * there is no target (never invented): the TaskCard falls back to the plain
+ * phase chip, without a link. */
+export function describeSupersededChip(supersededBy: string | null | undefined): string | null {
+  if (!supersededBy) return null;
+  return t("task.superseded.chip", { id: shortTaskId(supersededBy) });
+}
 
 /** Filtro rápido da Fila — "aguardando revisão". Devolve SÓ as tasks nessa
  * fase quando `active`; a lista inteira quando não. Nunca uma cópia parcial
@@ -1189,6 +1187,8 @@ export function snapshotTaskToBoardItem(
     implicitOrder: number | null;
     createdAt: number;
     updatedAt: number;
+    /** The substitution target frozen in the snapshot; `null` when absent. */
+    supersededBy?: string | null;
   },
   boardId: string,
 ): {
@@ -1213,6 +1213,7 @@ export function snapshotTaskToBoardItem(
   review: null;
   depPurposes: Record<string, TaskPurpose | null>;
   cardAlive: false;
+  phase: TaskPhase;
   statusTransitions: [];
   divergedStatus: null;
   divergedActor: null;
@@ -1220,12 +1221,17 @@ export function snapshotTaskToBoardItem(
   requestedReason: null;
   requestedBy: null;
   requestedAt: null;
+  supersededBy: string | null;
   /** O snapshot de sprint não carrega a pergunta (não é o push vivo) — `null`
    * é a ausência honesta, nunca uma pergunta inventada. */
   blockedQuestion: null;
   verdicts: [];
   firstActor: null;
   interruptionReason: null;
+  /** The sprint snapshot carries neither a measured gate nor live progress —
+   * `null` is the honest absence (the Fila simply does not draw the chip). */
+  gateRun: null;
+  gateProgress: null;
 } {
   return {
     id: t.id,
@@ -1249,6 +1255,14 @@ export function snapshotTaskToBoardItem(
     review: null,
     depPurposes: {},
     cardAlive: false,
+    phase: deriveBoardTaskPhase({
+      status: t.status,
+      depStatuses: [],
+      liveImplementers: [],
+      implementerReportAt: null,
+      implementerWorkGrantedAt: null,
+      reviewerChangesRequested: false,
+    }),
     statusTransitions: [],
     divergedStatus: null,
     divergedActor: null,
@@ -1256,9 +1270,12 @@ export function snapshotTaskToBoardItem(
     requestedReason: null,
     requestedBy: null,
     requestedAt: null,
+    supersededBy: t.supersededBy ?? null,
     blockedQuestion: null,
     verdicts: [],
     firstActor: null,
     interruptionReason: null,
+    gateRun: null,
+    gateProgress: null,
   };
 }

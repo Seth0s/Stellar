@@ -9,6 +9,7 @@ import styles from "./BrowserCard.module.css";
 import { matchesShortcut } from "./shortcut-config";
 import type { ShortcutOverrides } from "./shortcut-registry";
 import { sendDesignPick, type DesignPick } from "./design-pick-send";
+import { decideBrowserUrlCommit, URL_PERSIST_DEBOUNCE_MS } from "../../main/browser-url-persist-decision";
 
 // DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
 // devices CentralByte's own presets target. "Fluido" (free resize) has
@@ -223,6 +224,7 @@ function BrowserCardInner({
   isFocused,
   url,
   ownerCardId,
+  onUrlCommit,
   interactionMode,
   selected,
   reflowing,
@@ -252,6 +254,9 @@ function BrowserCardInner({
   isFocused: boolean;
   url: string;
   ownerCardId: string | null;
+  /** Writes the card's CURRENT url back (debounced), so a background
+   * unload/reload returns to where the user was. Omitted in isolation tests. */
+  onUrlCommit?: (url: string) => void;
   /** Pendentes #188 — Design Mode: outros cards de TERMINAL no mesmo
    * board, pra escolher o alvo de "Enviar" no popover de elemento
    * escolhido. Vem de `cards` (já em escopo no `App.tsx` — mesmo array
@@ -296,6 +301,7 @@ function BrowserCardInner({
   renderCounts[id] = (renderCounts[id] ?? 0) + 1;
 
   const [bar, setBar] = useState(url);
+  const lastCommittedUrlRef = useRef(url);
   const createdRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastSizeRef = useRef({ w: 0, h: 0 });
@@ -522,6 +528,19 @@ function BrowserCardInner({
       offNav();
     };
   }, [id]);
+
+  // Persist the CURRENT url (debounced) so a background unload/reload reattaches
+  // to where the user was, not the creation url. The initial value is not a
+  // change, so `decideBrowserUrlCommit` skips it.
+  useEffect(() => {
+    if (!onUrlCommit) return;
+    if (!decideBrowserUrlCommit({ url: bar, lastCommitted: lastCommittedUrlRef.current })) return;
+    const timer = setTimeout(() => {
+      lastCommittedUrlRef.current = bar;
+      onUrlCommit(bar);
+    }, URL_PERSIST_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [bar, onUrlCommit]);
 
   // Pendentes #188 — menu de contexto nativo do Chromium embutido. O
   // botão direito real já chega na página via `onCanvasPointerDown`'s

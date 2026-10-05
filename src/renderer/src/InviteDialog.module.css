@@ -1,0 +1,149 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--v2-bg) 72%, transparent);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--v2-s18);
+  box-sizing: border-box;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s11);
+  padding: var(--v2-s16);
+  border-radius: var(--v2-r18);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-strong);
+  box-shadow: var(--shadow-float);
+  color: var(--v2-text);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s7);
+}
+
+.avatar {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: var(--v2-r14);
+  background: var(--v2-team-bg);
+  display: grid;
+  place-items: center;
+  font-size: var(--v2-f22);
+  font-weight: 700;
+  color: var(--v2-team-fg);
+}
+
+.headText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+}
+
+.inviter {
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-3);
+}
+
+.teamName {
+  margin: 0;
+  font-size: var(--v2-f22);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.role {
+  font-size: var(--v2-f11h);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--v2-accent-soft2);
+  background: var(--v2-accent-bg2);
+  border-radius: var(--v2-r6);
+  padding: var(--v2-s2) var(--v2-s4);
+}
+
+.benefits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s4);
+  font-size: var(--v2-f13h);
+  line-height: 1.5;
+  color: var(--v2-text-3);
+}
+
+.benefit {
+  display: flex;
+  gap: var(--v2-s5);
+}
+
+.benefitIcon {
+  flex: none;
+  margin-top: var(--v2-s1);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+  padding-top: var(--v2-s3);
+}
+
+.grow {
+  flex: 1;
+}
+
+.ghostBtn {
+  height: 42px;
+  padding: 0 var(--v2-s8);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: var(--v2-f14);
+  cursor: pointer;
+}
+
+.ghostBtn:hover {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-bright);
+}
+
+.primaryBtn {
+  height: 42px;
+  padding: 0 var(--v2-s9);
+  border-radius: var(--v2-r10);
+  border: 0;
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font: inherit;
+  font-size: var(--v2-f14);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primaryBtn:hover {
+  background: var(--v2-primary-hover);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  font-size: var(--v2-f12h);
+  color: var(--v2-warn);
+}

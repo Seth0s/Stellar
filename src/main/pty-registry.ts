@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
-import { resolveSpawn, providerInstallCommand, providerById, shouldImposeSessionId, type SpawnOpts } from "./providers";
+import { resolveSpawn, providerInstallCommand, providerById, providerTrustPrompt, shouldImposeSessionId, type SpawnOpts } from "./providers";
+import { feedTurnEndChunk } from "../shared/turn-end-signal";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, spawnWatchReservation, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
+import { decideTrustPromptAction, describeTrustPromptOutsideRootWarning } from "./spawn-trust-prompt-decision";
+import { isPathInsideRoot } from "./task-dispatch-decision";
 import {
   IMPOSITION_GRACE_MS,
   applyImpositionVerification,
@@ -13,7 +16,16 @@ import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-dec
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
 import { decideCardIdentityEnv } from "./card-spawn-env-decision";
+import { isIdentityEnvKey } from "./pty-env";
 import { agentProcessName } from "./process-name-decision";
+import {
+  appendScrollback,
+  createScrollback,
+  readScrollback,
+  resolveScrollbackMaxBytes,
+  trimLeadingPartialEscape,
+  type ScrollbackState,
+} from "./session-scrollback";
 import {
   renewsHumanInputGateClock,
   initialBracketedPasteModeState,
@@ -291,21 +303,22 @@ export function describeQuotaDeath(evidence: QuotaDeathEvidence): string {
  *   deste par de arquivos. Por isso a rota escolhida é reconhecimento +
  *   sinalização (o card fica "waiting", não "morto"), não bypass.
  */
-const TRUST_DIALOG_WATCHED_PROVIDERS = new Set(["claude"]);
-const TRUST_DIALOG_PATTERN =
-  /Quick safety check: Is this a project you created or one you trust\?/;
 /** Teto da janela que atravessa fronteira de flush — maior que o padrão
  * inteiro (~70 chars) para cobrir uma quebra no pior caso, pequeno o
  * bastante para nunca, sozinho, conter o padrão duas vezes e mascarar uma
  * resolução real como se o diálogo ainda estivesse na tela. */
 const TRUST_DIALOG_SCAN_CARRY_MAX = 128;
 const TRUST_DIALOG_EXCERPT_MAX = 220;
+/** Cap of the retained ANSI-stripped output tail read by the main process. */
+const RECENT_OUTPUT_MAX = 8_000;
 
-/** Reconhece o prompt de confiança no texto (ANSI-stripped). Puro;
- * provider-aware — hoje só `claude` tem esse diálogo específico medido. */
+/** Recognizes a provider's declared trust prompt in the text (ANSI-stripped).
+ * Pure; the pattern comes from the provider declaration, so a provider that
+ * declares no dialog is never watched. */
 export function detectTrustPrompt(providerId: string, text: string): { excerpt: string } | null {
-  if (!TRUST_DIALOG_WATCHED_PROVIDERS.has(providerId)) return null;
-  const m = TRUST_DIALOG_PATTERN.exec(text);
+  const decl = providerTrustPrompt(providerId);
+  if (!decl) return null;
+  const m = decl.pattern.exec(text);
   if (!m) return null;
   return { excerpt: excerptAround(text, m.index, m[0].length).slice(0, TRUST_DIALOG_EXCERPT_MAX) };
 }
@@ -511,6 +524,14 @@ type Entry = {
    * `turn_complete` (`index.ts`) — o mesmo sinal que antes ia só para o
    * renderer, sem nenhum estado no main. */
   turnEndedAt: number | null;
+  /** Screen turn-end pattern declared by the provider
+   *  (`capacity.delivery.turnEnd`, mechanism "screen"), compiled once at spawn
+   *  so the flush path does not re-resolve the provider; null when the provider
+   *  declares none. */
+  turnEndPattern: RegExp | null;
+  /** Tail from the previous flush, kept so a turn-end marker split across
+   *  chunks is still matched; cleared when the marker matches. */
+  turnEndCarry: string;
   /** RODADA 7 (2026-09-10), achado 1 — o piso ATUAL de scan, mutável
    * (ao contrário do que a RODADA 6 assumiu — ver o histórico abaixo).
    * Setado a `Date.now()` na criação da entry. `rearmSessionWatch` é o
@@ -592,6 +613,21 @@ type Entry = {
    * sinal precisa poder DESAPARECER quando o diálogo é respondido, não
    * só aparecer uma vez. */
   trustScanCarry: string;
+  /** ANSI-stripped running tail of everything the card produced, bounded. It
+   * lets the main process inspect a turn's own output (a report written to the
+   * screen instead of the tool) without a renderer round-trip. */
+  recentOutputTail: string;
+  /** Ring of the card's RAW PTY output, per card. It is the replay source when
+   * the board UI is unmounted (the renderer's xterm dies with it and there is
+   * nowhere else to repaint from). Capped at `scrollbackMaxBytes`; see
+   * `session-scrollback.ts`. */
+  scrollback: ScrollbackState;
+  /** `true` while this card belongs to a BACKGROUND session (the user left the
+   * board). A `pty:kill` arriving from the UI unmount must not terminate a
+   * retained card: that is exactly what "the session stays alive" means.
+   * `setRetained`/`isRetained`; cleared on reattach (`pty:spawn`) and on
+   * `board:stop`/app close. */
+  retained: boolean;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -650,6 +686,10 @@ export function createPtyRegistry(registryOpts: {
    * voltaria sem contexto. Nunca chamado para "nada ainda"/"aguardando input".
    * Opcional e source-compatible. */
   onSessionWatchStuck?: (id: string, reason: "ambiguous" | "not-ours") => void;
+  /** A session id was claimed by ORDER (briefs identical or absent), so its
+   * ownership is not proven. The consumer warns the orchestrator; the id stays
+   * (distinct from a refusal), but the human is told to verify it. */
+  onSessionLowConfidence?: (id: string, reason: "paired-by-order") => void;
   /** Review adversarial (2026-09-11), achado 4 — o primeiro conserto daqui
    * escrevia o aviso direto em `onData` (bytes injetados no próprio pty).
    * PROVADO ruim: TUIs em tela cheia (claude, opencode) mandam clear/redraw
@@ -682,6 +722,24 @@ export function createPtyRegistry(registryOpts: {
    * visível.
    */
   onTrustPromptPending?: (id: string, pending: boolean) => void;
+  /**
+   * Returns the board's declared root for a card's board, or null when there
+   * is none. Used to decide whether a recognized trust prompt may be answered
+   * automatically: inside the board's own folder the app confirms it; outside,
+   * it leaves the dialog for a human and reports it instead.
+   */
+  resolveTrustPromptRoot?: (id: string) => string | null;
+  /**
+   * Fires when a trust prompt was recognized but NOT answered automatically
+   * (outside the board root, or a provider that declares no confirm input).
+   * The consumer routes the message to the board's orchestrator.
+   */
+  onTrustPromptUnconfirmed?: (id: string, providerId: string, message: string) => void;
+  /** Fires when the main process recognizes a screen turn-end for a card
+   *  (`capacity.delivery.turnEnd` with mechanism "screen"). Lets a board-less
+   *  app still re-evaluate the reservation engine: the renderer is not the only
+   *  turn-end detector any more. */
+  onTurnEnd?: (id: string) => void;
   /**
    * Task 86613ff9 (PEÇA 1 de 7) — as VIRADAS do card viram EVENTO persistível.
    * Opcional e source-compatible (mesmo idioma de `onTrustPromptPending`
@@ -719,8 +777,13 @@ export function createPtyRegistry(registryOpts: {
    * (mcp-server.ts), threaded into `SpawnOpts.mcpUrl` for every spawn so
    * `providers.ts::buildArgs` can register it per-provider. */
   mcpUrl: string;
+  /** Cap, in BYTES, of the per-card raw-output ring (`Entry.scrollback`).
+   * Absent means `resolveScrollbackMaxBytes` (declared 2 MB default, env
+   * override). */
+  scrollbackMaxBytes?: number;
 }) {
   const entries = new Map<string, Entry>();
+  const scrollbackMaxBytes = registryOpts.scrollbackMaxBytes ?? resolveScrollbackMaxBytes();
 
   /** Sole writers of the liveness Map — `isAlive` is `entries.has`. */
   function adoptEntry(id: string, entry: Entry): void {
@@ -818,6 +881,7 @@ export function createPtyRegistry(registryOpts: {
     // its own, just surfaces what the agent already printed as a chip a
     // human can click.
     const stripped = data.replace(ANSI_PATTERN, "");
+    e.recentOutputTail = (e.recentOutputTail + stripped).slice(-RECENT_OUTPUT_MAX);
     const cleaned = e.urlCarry + stripped;
     // Morte por cota + rascunho (2026-09-19) — reaproveita o MESMO texto
     // ANSI-stripped que a cauda de URL já calcula. Roda em toda flush
@@ -842,7 +906,7 @@ export function createPtyRegistry(registryOpts: {
     // Ao contrário da cota acima, roda em TODO flush (nunca congela depois
     // do primeiro match): o sinal precisa poder desligar quando o card
     // recebe uma tecla e a TUI avança para outra tela.
-    if (TRUST_DIALOG_WATCHED_PROVIDERS.has(e.providerId)) {
+    if (providerTrustPrompt(e.providerId)) {
       // Sem truncar o chunk atual (só a cauda RETIDA do anterior tem
       // teto) — cortar aqui perderia conteúdo real do flush de agora.
       const scanWindow = e.trustScanCarry + stripped;
@@ -850,11 +914,45 @@ export function createPtyRegistry(registryOpts: {
       if (hit && !e.trustPromptPending) {
         e.trustPromptPending = true;
         registryOpts.onTrustPromptPending?.(id, true);
+        // Answer the dialog when the card opened inside its board's declared
+        // root and the provider declares how to confirm; otherwise leave it for
+        // a human and report it to the board orchestrator.
+        const decl = providerTrustPrompt(e.providerId);
+        const root = registryOpts.resolveTrustPromptRoot?.(id) ?? null;
+        const decision = decideTrustPromptAction({
+          patternMatched: true,
+          cwdWithinDeclaredRoot: root !== null && isPathInsideRoot(e.cwd, root),
+          providerConfirmInput: decl?.confirmInput ?? null,
+        });
+        if (decision.action === "confirm" && decl?.confirmInput) {
+          write(id, decl.confirmInput, "auto");
+        } else if (decision.action === "warn") {
+          registryOpts.onTrustPromptUnconfirmed?.(
+            id,
+            e.providerId,
+            describeTrustPromptOutsideRootWarning({ providerId: e.providerId, cwd: e.cwd, root }),
+          );
+        }
       } else if (!hit && e.trustPromptPending) {
         e.trustPromptPending = false;
         registryOpts.onTrustPromptPending?.(id, false);
       }
       e.trustScanCarry = stripped.slice(-TRUST_DIALOG_SCAN_CARRY_MAX);
+    }
+    // Screen turn-end. A provider that declares `turnEnd` with mechanism
+    // "screen" (commandcode) has no hook to report its turn; the renderer used
+    // to be the only detector, so a turn that ended with no board mounted left
+    // `turnEndedAt` null and the reservation engine never fired. Detect it here
+    // as well: the marker is plain text in the output, so it survives without
+    // the renderer. Matching on the ANSI-stripped text keeps a marker split by
+    // color escapes intact.
+    if (e.turnEndPattern) {
+      const fed = feedTurnEndChunk(e.turnEndCarry, stripped, e.turnEndPattern);
+      e.turnEndCarry = fed.tail;
+      if (fed.matched) {
+        markTurnComplete(id);
+        registryOpts.onTurnEnd?.(id);
+      }
     }
     for (const rawUrl of cleaned.match(URL_PATTERN) ?? []) {
       const url = trimTrailingUnbalancedClosers(rawUrl);
@@ -983,9 +1081,15 @@ export function createPtyRegistry(registryOpts: {
     const homePlan = registryOpts.resolveProviderHome?.(providerId) ?? null;
     const spawnArgs = homePlan && homePlan.argv.length > 0 ? [...resolved.args, ...homePlan.argv] : resolved.args;
 
+    // Inherit the main process's environment minus the keys that must not
+    // cross into a card: a foreign agent session's identity (the rule above)
+    // and the parent app's own identity (pty-env.ts — measured: a Brave opened
+    // from a card inherited CHROME_DESKTOP=stellar.desktop and the desktop
+    // grouped it as Stellar). `AGENT_CANVAS_*` is added back explicitly below,
+    // so the CLIs and the `resources/bin` shims keep everything they need.
     const inheritedEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (value === undefined || isInheritedClaudeSessionEnvKey(key)) continue;
+      if (value === undefined || isInheritedClaudeSessionEnvKey(key) || isIdentityEnvKey(key)) continue;
       inheritedEnv[key] = value;
     }
 
@@ -1088,6 +1192,11 @@ export function createPtyRegistry(registryOpts: {
     // ser "o mesmo instante do spawn".
     const spawnedAtMs = Date.now();
 
+    // Compile the provider's screen turn-end pattern once, at spawn. The flush
+    // path runs on every chunk, so resolving the provider there would be waste.
+    const declaredTurnEnd = providerById(providerId)?.capacity.delivery.turnEnd;
+    const turnEndPattern = declaredTurnEnd?.mechanism === "screen" ? declaredTurnEnd.pattern : null;
+
     const entry: Entry = {
       proc,
       cols,
@@ -1103,6 +1212,8 @@ export function createPtyRegistry(registryOpts: {
       lastActivityAt: spawnedAtMs,
       spawnedAtMs,
       turnEndedAt: null,
+      turnEndPattern,
+      turnEndCarry: "",
       hasReceivedData: false,
       providerId,
       cwd,
@@ -1139,6 +1250,11 @@ export function createPtyRegistry(registryOpts: {
       killRequested: false,
       trustPromptPending: false,
       trustScanCarry: "",
+      recentOutputTail: "",
+      // The ring starts empty and the card is born "foreground" (retained only
+      // when the user leaves the board).
+      scrollback: createScrollback(),
+      retained: false,
     };
     adoptEntry(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
@@ -1206,8 +1322,9 @@ export function createPtyRegistry(registryOpts: {
           entry.awaitingResumeAnyInput = false;
         },
         {
-          ...(spawnWatchReservation(providerId, id, spawnedAtMs) ?? {}),
+          ...(spawnWatchReservation(providerId, id, spawnedAtMs, spawnOpts.brief) ?? {}),
           onStuck: (reason) => registryOpts.onSessionWatchStuck?.(id, reason),
+          onLowConfidence: (reason) => registryOpts.onSessionLowConfidence?.(id, reason),
         },
       );
     };
@@ -1276,6 +1393,10 @@ export function createPtyRegistry(registryOpts: {
       // Rodada 4 (`49ae26b7`) — track DECSET 2004h/l so deliveries only
       // wrap bracketed paste when the peer asked. Pure update; no I/O.
       entry.bracketedPasteMode = updateBracketedPasteMode(entry.bracketedPasteMode, data);
+      // The replay ring takes every raw byte, ahead of any coalescing: it is
+      // what allows repainting the xterm after returning to a session whose UI
+      // was unmounted.
+      entry.scrollback = appendScrollback(entry.scrollback, data, scrollbackMaxBytes);
       entry.chunks.push(data);
       entry.pending += data.length;
       if (entry.pending >= COALESCE_MAX) {
@@ -1831,5 +1952,44 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount, traceForCard };
+  /** The card's retained ANSI-stripped output tail, or null for an unknown id. */
+  function getRecentOutput(id: string): string | null {
+    return entries.get(id)?.recentOutputTail ?? null;
+  }
+
+  /**
+   * The retained text of the replay ring for returning to a background session,
+   * already trimmed at the edge (the ring cut may fall inside an escape
+   * sequence). `null` when there is no live entry; an EMPTY string is a valid,
+   * honest answer ("nothing retained").
+   */
+  function getScrollback(id: string): string | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    return trimLeadingPartialEscape(readScrollback(entry.scrollback));
+  }
+
+  /** Marks/unmarks the card as belonging to a BACKGROUND session. While `true`,
+   *  a `pty:kill` from the UI unmount is ignored (the process is what "stays
+   *  alive"). See `Entry.retained`. */
+  function setRetained(id: string, retained: boolean): void {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.retained = retained;
+  }
+
+  function isRetained(id: string): boolean {
+    return entries.get(id)?.retained ?? false;
+  }
+
+  /** "Waiting on you" — the card is LIVE and stopped at a human decision: a
+   *  pending trust dialog, or an open human input line. This is the raw fact
+   *  the Home projects; whether to show it is the UI's call. */
+  function isAwaitingHuman(id: string): boolean {
+    const entry = entries.get(id);
+    if (!entry) return false;
+    return entry.trustPromptPending || entry.inputLineBuffer.length > 0;
+  }
+
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount, getRecentOutput, traceForCard, getScrollback, setRetained, isRetained, isAwaitingHuman };
 }

@@ -25,6 +25,8 @@ import {
   type WorkHomeConflictChoice,
   resolveWorkHomeConflict,
 } from "./work-home-apply-decision";
+import { isTemplatedContentPath } from "./work-home-tools";
+import { expandPathValuesInText, type PathValueContext } from "./work-home-path-values";
 
 export type WorkHomeAppliedFile = {
   path: string;
@@ -54,6 +56,10 @@ export type ApplyWorkHomeInput = {
   backupRoot: string;
   /** Epoch-ms usado no nome da pasta datada e no sufixo de `both`. */
   now: number;
+  /** Contexto para expandir `{home}`/`{project:<id>}` no conteúdo do settings
+   *  filtrado. Ausente = grava o conteúdo como veio (só para quem não usa a
+   *  reescrita de valores, como testes antigos). */
+  pathValues?: PathValueContext;
 };
 
 /** sha256 de um arquivo, `null` se não existe / não é arquivo regular. */
@@ -128,6 +134,18 @@ export function applyWorkHomePlan(input: ApplyWorkHomeInput): WorkHomeApplyResul
     renameSync(tmp, target);
   }
 
+  /** Expande `{home}`/`{project:<id>}` no CONTEÚDO do settings filtrado antes de
+   *  gravar. `null` = um projeto referenciado não tem clone (não grava marcador). */
+  function materialize(item: WorkHomeApplyPlanItem, bytes: Uint8Array): Uint8Array | null {
+    if (!input.pathValues || !isTemplatedContentPath(item.path)) return bytes;
+    const { text, unresolved } = expandPathValuesInText(Buffer.from(bytes).toString("utf-8"), input.pathValues);
+    if (unresolved.length > 0) {
+      result.warnings.push(`${item.path}: projeto sem clone local (${unresolved.join(", ")}) — conteúdo não gravado`);
+      return null;
+    }
+    return Buffer.from(text, "utf-8");
+  }
+
   function applyItem(item: WorkHomeApplyPlanItem): void {
     if (item.action === "pending") {
       result.pending.push({ path: item.path, reason: item.reason });
@@ -152,11 +170,13 @@ export function applyWorkHomePlan(input: ApplyWorkHomeInput): WorkHomeApplyResul
         result.keptLocal.push(item.path);
         return;
       }
-      const bytes = item.remoteSha !== null ? input.blobs.get(item.remoteSha) : undefined;
-      if (!bytes) {
+      const raw = item.remoteSha !== null ? input.blobs.get(item.remoteSha) : undefined;
+      if (!raw) {
         result.warnings.push(`${item.path}: conteúdo remoto ausente no pacote — conflito não resolvido`);
         return;
       }
+      const bytes = materialize(item, raw);
+      if (!bytes) return;
       if (resolution.action === "write-remote-suffixed") {
         const dest = suffixedPath(target, resolution.suffix);
         try {
@@ -192,11 +212,13 @@ export function applyWorkHomePlan(input: ApplyWorkHomeInput): WorkHomeApplyResul
     }
 
     // add | update
-    const bytes = item.remoteSha !== null ? input.blobs.get(item.remoteSha) : undefined;
-    if (!bytes) {
+    const raw = item.remoteSha !== null ? input.blobs.get(item.remoteSha) : undefined;
+    if (!raw) {
       result.warnings.push(`${item.path}: conteúdo ausente no pacote — não escrito`);
       return;
     }
+    const bytes = materialize(item, raw);
+    if (!bytes) return;
     try {
       const backedUpTo = item.action === "update" ? backup(item, target) : null;
       atomicWrite(target, bytes, 0o644);

@@ -117,12 +117,23 @@ export type SessionCandidate = {
    */
   path?: string;
   sizeBytes?: number | null;
+  /**
+   * The session's FIRST PROMPT when the store declares where it lives
+   * (`SessionStore.prompt`). It is EXACT ownership evidence — the first prompt
+   * is the brief the app handed to that card — so cards of the same
+   * provider+cwd spawned in the same instant can be separated by CONTENT.
+   * `null` = the store declares no prompt source, or the file/field is absent.
+   */
+  firstPrompt?: string | null;
 };
 
 type RearmReservation = {
   ownerId: string;
   rearmAtMs: number;
   matchStartMs: number;
+  /** The brief the app handed to this card, when known — the content key for
+   *  exact pairing against a candidate's `firstPrompt`. */
+  brief?: string;
 };
 
 /**
@@ -447,41 +458,50 @@ export function spawnWatchReservation(
   providerId: string,
   ownerId: string,
   spawnedAtMs: number,
-): { ownerId: string; rearmAtMs: number; matchStartMs: number } | undefined {
+  brief?: string,
+): { ownerId: string; rearmAtMs: number; matchStartMs: number; brief?: string } | undefined {
   if (!declaredSessionStore(providerId)) return undefined;
   if (REARM_ON_INPUT_PROVIDERS.includes(providerId)) return undefined;
-  return { ownerId, rearmAtMs: spawnedAtMs, matchStartMs: spawnedAtMs };
+  return { ownerId, rearmAtMs: spawnedAtMs, matchStartMs: spawnedAtMs, ...(brief ? { brief } : {}) };
 }
 
 /**
- * OS ENCODINGS DE CWD — cada um é uma MEDIÇÃO, com a amostra declarada:
- *
- *  - `{cwd:dashes}` (claude): `/` → `-`. Medido contra os diretórios reais de
- *    `~/.claude/projects/`.
- *  - `{cwd:slug}` (commandcode): `/` → `-`, tira o `-` inicial, MINÚSCULAS.
- *    AMOSTRA: os DOIS diretórios de projeto reais desta máquina —
- *    `/home/lucas/Workplace/Projects` → `home-lucas-workplace-projects` e
- *    `/home/lucas/Workplace/Projects/Stellar` →
- *    `home-lucas-workplace-projects-stellar` (o segundo é o que prova as
- *    minúsculas). O QUE FICA INDETERMINADO: o tratamento de QUALQUER
- *    caractere que não seja `/` — espaço, acento, ponto, `_`, contrabarra.
- *    Nenhum dado em disco discrimina: não existe, aqui, um cwd com um desses
- *    e diretório de projeto criado. Se o seu cwd tiver espaço ou acento,
- *    NINGUÉM MEDIU essa regra — a conta desta função pode não achar o
- *    diretório, e o lado em que isso falha é o seguro (sem candidato, não
- *    premia a sessão errada). A medição que fecha isto é rodar o CLI num cwd
- *    com um ponto e comparar o diretório criado.
- *  - `{cwd}` cru: nenhum store medido usa hoje.
- *
- * `~` → home. Lê `homedir()` na CHAMADA, nunca no load do módulo: é o que
- * deixa um teste apontar o store para uma árvore de fixture só mexendo em
- * `$HOME`.
+ * CWD ENCODINGS — each one is a MEASUREMENT with the sample it came from:
+ *  - `{cwd:dashes}` (claude): `/` → `-`, checked against the real
+ *    `~/.claude/projects/` directories.
+ *  - `{cwd:slug}` (commandcode): kebab-case then lowercase — see `kebabSlug`
+ *    below for the sample and the part that stays unmeasured.
+ *  - raw `{cwd}`: no measured store uses it today.
  */
+/**
+ * The commandcode project-directory encoding for a cwd: kebab-case, then
+ * lowercase. The real `~/.commandcode/projects/` holds
+ * `home-lucas-workplace-projects-stellar-cloud` for
+ * `/home/lucas/Workplace/Projects/StellarCloud`, and `…-stellar-page` for
+ * `StellarPage`: a camelCase segment splits at its case boundary WITH a dash.
+ * A plain `toLowerCase()` instead yields `…stellarcloud`, a directory that
+ * never exists, so discovery found zero candidates and `resume_id` stayed null.
+ * Path separators, `_`, spaces and `.` become `-`; other characters are
+ * dropped. Characters outside this set are UNMEASURED — the safe side is
+ * "no directory found → no candidate".
+ */
+export function kebabSlug(cwd: string): string {
+  return cwd
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .replace(/[/_\s.]+/g, "-")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+/** `~` → home. Reads `homedir()` at CALL time, never at module load, so a test
+ *  can point the store at a fixture tree just by setting `$HOME`. */
 function expandRoot(root: string, cwd: string): string {
-  const slug = cwd.replace(/\//g, "-").replace(/^-/, "").toLowerCase();
   const resolved = root
     .replace("{cwd:dashes}", cwd.replace(/\//g, "-"))
-    .replace("{cwd:slug}", slug)
+    .replace("{cwd:slug}", kebabSlug(cwd))
     .replace("{cwd}", cwd);
   return resolved.startsWith("~/") ? join(homedir(), resolved.slice(2)) : resolved;
 }
@@ -772,11 +792,20 @@ async function discoverWithStore(
     // Um `stat` por candidato ACEITO (não por entrada varrida): o mesmo dado que
     // já sustentava o frescor, agora explícito para quem confronta evidência.
     const st = await stat(entry).catch(() => null);
+    // First prompt, when the store declares where it lives — the exact content
+    // key for pairing cards that share a cwd and instant.
+    let firstPrompt: string | null = null;
+    if (store.prompt) {
+      const promptPath = join(dirname(entry), substituteId(store.prompt.file, id));
+      const value = await readFirstJsonLineAtPath(promptPath, [store.prompt.field ?? "prompt"], cache);
+      firstPrompt = typeof value === "string" ? value : null;
+    }
     out.push({
       id,
       timestampMs,
       path: entry,
       sizeBytes: st ? st.size : null,
+      firstPrompt,
     });
   }
   return out;
@@ -1053,6 +1082,14 @@ export function watchForSession(
     rearmAtMs?: number;
     /** Ownership lower bound; distinct from the candidate scan floor. */
     matchStartMs?: number;
+    /** The brief handed to this card, when known — the content key for exact
+     *  pairing when N cards share a cwd and instant. Omitted for a card with no
+     *  brief (human spawn): pairing then falls back to order, declared. */
+    brief?: string;
+    /** A claim was made by ORDER, not by content (the briefs were identical or
+     *  absent). The id is real but its ownership is not proven — the consumer
+     *  tells the orchestrator so the human can resolve it by hand. */
+    onLowConfidence?: (reason: "paired-by-order") => void;
     /** NÃO-SILÊNCIO (task ea71065e, 2026-10-04) — o watcher viu candidatos
      * mas não conseguiu atribuir nenhum (`ambiguous`/`not-ours`). Chamado UMA
      * vez por watcher, e só com candidatos na mesa: "nada ainda" e
@@ -1076,6 +1113,7 @@ export function watchForSession(
           ownerId: options.ownerId,
           rearmAtMs: options.rearmAtMs,
           matchStartMs,
+          ...(options.brief ? { brief: options.brief } : {}),
         })
       : () => {};
 
@@ -1108,17 +1146,23 @@ export function watchForSession(
           return null;
         }
         claimSessionId(decision.id);
-        return decision.id;
+        // Release ownership in the SAME critical section as the claim: a
+        // concurrent watcher must never observe "claimed but still reserved"
+        // (a candidate/owner count mismatch), which would make the deterministic
+        // pairing refuse the survivors.
+        releaseReservation();
+        return decision;
       });
       if (stopped) {
-        if (found) releaseSessionId(found);
+        if (found) releaseSessionId(found.id);
         return;
       }
       if (found) {
         stopped = true;
         clearInterval(timer);
-        releaseReservation();
-        onFound(found);
+        // Order pairing is a real id with unproven ownership: say so, once.
+        if (found.confidence === "paired-by-order") options.onLowConfidence?.("paired-by-order");
+        onFound(found.id);
       }
     } catch {
       // Best-effort — a transient read error just means try again next poll.

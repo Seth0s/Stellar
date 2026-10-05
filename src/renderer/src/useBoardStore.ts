@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cascadeSlot, type WorldTransform } from "./board-model";
 import type { Card, Connector } from "./card-types";
 import { toast } from "./useToast";
+import { BACKGROUND_CHANGED_EVENT } from "./useBoardSummaries";
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 import {
   boardTaskDefaultsToSql,
@@ -194,6 +195,12 @@ export function useBoardStore(
 
   async function switchBoard(id: string, template: SessionTemplate = "empty", seedCwd?: string) {
     if (id === activeBoardIdRef.current) return;
+    // The board we are LEAVING has its processes RETAINED: the UI will unmount
+    // and send `pty:kill` for every card, and main ignores that kill on a
+    // retained card. Only an explicit order (`board:stop`) or app close
+    // terminates.
+    const leaving = activeBoardIdRef.current;
+    if (leaving) void window.pty.setBoardRetention(leaving, true);
     setActiveBoardId(id);
     // Achado ao vivo (2026-09-01) — o bus escopa `list_cards` por isto.
     // Antes do `await loadBoard` abaixo de propósito: durante a troca, a
@@ -212,6 +219,12 @@ export function useBoardStore(
     } finally {
       boardTransitionRef.current = false;
     }
+    // No `setBoardRetention(id, false)` here: the reattach itself clears
+    // retention (`pty:spawn`), per card, when it reads the ring. Clearing it
+    // here would race the spawn (the clear invoke could reach main BEFORE the
+    // spawn and the history replay would be lost) without covering anything the
+    // spawn does not.
+    warnIfBackgroundOverCap();
   }
 
   /** Topbar's home button — leaves the current board back to the home
@@ -220,6 +233,10 @@ export function useBoardStore(
    * stops the departing board's terminal PTYs — see loadBoard's own doc
    * comment), just landing on "no board" instead of a different one. */
   function goHome() {
+    // See `switchBoard`: leaving the board RETAINS its processes (the UI
+    // unmounts, and main ignores the unmount's kill).
+    const leaving = activeBoardIdRef.current;
+    if (leaving) void window.pty.setBoardRetention(leaving, true);
     setActiveBoardId(null);
     window.store.boards.setActive(null);
     setCards([]);
@@ -230,6 +247,51 @@ export function useBoardStore(
     // was left over from boot/`loadBoard`, so a session that had gained or
     // archived cards since then showed a stale number. Refetch on entry.
     refreshBoardCounts();
+    warnIfBackgroundOverCap();
+  }
+
+  /**
+   * WARNS when the number of background sessions goes over the ceiling. Never
+   * terminates anything (the ceiling is a warning): it reads the main state
+   * right after LEAVING a board and shows a toast. Best-effort on purpose — a
+   * failed read is not a gate.
+   */
+  function warnIfBackgroundOverCap() {
+    void window.store
+      .boardBackgroundStatus()
+      .then((status) => {
+        if (status.overCap) {
+          toast(t("toast.backgroundCap", { count: status.backgroundCount, max: status.maxBackgroundSessions }), {
+            label: t("toast.backgroundCapAction"),
+            onClick: goHome,
+          });
+        }
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * "Stop session" — terminates a board's processes (kills; unlike leaving,
+   * which retains). This is the actuator; the CONFIRMATION when an agent is
+   * running is the UI's (`decideStopSessionConfirm`), which knows the live
+   * agent count.
+   */
+  function stopBoard(boardId: string) {
+    void window.store.boardStop(boardId).then(async () => {
+      refreshBoardCounts();
+      // A stopped session is no longer live in the background: the Home
+      // indicator must clear without waiting for a window focus. The kill is
+      // asynchronous (the PTY exit lands after `boardStop` resolves), so poke
+      // the Home each round until the projection reports the session gone.
+      const deadline = Date.now() + 6000;
+      for (;;) {
+        window.dispatchEvent(new Event(BACKGROUND_CHANGED_EVENT));
+        const status = await window.store.boardBackgroundStatus().catch(() => null);
+        if (!status || status.boards[boardId]?.alive !== true) break;
+        if (Date.now() > deadline) break;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    });
   }
 
   async function createBoard(name: string, cwd: string, template: SessionTemplate = "empty") {
@@ -432,6 +494,7 @@ export function useBoardStore(
     loadBoard,
     switchBoard,
     goHome,
+    stopBoard,
     createBoard,
     updateBoard,
     deleteBoard,

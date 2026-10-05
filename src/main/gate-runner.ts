@@ -103,6 +103,18 @@ import { describeTaskCwdOutsideRootExecution, isPathInsideRoot } from "./task-di
 import { MACHINE_LOCK_KEY, acquireGateLock, type GateLockHolder } from "./gate-lock";
 import { gateCommandOf, isExclusiveGate, type GateSpec } from "./gate-declaration";
 import { shortTaskId } from "./task-id-prefix-decision";
+import {
+  decideGateIsolation,
+  describeGateIsolation,
+  type DeclaredFiles,
+  type GateIsolationDispute,
+} from "./gate-isolation-decision";
+import { prepareGateIsolation, teardownGateIsolation, type GateIsolationMount, type GateIsolationPrep } from "./gate-isolation";
+import {
+  systemGateToolPathProbes,
+  validateGateToolPaths,
+  type GateToolPathRefusal,
+} from "./gate-tool-paths";
 
 /** Chave do record de gate carimbado pelo app em `tasks.result_json`.
  * Mesmo lugar (e mesma classe de dono) de `failureKind`: o app observa,
@@ -234,6 +246,19 @@ export type GateRunEvidence = {
    * do `diff`, no lugar onde a conclusão é tirada. Ausente em linha antiga.
    */
   window?: GateRunWindowLabel;
+  /**
+   * WHERE these gates were measured: in a DISPOSABLE HEAD worktree holding only
+   * this task's diff (`isolated`), or in the SHARED tree (`shared`, which may
+   * include another card's work). Absent on an old row, and that is normal.
+   * See `GateIsolationEvidence`.
+   */
+  isolation?: GateIsolationEvidence;
+  /**
+   * The board-declared tool directories this run considered: the ones mounted
+   * read-only, and the ones refused with a reason. Absent when the board
+   * declared none.
+   */
+  gateToolPaths?: GateToolPathEvidence;
 };
 
 /** Spawn SEM shell no host: o comando de um gate só vira argv de
@@ -268,9 +293,53 @@ export type RunTaskGatesInput = {
    * (dentro/fora). Nunca filtra: medido, 75,5% dos arquivos declarados caem
    * fora, e o desvio é justamente o que interessa. */
   territory?: readonly string[] | null;
+  /**
+   * Per-card WRITE ATTRIBUTION — the `filesChanged` declared by each card
+   * (other cards included, so a dispute is detectable). It feeds
+   * `decideGateIsolation`: when this task has a reliable set of files, the gates
+   * run in a DISPOSABLE HEAD worktree holding only them; otherwise in the
+   * shared tree (`shared` mode, with the reason in the note). Absent means no
+   * attribution, which is `shared`.
+   */
+  declaredFiles?: readonly DeclaredFiles[] | null;
+  /**
+   * Extra tool directories the BOARD declared for its gates — a script shared
+   * by every repository of the workspace. Validated and mounted READ-ONLY in
+   * the sandbox (see `gate-tool-paths.ts`); a relative, absent, or broad-home
+   * path is refused and reported in the evidence instead of being mounted.
+   */
+  gateToolPaths?: readonly string[] | null;
   /** Seam de teste da captura do diff — a produção usa o `git` do host. */
   gitFn?: GitCaptureFn;
+  /**
+   * LIVE progress of each command — the Fila draws "rodando gates i/N
+   * · <command>". Fired when each command STARTS and once with `null` when the
+   * run ends (refusal/failure included), so the UI swaps progress for the
+   * final chip. It never changes the verdict or the evidence: it is only the
+   * "in progress" state.
+   */
+  onProgress?: (progress: GateProgress | null) => void;
 };
+
+/** LIVE state of a gate run, per task. It never reaches the database: what
+ * persists is the `gateRun` stamped at the end. */
+export type GateProgress = {
+  /** 1-based position of the command running now. */
+  index: number;
+  /** Total declared commands. */
+  total: number;
+  /** The declared command, as a human reads it. */
+  command: string;
+};
+
+/** In-memory registry of live progress (per task). Cleared in the `finally` of
+ * `execute`, always — a finished task has no "progress". */
+const liveGateProgress = new Map<string, GateProgress>();
+
+/** The current progress of a task, or `null` when no gate is running. */
+export function gateProgressForTask(taskId: string): GateProgress | null {
+  return liveGateProgress.get(taskId) ?? null;
+}
 
 const inFlightRuns = new Map<string, Promise<GateRunEvidence>>();
 
@@ -568,6 +637,27 @@ export function isInsideTerritory(file: string, territory: readonly string[]): b
   return false;
 }
 
+/** The paths dirty NOW in the tree (`git status --porcelain=v1 -uall`) — the
+ * scan that FEEDS the territory augment in isolation: a file the task changed
+ * and did not declare must enter the isolated gate, otherwise the green is
+ * false. Never throws: no repo, no git, or unreadable output → empty list
+ * (isolation simply adds nothing). */
+export async function listDirtyPaths(gitRoot: string | null, gitFn?: GitCaptureFn): Promise<string[]> {
+  if (!gitRoot) return [];
+  const git = gitFn ?? defaultGitCapture;
+  const res = await git(["status", "--porcelain=v1", "-uall"], gitRoot);
+  if (!res.ok) return [];
+  const out: string[] = [];
+  for (const line of res.stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    let path = line.slice(3).trim();
+    if (path.includes(" -> ")) path = path.split(" -> ").pop()!.trim();
+    path = path.replace(/^"|"$/g, "");
+    if (path) out.push(path);
+  }
+  return out;
+}
+
 /** A frase que um revisor APRESSADO não pode confundir com autoria. */
 export function describeDiffAuthorship(total: number, outside: number, territoryDeclared: boolean): string {
   const onde = territoryDeclared
@@ -607,6 +697,41 @@ export type GateRunWindowLabel = {
    * não pode ser lido como "só o meu trabalho estava aqui". */
   mayIncludeOtherTasksWork: boolean;
   note: string;
+};
+
+/**
+ * THE ISOLATION EVIDENCE, at the run level — what the app did so it would not
+ * measure another card's work together with this task's.
+ *
+ * This does NOT change the verdict: `ok` is still the process exit code. What
+ * it changes is WHERE the verdict was measured, and the run says which it was —
+ * `isolated` (a disposable HEAD worktree holding only this task's diff) or
+ * `shared` (the usual tree, which may hold another card's work). A fall to
+ * `shared` ALWAYS carries a `reason`: it never isolates silently with a wrong
+ * set.
+ */
+export type GateIsolationEvidence = {
+  mode: "isolated" | "shared";
+  /** The files APPLIED to the worktree (empty in `shared` mode). */
+  appliedFiles: string[];
+  /** Files declared by 2+ cards — the reason for falling back to `shared`. */
+  disputed: GateIsolationDispute[];
+  /** Dirty files INSIDE the territory that no card declared and that entered
+   * the isolated set. Empty in `shared` mode. */
+  undeclaredInTerritory: string[];
+  /** Root of the worktree used (only in `isolated` mode); already removed. */
+  worktree: string | null;
+  /** Why `shared`; `null` when `isolated`. */
+  reason: string | null;
+  /** The ready note: it says in which tree the measurement happened. */
+  note: string;
+};
+
+/** The board-declared tool directories for this run: mounted read-only, and
+ * refused with a reason. See `gate-tool-paths.ts`. */
+export type GateToolPathEvidence = {
+  accepted: string[];
+  rejected: GateToolPathRefusal[];
 };
 
 /** A frase do run. NUNCA afirma autoria; no caso LIMPO não liga alarme (um
@@ -741,19 +866,21 @@ export async function captureDiff(opts: {
 async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const requestedCwd = resolve(input.cwd);
   const gitRoot = await resolveGitRoot(requestedCwd);
-  const spawnCwd = gitRoot ?? requestedCwd;
   const spawnFn = input.spawnFn ?? (spawn as GateSpawn);
   const timeoutMs = input.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
   const pathValue = input.pathValue ?? effectivePath();
   const env = { ...process.env, PATH: pathValue };
-  // Alcançável DENTRO do gate: o `--tmpfs $HOME` do bwrap esconde o que mora
-  // sob `$HOME` fora da raiz re-bindada. É por isto que `rtk` (em `~/.local/bin`)
-  // sai 127 apesar de instalado — ver `gateVisiblePathDirs` (task 17d96ade).
-  const visibleDirs = gateVisiblePathDirs(pathValue, homedir(), spawnCwd);
-  const reachable = (name: string) => isExecutableReachable(name, visibleDirs, defaultExecutableProbe);
   // Resolvido UMA vez por run: o binário que confina todos os comandos (o
   // mesmo que a tool `bash` do chat usa). Sem ele, NADA roda — ver abaixo.
   const sandboxBinary = input.sandboxBinary !== undefined ? input.sandboxBinary : findSandboxBinary();
+
+  // BOARD-DECLARED TOOL PATHS: a tool shared by the repositories of a
+  // workspace is invisible under bwrap's `--tmpfs $HOME` unless the board
+  // declares it. Validation is pure and only ever accepts specific, existing,
+  // absolute directories; the accepted ones are mounted READ-ONLY below, the
+  // refused ones are reported in the evidence instead of being mounted.
+  const toolPathValidation = validateGateToolPaths(input.gateToolPaths ?? null, systemGateToolPathProbes());
+  const toolBinds: GateIsolationMount[] = toolPathValidation.accepted.map((p) => ({ src: p, dest: p, ro: true }));
 
   // HOLDER (task ff24b36d) — quem segura o lock, para a Fila e para o aviso de
   // fila do `gate-lock`. Nomeia a TASK (id curto) e o card implementer.
@@ -783,50 +910,169 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     refusalReason = describeSandboxUnavailable();
   }
 
+  // ISOLATION — the DECISION is pure (`decideGateIsolation`): when this task's
+  // attribution yields a reliable set of files, the gates run in a disposable
+  // HEAD worktree holding ONLY them; otherwise in the shared tree. Five
+  // implementers on one checkout used to let a good task's gate pick up a
+  // neighbour's half-finished import and come back red.
+  const baseDecision = decideGateIsolation({
+    cardId: input.cardId ?? null,
+    declared: input.declaredFiles ?? null,
+    gitRoot,
+  });
+  // TERRITORY AUGMENT: when the card WILL isolate, scan the tree's dirty files
+  // and let the ones inside the declared territory enter the set. The
+  // territory filter lives HERE (this module owns the matcher); the decision
+  // only excludes the paths another card already declared. The scan runs only
+  // when there is isolation to do — never for a `shared`, which uses no set.
+  let decision = baseDecision;
+  if (baseDecision.mode === "isolated" && gitRoot) {
+    const declaredTerritory = input.territory ?? [];
+    if (declaredTerritory.length > 0) {
+      const dirty = await listDirtyPaths(gitRoot, input.gitFn);
+      const territoryDirty = dirty.filter((p) => isInsideTerritory(p, declaredTerritory));
+      if (territoryDirty.length > 0) {
+        decision = decideGateIsolation({
+          cardId: input.cardId ?? null,
+          declared: input.declaredFiles ?? null,
+          gitRoot,
+          territoryDirty,
+        });
+      }
+    }
+  }
+  const sharedIsolation = (reason: string | null, disputed: GateIsolationDispute[] = []): GateIsolationEvidence => ({
+    mode: "shared",
+    appliedFiles: [],
+    disputed,
+    undeclaredInTerritory: [],
+    worktree: null,
+    reason,
+    note: describeGateIsolation({ mode: "shared", appliedFiles: [], disputed, reason }),
+  });
+  let spawnCwd = gitRoot ?? requestedCwd;
+  let prepared: GateIsolationPrep | null = null;
+  let isolation: GateIsolationEvidence;
+  if (refusalReason !== null || !sandboxBinary) {
+    // Nothing runs (refusal) — there is no measurement to label, and the reason
+    // is the refusal's own.
+    isolation = sharedIsolation(refusalReason ?? describeSandboxUnavailable());
+  } else if (decision.mode === "isolated") {
+    const prep = await prepareGateIsolation({ sourceRoot: spawnCwd, files: decision.files });
+    if (prep.ok) {
+      prepared = prep;
+      spawnCwd = prep.worktree;
+      // Only what ACTUALLY entered the worktree is announced as undeclared —
+      // the intended set and the applied set diverge when a declared path was
+      // not dirty, and the evidence says what entered.
+      const appliedSet = new Set(prep.applied);
+      const undeclaredInTerritory = decision.undeclaredInTerritory.filter((p) => appliedSet.has(p));
+      isolation = {
+        mode: "isolated",
+        appliedFiles: prep.applied,
+        disputed: [],
+        undeclaredInTerritory,
+        worktree: prep.worktree,
+        reason: null,
+        note: describeGateIsolation({
+          mode: "isolated",
+          appliedFiles: prep.applied,
+          disputed: [],
+          reason: null,
+          undeclaredInTerritory,
+        }),
+      };
+    } else {
+      // The worktree did not come up: fall back to shared, STATING why — it
+      // never isolates silently with a set that may be wrong.
+      isolation = sharedIsolation(`a worktree isolada não pôde ser preparada: ${prep.error}`);
+    }
+  } else {
+    isolation = sharedIsolation(decision.reason, decision.disputed);
+  }
+
+  // Reachable INSIDE the gate: bwrap's `--tmpfs $HOME` hides whatever lives
+  // under `$HOME` outside the re-bound root. That is why `rtk` (in
+  // `~/.local/bin`) exits 127 despite being installed — see
+  // `gateVisiblePathDirs`. Resolved against the FINAL cwd: when isolated, the
+  // root is the worktree (outside `$HOME`), and the `node_modules` mount makes
+  // it reachable again.
+  const visibleDirs = gateVisiblePathDirs(pathValue, homedir(), spawnCwd);
+  const reachable = (name: string) => isExecutableReachable(name, visibleDirs, defaultExecutableProbe);
+
   let startedAt = Date.now();
   let finishedAt = startedAt;
   let diff: DiffCaptureEvidence | null = null;
   const commands: GateCommandEvidence[] = [];
-  if (refusalReason !== null || !sandboxBinary) {
-    // Recusa POR COMANDO, na ordem declarada — nenhum spawn.
-    const reason = refusalReason ?? describeSandboxUnavailable();
-    for (const spec of input.gates) commands.push(refusalEvidence(gateCommandOf(spec), reason));
-    diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
-    finishedAt = Date.now();
-  } else {
-    const sandbox = sandboxBinary;
-    const runSpec = async (spec: GateSpec): Promise<GateCommandEvidence> => {
-      const declared = gateCommandOf(spec);
-      // Um wrapper MORTO (`rtk proxy <cmd>`, cujo binário o sandbox não alcança)
-      // é removido para o gate rodar a INTENÇÃO declarada — e a remoção fica
-      // registrada em `normalizedCommand`, nunca em silêncio.
-      const { command: ranCommand } = normalizeGateCommand(declared, reachable);
-      return runOne(declared, ranCommand, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary: sandbox });
-    };
-    await withRepoGateLock(lockKeyFor(gitRoot, requestedCwd), async () => {
-      // Dentro do lock de propósito: fora dele, `startedAt` incluiria a espera
-      // na fila do repositório — um gate de 4s atrás de outro de 10min
-      // pareceria ter durado 10min. Os tempos por comando sempre foram reais.
-      startedAt = Date.now();
-      for (const spec of commonGates) commands.push(await runSpec(spec));
-      // EXCLUSIVOS POR ÚLTIMO (task ff24b36d), sob o lock GLOBAL da máquina —
-      // DENTRO do lock do repo (não há ciclo: o lock de máquina é folha;
-      // ninguém que o segura espera um lock de repo). Assim um exclusivo nunca
-      // concorre com outro comando de máquina, nem com outro comando do repo.
-      for (const spec of machineGates) {
-        const acquisition = await acquireGateLock(MACHINE_LOCK_KEY, holder);
-        try {
-          commands.push(await runSpec(spec));
-        } finally {
-          acquisition.release();
-        }
-      }
-      // O diff é capturado DEPOIS de TODOS os gates, ainda dentro do lock: é a
-      // observação do app sobre o que mudou nesta janela, ao lado do contrato
-      // declarado (ver `DiffCaptureEvidence` para o que isto não é).
+  try {
+    if (refusalReason !== null || !sandboxBinary) {
+      // Recusa POR COMANDO, na ordem declarada — nenhum spawn.
+      const reason = refusalReason ?? describeSandboxUnavailable();
+      for (const spec of input.gates) commands.push(refusalEvidence(gateCommandOf(spec), reason));
       diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
       finishedAt = Date.now();
-    }, holder);
+    } else {
+      const sandbox = sandboxBinary;
+      // Mounts the sandbox needs beyond the re-bound root: the isolation
+      // `node_modules` (RW) and the board's tool directories (READ-ONLY). Both
+      // kinds are emitted after `--tmpfs $HOME` in `buildSandboxedBashArgs`,
+      // the only position that re-exposes a path under `$HOME`.
+      const isolationMounts: readonly GateIsolationMount[] = prepared && prepared.ok ? prepared.mounts : [];
+      const mounts: readonly GateIsolationMount[] = [...isolationMounts, ...toolBinds];
+      // LIVE progress: the index is global (common + exclusive, in the order
+      // they actually run). Fired when each command STARTS, and cleared in the
+      // `finally` below — the UI swaps progress for the stamped verdict when
+      // the final push arrives.
+      let gateIndex = 0;
+      const total = input.gates.length;
+      const runSpec = async (spec: GateSpec): Promise<GateCommandEvidence> => {
+        const declared = gateCommandOf(spec);
+        gateIndex += 1;
+        const progress: GateProgress = { index: gateIndex, total, command: declared };
+        liveGateProgress.set(input.taskId, progress);
+        input.onProgress?.(progress);
+        // A DEAD wrapper (`rtk proxy <cmd>`, whose binary the sandbox cannot
+        // reach) is removed so the gate runs the DECLARED intent — and the
+        // removal is recorded in `normalizedCommand`, never silently.
+        const { command: ranCommand } = normalizeGateCommand(declared, reachable);
+        return runOne(declared, ranCommand, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary: sandbox, mounts });
+      };
+      await withRepoGateLock(lockKeyFor(gitRoot, requestedCwd), async () => {
+        // Inside the lock on purpose: outside it, `startedAt` would include the
+        // wait in the repository queue — a 4s gate behind a 10min one would
+        // look like it took 10min. The per-command times were always real.
+        startedAt = Date.now();
+        for (const spec of commonGates) commands.push(await runSpec(spec));
+        // EXCLUSIVE GATES LAST, under the GLOBAL machine lock — INSIDE the repo
+        // lock (no cycle: the machine lock is a leaf; no one holding it waits
+        // for a repo lock). That way an exclusive gate never competes with
+        // another machine command, nor with another repo command.
+        for (const spec of machineGates) {
+          const acquisition = await acquireGateLock(MACHINE_LOCK_KEY, holder);
+          try {
+            commands.push(await runSpec(spec));
+          } finally {
+            acquisition.release();
+          }
+        }
+        // The diff is captured AFTER ALL gates, still inside the lock: it is the
+        // app's observation of what changed in this window, next to the declared
+        // contract (see `DiffCaptureEvidence` for what this is not).
+        diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
+        finishedAt = Date.now();
+      }, holder);
+    }
+  } finally {
+    // The live progress dies with the run, ALWAYS (refusal, failure or end): a
+    // finished task has no "running gates". The `null` tells the Fila to swap
+    // progress for the verdict the stamp persists right after.
+    liveGateProgress.delete(input.taskId);
+    input.onProgress?.(null);
+    // The worktree is DISPOSABLE: it always goes away, including on a gate
+    // failure or timeout.
+    if (prepared && prepared.ok) {
+      await teardownGateIsolation({ sourceRoot: prepared.sourceRoot, worktree: prepared.worktree });
+    }
   }
   const capturedDiff = diff ?? (await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn }));
   const ok = commands.length > 0 && commands.every((c) => c.exitCode === 0);
@@ -841,13 +1087,26 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     diff: capturedDiff,
     // O rótulo do veredito, ao lado do veredito (c73fcd79).
     window: labelGateWindow(capturedDiff, ok),
+    // The tree the gates were measured in.
+    isolation,
+    // The board-declared tool directories: accepted (read-only) and refused.
+    gateToolPaths: toolPathValidation,
   };
 }
 
 function runOne(
   declaredCommand: string,
   ranCommand: string,
-  opts: { root: string; env: NodeJS.ProcessEnv; timeoutMs: number; spawnFn: GateSpawn; sandboxBinary: string },
+  opts: {
+    root: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    spawnFn: GateSpawn;
+    sandboxBinary: string;
+    /** Mounts extras do modo isolado (o `node_modules` symlinkado, que o
+     * `--tmpfs $HOME` esconderia) — repassados a `buildSandboxedBashArgs`. */
+    mounts?: readonly GateIsolationMount[];
+  },
 ): Promise<GateCommandEvidence> {
   return new Promise((done) => {
     const startedAt = Date.now();
@@ -859,7 +1118,7 @@ function runOne(
     // O comando entra como argv de `bash -lc` DENTRO do bwrap; no host não
     // existe shell nenhum (`shell: true` foi removido de propósito). São os
     // MESMOS flags que a tool `bash` do chat usa, vindos de `sandbox.ts`.
-    const args = buildSandboxedBashArgs(opts.root, ranCommand);
+    const args = buildSandboxedBashArgs(opts.root, ranCommand, opts.mounts ?? []);
     const child = opts.spawnFn(opts.sandboxBinary, args, {
       cwd: opts.root,
       env: opts.env,

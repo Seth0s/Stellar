@@ -20,14 +20,20 @@
  */
 
 /** Status strings that appear on the Fila board today. Unknown statuses
- * count as `todo` (same fallback as `columnForStatus` in the renderer). */
-export type SprintBucket = "todo" | "doing" | "done" | "failed";
+ * count as `todo` (same fallback as `columnForStatus` in the renderer).
+ *
+ * `superseded` is its OWN bucket: a replaced task is terminal but neither done
+ * nor failed — it must NOT count as a failure in any metric, and must NOT
+ * migrate (it will never finish). It is absent from all four snapshot counts
+ * on purpose. */
+export type SprintBucket = "todo" | "doing" | "done" | "failed" | "superseded";
 
 const STATUS_TO_BUCKET: Record<string, SprintBucket> = {
   pending: "todo",
   running: "doing",
   done: "done",
   failed: "failed",
+  superseded: "superseded",
 };
 
 export function bucketForStatus(status: string): SprintBucket {
@@ -60,6 +66,7 @@ export type SprintCloseDecision = SprintSnapshotCounts & {
  * - todo / doing / unknown→todo → count + migrate
  * - done → countDone, stay
  * - failed → countFailed (julgada), stay
+ * - superseded → NO count, stay (terminal, replaced — never a failure)
  *
  * Interrompida never appears here as status=failed: the write path
  * rewrites it to pending, so it migrates via the todo bucket. No
@@ -75,6 +82,9 @@ export function decideSprintClose(tasks: readonly SprintTaskInput[]): SprintClos
   const migrateIds: string[] = [];
   for (const t of tasks) {
     const bucket = bucketForStatus(t.status);
+    // `superseded`: terminal and replaced — it enters NO counter (neither
+    // failure nor completion) and does not migrate. It stays in the closed sprint.
+    if (bucket === "superseded") continue;
     if (bucket === "todo") counts.countTodo += 1;
     else if (bucket === "doing") counts.countDoing += 1;
     else if (bucket === "done") counts.countDone += 1;

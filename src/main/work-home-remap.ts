@@ -147,28 +147,53 @@ export type ProjectClone = {
   normalizedRemote: string | null;
 };
 
-/** Um clone encontrado: lê o remote e guarda o normalizado. */
+/** O `gitdir` de um clone (diretório `.git`) OU de um worktree (arquivo `.git`
+ *  com `gitdir: <path>`). `null` quando não dá para resolver. */
+function resolveGitDir(root: string, gitPath: string): string | null {
+  let st;
+  try {
+    st = statSync(gitPath);
+  } catch {
+    return null;
+  }
+  if (st.isDirectory()) return gitPath;
+  if (!st.isFile()) return null;
+  // Worktree: `.git` é um ARQUIVO com `gitdir: <caminho do .git/worktrees/…>`.
+  let content: string;
+  try {
+    content = readFileSync(gitPath, "utf-8");
+  } catch {
+    return null;
+  }
+  const m = content.match(/^\s*gitdir:\s*(.+?)\s*$/m);
+  if (!m) return null;
+  const raw = m[1];
+  return isAbsolute(raw) ? raw : join(root, raw);
+}
+
+/** Um clone encontrado: lê o remote e guarda o normalizado. Um worktree resolve
+ *  o remote no config do repo PRINCIPAL (`<gitdir>/../../config`). */
 function readClone(root: string): ProjectClone | null {
   const gitPath = join(root, ".git");
   if (!existsSync(gitPath)) return null;
-  let gitDir: string;
-  try {
-    gitDir = statSync(gitPath).isDirectory() ? gitPath : "";
-  } catch {
-    return null;
+  const gitDir = resolveGitDir(root, gitPath);
+  if (gitDir === null) return null;
+  // Para um clone comum, o 1º candidato é o próprio config. Para um worktree,
+  // `<gitdir>/config` pode existir sem remote (config por worktree); o remote do
+  // repo principal vive em `<gitdir>/../../config`. Tentar os dois, na ordem:
+  // config local primeiro, depois o do repo principal. O 1º com remote vence.
+  let remote: string | null = null;
+  for (const candidate of [join(gitDir, "config"), join(gitDir, "..", "..", "config")]) {
+    if (!existsSync(candidate)) continue;
+    let content: string;
+    try {
+      content = readFileSync(candidate, "utf-8");
+    } catch {
+      continue;
+    }
+    remote = parseGitConfigRemote(content);
+    if (remote !== null) break;
   }
-  // Worktree (`.git` é arquivo) não é resolvido aqui: o config dele não é o do
-  // clone. Declarado — não adivinha.
-  if (gitDir === "") return null;
-  const configPath = join(gitDir, "config");
-  if (!existsSync(configPath)) return null;
-  let content: string;
-  try {
-    content = readFileSync(configPath, "utf-8");
-  } catch {
-    return null;
-  }
-  const remote = parseGitConfigRemote(content);
   if (remote === null) return null;
   return { root, remote, normalizedRemote: normalizeRemote(remote) };
 }

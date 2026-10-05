@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  decideCardBusyForReservation,
   decideLinkMode,
   decideReservationDelivery,
   decideReservationItemState,
+  firstReadyReservation,
   pendingDeps,
   reorderReservations,
+  RESERVATION_STUCK_MS,
   type ReservationItem,
 } from "../../src/main/task-reservation-decision";
 
@@ -93,5 +96,47 @@ describe("reorderReservations — permutação exata, nunca escrita destrutiva",
   it("recusa id de fora e id duplicado", () => {
     expect(reorderReservations(["a", "b"], ["a", "z"]).ok).toBe(false);
     expect(reorderReservations(["a", "b"], ["a", "a"]).ok).toBe(false);
+  });
+});
+
+/**
+ * The reservation engine runs on `onTaskDone` only, so a dependency that closes
+ * while the card is mid-turn is not delivered then. The end-of-turn trigger is
+ * what re-evaluates it; this rule (free = a declared turn end with nothing
+ * after) stays as it was — `workGrantedAt` is set at spawn.
+ */
+describe("decideCardBusyForReservation — o sinal é o FIM DE TURNO", () => {
+  it("implementer ACTIVE sempre é ocupado", () => {
+    expect(decideCardBusyForReservation({ hasActiveImplementer: true, turnEndedAt: 9_000, workGrantedAt: 1_000 })).toBe(true);
+  });
+
+  it("sem fim de turno DECLARADO → ocupado (não se entrega no meio do turno)", () => {
+    expect(decideCardBusyForReservation({ hasActiveImplementer: false, turnEndedAt: null, workGrantedAt: 1_000 })).toBe(true);
+  });
+
+  it("turno terminou e nada foi concedido depois → LIVRE", () => {
+    expect(decideCardBusyForReservation({ hasActiveImplementer: false, turnEndedAt: 2_000, workGrantedAt: 1_000 })).toBe(false);
+  });
+
+  it("trabalho concedido DEPOIS do fim do turno → ocupado (turno novo em andamento)", () => {
+    expect(decideCardBusyForReservation({ hasActiveImplementer: false, turnEndedAt: 2_000, workGrantedAt: 3_000 })).toBe(true);
+  });
+});
+
+describe("firstReadyReservation — base do watchdog", () => {
+  const item = (taskId: string, statuses: (string | null)[], state: "reserved" | "active" = "reserved"): ReservationItem => ({
+    taskId,
+    state,
+    deps: statuses.map((s, i) => ({ id: `${taskId}-d${i}`, status: s })),
+  });
+
+  it("devolve a primeira reserva com TODAS as deps done; ignora a que tem dep pendente", () => {
+    expect(firstReadyReservation([item("t1", ["pending"]), item("t2", ["done"])])?.taskId).toBe("t2");
+    expect(firstReadyReservation([item("t1", ["pending"])])).toBeNull();
+    expect(firstReadyReservation([])).toBeNull();
+  });
+
+  it("RESERVATION_STUCK_MS é positivo (o watchdog precisa de um N)", () => {
+    expect(RESERVATION_STUCK_MS).toBeGreaterThan(0);
   });
 });

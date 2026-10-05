@@ -1,147 +1,286 @@
 /**
- * Territory CONFLICT — mecanismo (b) do sticky de consolidação
- * (2026-09-20, itens 6+10): recusar `spawn_agent`/auto-dispatch de uma
- * task cujo `territory` declarado colide com o de outra task ATIVA
- * (participação viva, nunca julgada — ver `task-status-derive.ts`) no
- * MESMO board. Duas tasks diferentes, não a mesma task recebendo um
- * segundo card — isso já é `hasLiveLinkedCard` em message-bus.ts.
+ * Territory CONFLICT — refuse a spawn/link that would put a second EXECUTING
+ * implementer over territory another ACTIVE task on the same board claims,
+ * while allowing a path two implementers agree to SHARE.
  *
- * Motivo medido: nesta mesma sessão, no board real, três tasks estavam
- * ATIVAS ao mesmo tempo com território sobreposto —
- * `vhosts/Backend/app/**`/`vhosts/Backend/tests/**` declarado em DUAS
- * tasks simultâneas, e `vhosts/Admin/src/**` numa terceira que também
- * aparece dentro da segunda. Nenhuma recusa existia; nada avisou. É
- * exatamente a classe do incidente relatado no sticky (guard temporal
- * mexido por duas tasks que não sabiam uma da outra, conflito só no
- * merge).
+ * Overlap is by PREFIX of path segments, not exact glob. Measured across the
+ * real board: the column mixes clean globs (`src/**`), raw paths
+ * (`src/main/store.ts`), an annotation glued to the path (`store.ts (actor)`),
+ * and pure prose with no path structure. An exact-glob comparator would miss
+ * most of them — the same silent-accept failure this exists to close. A
+ * wildcard INSIDE a segment is compared literally (a full glob engine is out of
+ * scope); the mechanism is prefix overlap, not general glob intersection.
  *
- * MECANISMO ESCOLHIDO — overlap de PREFIXO de segmentos de path, não
- * glob exato. Medido nas 111 tasks (de 270) com `territory` preenchido
- * no board real: a coluna mistura globs limpos (`vhosts/Admin/src/**`),
- * caminhos crus sem wildcard (`docs/`, `src/main/store.ts`), anotação
- * livre colada no path (`src/main/store.ts (actor)`), e prosa pura sem
- * nenhuma estrutura de caminho (`leitura de ~/.config/stellar e
- * ~/.config/agent-canvas`). Um comparador de glob exato teria dado falso
- * negativo na maioria — a mesma classe de falha (aceitar em silêncio)
- * que este mecanismo existe para fechar. Prefixo por segmento cobre os
- * dois formatos reais mais comuns (glob com `**` e path cru) sem
- * inventar significado para o que não é path — ver `normalizeTerritoryEntry`.
+ * PER-PATH MODE: an entry is `exclusive` (the default) or `shared`. A `shared`
+ * entry MUST carry a coordination note; two active tasks may hold the same path
+ * ONLY if BOTH declare it `shared`. `shared × exclusive` is refused — the
+ * exclusive side never consented to share.
  *
- * NÃO coberto, declarado em vez de fingido: um wildcard DENTRO de um
- * segmento (`tests/unit/*task*` — 36 das 111 declarações usam essa
- * forma) é comparado como string literal, então só colide com outra
- * declaração com o mesmo segmento literal. Um motor de glob completo
- * resolveria isso; o escopo aqui é overlap de prefixo, não intersecção
- * de glob geral — mesma disciplina de escopo que `spawn-profile-decision.ts`
- * usa para o catálogo do opencode (medido, não implementado).
+ * GLOB × NEW FILE: a broad glob does not hard-block a narrower, specific target.
+ * A glob collides with a concrete path only when the path MATCHES the glob AND
+ * exists on disk; a glob collides with another glob only when neither contains
+ * the other. Otherwise it is a WARNING that passes (a new file under a broad
+ * claim), never a refusal.
  *
- * Puro de propósito: sem I/O, sem `git`, sem watch de filesystem — a
- * própria task-contract-decision.ts já veda isso ("Never invent
- * territory by watching the filesystem, never intercept git add, never
- * judge gate output"). Este módulo só compara o que já está declarado.
+ * Pure apart from an INJECTED `pathExists` (I/O stays at the caller) — no
+ * `git`, no filesystem watch: this module only compares what is declared plus
+ * that one fact.
  */
 
 import { posix } from "node:path";
 import { normalizeStringList } from "./task-contract-decision";
 
+export type TerritoryMode = "exclusive" | "shared";
+
+/** One declared territory entry, split into its mode, coordination note and
+ *  path, without resolving the path yet. */
+export type ParsedTerritoryEntry = {
+  /** The entry exactly as declared (used to name it in refusals). */
+  raw: string;
+  mode: TerritoryMode;
+  /** The `(…)` coordination note, when present. `shared` requires one. */
+  note: string | null;
+  /** The path part (mode prefix and note removed). */
+  path: string;
+};
+
+/**
+ * Splits a raw territory string into mode / note / path. The mode prefix is
+ * `shared:` (case-insensitive); anything else is `exclusive`. The note is the
+ * trailing `(…)` — the same annotation `resolveTerritoryEntry` already strips.
+ */
+export function parseTerritoryEntry(raw: string): ParsedTerritoryEntry {
+  const trimmed = raw.trim();
+  const mode: TerritoryMode = /^shared:/i.test(trimmed) ? "shared" : "exclusive";
+  const withoutMode = mode === "shared" ? trimmed.replace(/^shared:\s*/i, "") : trimmed;
+  const noteMatch = withoutMode.match(/\s*\(([^)]*)\)\s*$/);
+  const note = noteMatch ? noteMatch[1]!.trim() : null;
+  const path = withoutMode.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return { raw, mode, note: note && note.length > 0 ? note : null, path };
+}
+
+/** True when the entry declares `shared` mode. */
+export function isSharedTerritoryEntry(raw: string): boolean {
+  return parseTerritoryEntry(raw).mode === "shared";
+}
+
+/** True when any entry of the list declares `shared` mode. */
+export function territoryDeclaresShared(territory: string[] | null | undefined): boolean {
+  const list = normalizeStringList(territory);
+  return list !== null && list.some(isSharedTerritoryEntry);
+}
+
 export type ActiveTaskTerritory = {
   taskId: string;
-  /** Território já normalizado (SQL → lista), como `task-contract-decision`
-   * devolve. `null`/vazio = não declarado — nunca usado como evidência. */
+  /** Declared territory, normalized from SQL. `null`/empty = undeclared — never
+   *  used as evidence. */
   territory: string[] | null;
-  /** Base que uma entrada RELATIVA resolve contra: o `cwd` da própria task
-   * quando declarado, senão a raiz do board (o chamador resolve esse
-   * fallback). Entrada absoluta ignora. `null`/ausente = sem base: o relativo
-   * fica relativo (comportamento do comparador antigo). Ver
-   * `resolveTerritoryEntry`. */
+  /** Base a RELATIVE entry resolves against: the task's own `cwd`, else the
+   *  board root (the caller resolves that fallback). An absolute entry ignores
+   *  it. `null`/absent = no base: the relative stays relative. */
   cwd?: string | null;
 };
+
+export type TerritoryWarning = {
+  conflictingTaskId: string;
+  /** The entry as declared on each side. */
+  mine: string;
+  theirs: string;
+  mineResolved: string;
+  theirsResolved: string;
+  /** AGENT-FACING. Says the overlap was allowed and why. */
+  message: string;
+};
+
+export type TerritoryRefusal = {
+  conflictingTaskId: string;
+  mine: string;
+  theirs: string;
+  mineResolved: string;
+  theirsResolved: string;
+  /** AGENT-FACING refusal — same channel as every other spawn refusal. */
+  error: string;
+};
+
+export type TerritoryConflictDecision =
+  | {
+      ok: true;
+      /** Overlaps that PASSED with a warning (new/specific target under a
+       *  broader claim). Empty when there is nothing to say. */
+      warnings: TerritoryWarning[];
+      /** Present only when the guard would have refused and the caller
+       *  supplied a non-empty `override`: the refusal it bypassed, so the
+       *  caller can record it on the task's trail. */
+      overridden?: { reason: string; conflict: TerritoryRefusal };
+    }
+  | ({ ok: false } & TerritoryRefusal);
 
 export type TerritoryConflictInput = {
   taskId: string;
   territory: string[] | null;
-  /** `cwd` da task candidata (ou raiz do board) — mesma regra de
-   * `ActiveTaskTerritory.cwd`. */
+  /** `cwd` of the candidate (or board root). Same rule as
+   *  `ActiveTaskTerritory.cwd`. */
   cwd?: string | null;
-  /** Toda task ATIVA no MESMO board, exceto a própria (o chamador já
-   * filtrou por board_id e por "não é a própria task" — este módulo não
-   * sabe o que é board). */
+  /** Every ACTIVE task on the SAME board except the candidate (the caller
+   *  already filtered by board_id and by "not the candidate"). */
   activeTasks: ActiveTaskTerritory[];
+  /** Does a CONCRETE path exist on disk? Injected so this module stays pure.
+   *  Absent = treated as existing (conservative: an existing file is a real
+   *  conflict). Only consulted for glob × concrete pairs. */
+  pathExists?: (resolvedPath: string) => boolean;
+  /** Orchestrator override: a non-empty reason makes a would-be refusal pass
+   *  and is returned in `overridden` for the caller to record. */
+  override?: string | null;
 };
 
-export type TerritoryConflictDecision =
-  | { ok: true }
-  | {
-      ok: false;
-      /** Task ativa cujo território colidiu — nomeada para quem chamou
-       * poder investigar sem re-rodar a comparação. */
-      conflictingTaskId: string;
-      /** A entrada do território pedido que colidiu, COMO DECLARADA. */
-      mine: string;
-      /** A entrada declarada da task ativa que colidiu com `mine`. */
-      theirs: string;
-      /** `mine` resolvida contra a base da própria task (cwd/raiz do board)
-       * — o caminho que de fato foi comparado. */
-      mineResolved: string;
-      /** `theirs` resolvida contra a base da própria task ativa. */
-      theirsResolved: string;
-      /** Recusa pronta, mesmo canal de toda outra recusa de spawn — AGENT-FACING. */
-      error: string;
-    };
-
 /**
- * Decide se `territory` (do candidato a spawnar) colide com o de alguma
- * task em `activeTasks`. Território ausente em QUALQUER um dos dois lados
- * do par não é evidência — nunca inventa colisão a partir do que não foi
- * declarado (mesma regra de `task-contract-decision.ts`).
- *
- * Cada entrada é RESOLVIDA contra a base da própria task antes de comparar
- * (ver `resolveTerritoryEntry`): dois repos diferentes na mesma sessão
- * declaram `tests/unit/**` e `tests/unit/x.test.ts` e NÃO colidem, porque a
- * base difere. Mesma base continua colidindo como sempre.
+ * Decides whether `territory` (the candidate) collides with an ACTIVE task.
+ * Absent territory on either side is not evidence — never invents a collision.
+ * Each entry is RESOLVED against its own task's base before comparing.
  */
 export function decideTerritoryConflict(input: TerritoryConflictInput): TerritoryConflictDecision {
   const mineList = normalizeStringList(input.territory);
-  if (!mineList) return { ok: true };
+  if (!mineList) return { ok: true, warnings: [] };
 
-  for (const other of input.activeTasks) {
+  const override = typeof input.override === "string" ? input.override.trim() : "";
+  const warnings: TerritoryWarning[] = [];
+
+  // A malformed `shared` (no coordination note) is refused before any compare:
+  // the declaration itself is invalid, not the overlap.
+  for (const raw of mineList) {
+    const parsed = parseTerritoryEntry(raw);
+    if (parsed.mode === "shared" && !parsed.note) {
+      const refusal: TerritoryRefusal = {
+        conflictingTaskId: input.taskId,
+        mine: raw,
+        theirs: raw,
+        mineResolved: raw,
+        theirsResolved: raw,
+        error: describeSharedWithoutNote(raw),
+      };
+      if (override) return { ok: true, warnings, overridden: { reason: override, conflict: refusal } };
+      return { ok: false, ...refusal };
+    }
+  }
+
+  const activeTasks = input.activeTasks ?? [];
+  for (const other of activeTasks) {
     if (other.taskId === input.taskId) continue;
     const theirsList = normalizeStringList(other.territory);
     if (!theirsList) continue;
     for (const mine of mineList) {
+      const mineEntry = parseTerritoryEntry(mine);
       const resolvedMine = resolveTerritoryEntry(mine, input.cwd);
       if (!resolvedMine) continue;
       for (const theirs of theirsList) {
+        const theirsEntry = parseTerritoryEntry(theirs);
         const resolvedTheirs = resolveTerritoryEntry(theirs, other.cwd);
         if (!resolvedTheirs) continue;
         if (!segmentsOverlap(resolvedMine.segments, resolvedTheirs.segments)) continue;
-        return {
-          ok: false,
+
+        // Both declared shared: the two implementers consented to share.
+        if (mineEntry.mode === "shared" && theirsEntry.mode === "shared") continue;
+
+        const base = {
           conflictingTaskId: other.taskId,
           mine,
           theirs,
           mineResolved: resolvedMine.display,
           theirsResolved: resolvedTheirs.display,
-          error:
-            `territory "${mine}" (resolved: "${resolvedMine.display}") overlaps task ${other.taskId}'s declared "${theirs}" (resolved: "${resolvedTheirs.display}"), and that task is ACTIVE right now ` +
-            "— refusing to spawn a second live implementer over territory another running task already claims",
         };
+
+        // One shared, one not: the exclusive side never consented.
+        if (mineEntry.mode !== theirsEntry.mode) {
+          return refuseOrOverride({ ...base, error: describeSharedVsExclusive(base) }, override, warnings);
+        }
+
+        const globMine = isGlobSegments(resolvedMine.segments);
+        const globTheirs = isGlobSegments(resolvedTheirs.segments);
+
+        if (globMine && globTheirs) {
+          // The very same glob claimed by both is a real collision, not nesting.
+          if (sameSegments(resolvedMine.segments, resolvedTheirs.segments)) {
+            return refuseOrOverride({ ...base, error: describeConcreteVsConcrete(base) }, override, warnings);
+          }
+          const nested =
+            containsSegments(resolvedMine.segments, resolvedTheirs.segments) ||
+            containsSegments(resolvedTheirs.segments, resolvedMine.segments);
+          if (nested) {
+            warnings.push({ ...base, message: describeBroadGlob(base) });
+            continue;
+          }
+          return refuseOrOverride({ ...base, error: describeGlobCross(base) }, override, warnings);
+        }
+
+        if (globMine !== globTheirs) {
+          const concrete = globMine ? resolvedTheirs : resolvedMine;
+          const exists = input.pathExists ? input.pathExists(concrete.display) : true;
+          if (!exists) {
+            warnings.push({ ...base, message: describeNewFileUnderGlob(base) });
+            continue;
+          }
+          return refuseOrOverride({ ...base, error: describeConcreteVsGlob(base) }, override, warnings);
+        }
+
+        // Two concrete paths that overlap.
+        return refuseOrOverride({ ...base, error: describeConcreteVsConcrete(base) }, override, warnings);
       }
     }
   }
-  return { ok: true };
+  return { ok: true, warnings };
+}
+
+function refuseOrOverride(
+  refusal: TerritoryRefusal,
+  override: string,
+  warnings: TerritoryWarning[],
+): TerritoryConflictDecision {
+  if (override) return { ok: true, warnings, overridden: { reason: override, conflict: refusal } };
+  return { ok: false, ...refusal };
 }
 
 /**
- * Duas entradas de território colidem quando seus segmentos de path
- * concordam até um wildcard, ou até o mais curto acabar (prefixo). `"*"`
- * casa exatamente um segmento; `"**"` (ou um `"/"` final, normalizado
- * abaixo) casa o resto. Uma entrada que não lê como path (prosa, ver
- * `resolveTerritoryEntry`) nunca colide — não há estrutura pra comparar.
- *
- * `baseA`/`baseB` resolvem entradas RELATIVAS contra a pasta da própria
- * task antes da comparação (ausente = relativo fica relativo, o
- * comportamento histórico de duas entradas soltas).
+ * Lists, for a task's SHARED entries, the OTHER active tasks on the same path —
+ * the coordination list each implementer's brief carries. Pure: callers pass
+ * the already-filtered active tasks. One line per (path, other task); `null`
+ * when there is nothing shared to report.
+ */
+export function describeSharedCoOwners(input: {
+  taskId: string;
+  territory: string[] | null;
+  cwd?: string | null;
+  others: { taskId: string; territory: string[] | null; cwd?: string | null }[];
+}): string | null {
+  const mineList = normalizeStringList(input.territory);
+  if (!mineList) return null;
+  const shared = mineList.filter(isSharedTerritoryEntry);
+  if (shared.length === 0) return null;
+  const lines: string[] = [];
+  for (const raw of shared) {
+    const mine = resolveTerritoryEntry(raw, input.cwd);
+    if (!mine) continue;
+    for (const other of input.others) {
+      if (other.taskId === input.taskId) continue;
+      const theirsList = normalizeStringList(other.territory);
+      if (!theirsList) continue;
+      for (const theirs of theirsList) {
+        if (!isSharedTerritoryEntry(theirs)) continue;
+        const resolvedTheirs = resolveTerritoryEntry(theirs, other.cwd);
+        if (!resolvedTheirs) continue;
+        if (!segmentsOverlap(mine.segments, resolvedTheirs.segments)) continue;
+        const note = parseTerritoryEntry(theirs).note ?? parseTerritoryEntry(raw).note ?? "no note";
+        lines.push(`- "${raw}" is also held by task ${other.taskId} (shared note: ${note})`);
+      }
+    }
+  }
+  return lines.length === 0 ? null : lines.join("\n");
+}
+
+/**
+ * Two entries collide when their path segments agree up to a wildcard, or until
+ * the shorter one ends (prefix). `"*"` matches exactly one segment; `"**"` (or
+ * a trailing `"/"`, normalized) matches the rest. An entry that does not read
+ * as a path never collides.
  */
 export function territoryEntriesOverlap(a: string, b: string, baseA?: string | null, baseB?: string | null): boolean {
   const segA = resolveTerritoryEntry(a, baseA);
@@ -150,7 +289,7 @@ export function territoryEntriesOverlap(a: string, b: string, baseA?: string | n
   return segmentsOverlap(segA.segments, segB.segments);
 }
 
-/** O miolo do comparador: prefixo por segmento com `*`/`**`. */
+/** The comparator core: per-segment prefix with `*`/`**`. */
 function segmentsOverlap(segA: readonly string[], segB: readonly string[]): boolean {
   const len = Math.min(segA.length, segB.length);
   for (let i = 0; i < len; i++) {
@@ -161,29 +300,57 @@ function segmentsOverlap(segA: readonly string[], segB: readonly string[]): bool
   return true;
 }
 
-/** Uma entrada de território já resolvida: os segmentos que o comparador usa
- * e o caminho resolvido (para nomear cada lado na recusa). */
+/** True when any segment carries a wildcard — `*`, `**`, or an embedded one
+ *  like `smoke-a8-*.mjs` (a specific pattern is still a pattern). */
+function isGlobSegments(segments: readonly string[]): boolean {
+  return segments.some((s) => s.includes("*"));
+}
+
+/** True when the two resolved segment lists are identical. */
+function sameSegments(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((seg, i) => seg === b[i]);
+}
+
+/**
+ * Does every path matching `inner` also match `outer`? (inner ⊆ outer.) Walks
+ * together; `outer`'s `**` covers the rest; `inner`'s `**` where `outer` has a
+ * literal means inner is broader, so outer does not contain it.
+ */
+function containsSegments(outer: readonly string[], inner: readonly string[]): boolean {
+  for (let i = 0; i < outer.length; i++) {
+    // `**` covers the rest of `inner`.
+    if (outer[i] === "**") return true;
+    // `outer` longer than `inner` without a `**` does not cover it.
+    if (i >= inner.length) return false;
+    // `inner` broader at this segment means `outer` does not contain it.
+    if (inner[i] === "**") return false;
+    // `*` matches exactly one segment, so it covers a literal `inner[i]`.
+    if (outer[i] === "*") continue;
+    // A literal `outer[i]` does not cover `inner[i]`'s `*`.
+    if (inner[i] === "*") return false;
+    if (outer[i] !== inner[i]) return false;
+  }
+  return outer.length >= inner.length;
+}
+
+/** A resolved territory entry: the segments the comparator uses and the
+ *  resolved path (to name each side in a refusal). */
 export type ResolvedTerritoryEntry = { segments: string[]; display: string };
 
 /**
- * A ÚNICA resolução de uma entrada de território — usada tanto pelo guard de
- * colisão quanto pelo CONTRACT CROSSING, para as duas não divergirem.
+ * The ONE resolution of a territory entry — shared by the collision guard and
+ * the CONTRACT CROSSING so the two never diverge.
  *
- * Entrada ABSOLUTA fica como está (normalizada). Entrada RELATIVA resolve
- * contra `base` (o `cwd` da própria task, ou a raiz do board). SEM base, o
- * relativo fica relativo — o comparador antigo não tinha como ancorar.
- *
- * `posix` de propósito: território usa `/`. `..` que ESCAPA a base é recusado
- * (`null`, não comparável) em vez de virar um caminho de outro repo.
- *
- * Uma anotação `" (nota)"` colada no final é removida antes de tudo — medido:
- * `"src/main/store.ts (actor)"` é comentário grudado num path real, não parte
- * dele. Um `"/"` final vira `"**"` explícito: declarar `"docs/"` é declarar
- * "tudo dentro daqui", do mesmo jeito que `"docs/**"`. Entrada com espaço
- * (prosa) não lê como path.
+ * A `shared:` mode prefix is removed first (the mode is not part of the path).
+ * An ABSOLUTE entry stays as is (normalized). A RELATIVE one resolves against
+ * `base` (own `cwd`, or board root); without a base it stays relative. `..`
+ * that ESCAPES the base is refused (`null`, not comparable). A trailing `"/"`
+ * becomes an explicit `"**"`. An entry with a space (prose) does not read as a
+ * path. A glued `" (note)"` is removed too.
  */
 export function resolveTerritoryEntry(raw: string, base?: string | null): ResolvedTerritoryEntry | null {
-  const withoutNote = raw.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const withModeStripped = raw.replace(/^shared:\s*/i, "");
+  const withoutNote = withModeStripped.replace(/\s*\([^)]*\)\s*$/, "").trim();
   if (withoutNote.length === 0) return null;
   if (/\s/.test(withoutNote)) return null;
   const withStar = withoutNote.endsWith("/") ? `${withoutNote}**` : withoutNote;
@@ -202,8 +369,77 @@ export function resolveTerritoryEntry(raw: string, base?: string | null): Resolv
   return { segments, display: path };
 }
 
-/** Base não-vazia (trim), ou `null` — ausência de base é dado, não erro. */
+/** Non-empty base (trim), or `null` — absence of a base is data, not an error. */
 function normalizeTerritoryBase(base: string | null | undefined): string | null {
   const trimmed = typeof base === "string" ? base.trim() : "";
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/* ============================ AGENT-FACING TEXT ============================
+ * Same channel as every other spawn refusal; English, and each one TEACHES the
+ * way out (declare shared on BOTH sides, or override with a reason). */
+
+type RefusalBodies = Pick<
+  TerritoryRefusal,
+  "conflictingTaskId" | "mine" | "theirs" | "mineResolved" | "theirsResolved"
+>;
+
+function describeSharedWithoutNote(raw: string): string {
+  return (
+    `[de: stellar] territory "${raw}" declares mode \`shared\` without the mandatory coordination note — ` +
+    `a shared path is a promise that TWO implementers coordinate on it, so the note is not optional. ` +
+    `Write it as \`shared:<path> (<how the two implementers coordinate: who re-reads before editing, who owns which part>)\`, ` +
+    `or declare the path without the \`shared:\` prefix to keep it exclusive. Nothing was written.`
+  );
+}
+
+function describeSharedVsExclusive(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory "${b.mine}" (resolved: "${b.mineResolved}") overlaps task ${b.conflictingTaskId}'s declared "${b.theirs}" ` +
+    `(resolved: "${b.theirsResolved}"), which is ACTIVE right now. One side declared the path \`shared\` and the other did not — ` +
+    `two implementers may hold the same path ONLY when BOTH declare it shared. Declare \`shared:<path> (<coordination note>)\` on BOTH, ` +
+    `or change one territory. Nothing was written.`
+  );
+}
+
+function describeConcreteVsConcrete(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory "${b.mine}" (resolved: "${b.mineResolved}") overlaps task ${b.conflictingTaskId}'s declared "${b.theirs}" ` +
+    `(resolved: "${b.theirsResolved}"), and that task is ACTIVE right now — refusing a second live implementer over the same declared path. ` +
+    `If you truly need to share it, declare \`shared:<path> (<coordination note>)\` on BOTH tasks; an orchestrator can pass ` +
+    `\`overrideTerritory: "<reason>"\` to proceed anyway, which is recorded. Nothing was written.`
+  );
+}
+
+function describeConcreteVsGlob(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory "${b.mine}" (resolved: "${b.mineResolved}") matches task ${b.conflictingTaskId}'s declared glob "${b.theirs}" ` +
+    `(resolved: "${b.theirsResolved}"), which is ACTIVE right now, and the path ALREADY EXISTS on disk — this is a real collision with the ` +
+    `files that glob claims. Declare \`shared:<path> (<note>)\` on BOTH tasks, narrow one side, or pass ` +
+    `\`overrideTerritory: "<reason>"\` (recorded). Nothing was written.`
+  );
+}
+
+function describeGlobCross(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory glob "${b.mine}" (resolved: "${b.mineResolved}") crosses task ${b.conflictingTaskId}'s glob "${b.theirs}" ` +
+    `(resolved: "${b.theirsResolved}") — neither contains the other and that task is ACTIVE. Narrow one side, declare ` +
+    `\`shared:<path> (<note>)\` on BOTH, or pass \`overrideTerritory: "<reason>"\` (recorded). Nothing was written.`
+  );
+}
+
+function describeBroadGlob(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory "${b.mine}" (resolved: "${b.mineResolved}") is nested under task ${b.conflictingTaskId}'s broader glob ` +
+    `"${b.theirs}" (resolved: "${b.theirsResolved}"), which is ACTIVE. Allowed: a broad claim does not hard-block a narrower one — ` +
+    `coordinate with task ${b.conflictingTaskId} before writing. This is a warning, not a gate.`
+  );
+}
+
+function describeNewFileUnderGlob(b: RefusalBodies): string {
+  return (
+    `[de: stellar] territory "${b.mine}" (resolved: "${b.mineResolved}") sits under task ${b.conflictingTaskId}'s broader claim ` +
+    `"${b.theirs}" (resolved: "${b.theirsResolved}"), which is ACTIVE, but the path does not exist on disk yet — allowed as a NEW/specific ` +
+    `target under a broad claim. Coordinate with task ${b.conflictingTaskId} before creating it (this is a warning, not a gate).`
+  );
 }

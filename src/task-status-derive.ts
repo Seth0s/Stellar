@@ -25,13 +25,37 @@
 
 export type TaskJudgmentStatus = "done" | "failed";
 export type TaskParticipationStatus = "pending" | "running";
-export type DerivedTaskStatus = TaskJudgmentStatus | TaskParticipationStatus;
+/** Terminal states that are NOT a judgment: a task swapped for another one.
+ * It ends the task's life without calling it a failure. */
+export type TaskSupersededStatus = "superseded";
+export type DerivedTaskStatus = TaskJudgmentStatus | TaskParticipationStatus | TaskSupersededStatus;
 
 export function isJudgmentStatus(status: string): status is TaskJudgmentStatus {
   return status === "done" || status === "failed";
 }
 
-/** Stored domain: pending|done|failed. `running` is never authoritative. */
+/**
+ * A task whose life ENDED — done, failed or superseded. Distinct from
+ * `isJudgmentStatus` (which is specifically "someone judged this done/failed"):
+ * a superseded task is terminal but nobody failed. Use this where the code
+ * means "no longer being worked / never a candidate for delivery or dispatch".
+ */
+export function isTerminalStatus(status: string): boolean {
+  return status === "done" || status === "failed" || status === "superseded";
+}
+
+/**
+ * A dependency that no longer BLOCKS a dependent. `done` is the obvious one;
+ * `superseded` also settles the edge because the work it represented was
+ * REPLACED by another task. The engine never rewrites the dependency edge
+ * itself — the orchestrator is notified to swap it — but it must not leave a
+ * dependent stuck forever on a task that will never become `done`.
+ */
+export function isDependencySettled(status: string | null | undefined): boolean {
+  return status === "done" || status === "superseded";
+}
+
+/** Stored domain: pending|done|failed|superseded. `running` is never authoritative. */
 export function coerceStoredTaskStatus(status: string): string {
   return status === "running" ? "pending" : status;
 }
@@ -62,7 +86,9 @@ export function hasLiveImplementer(
  * a quem DESPACHA foi o custo medido desta fusão.
  */
 export function deriveTaskStatus(storedStatus: string, hasLiveImplementer: boolean): DerivedTaskStatus {
-  if (isJudgmentStatus(storedStatus)) return storedStatus;
+  // `superseded` is terminal like a judgment: a live card cannot turn a task
+  // that was replaced into "running".
+  if (isTerminalStatus(storedStatus)) return storedStatus as DerivedTaskStatus;
   return hasLiveImplementer ? "running" : "pending";
 }
 
@@ -81,7 +107,7 @@ export function deriveParticipationDivergence(input: {
   existingDivergedStatus: string | null | undefined;
   existingDivergedActor: StatusActor | null | undefined;
 }): { divergedStatus: string | null; divergedActor: StatusActor | null } {
-  if (isJudgmentStatus(input.storedStatus)) {
+  if (isTerminalStatus(input.storedStatus)) {
     return {
       divergedStatus: input.existingDivergedStatus ?? null,
       divergedActor: input.existingDivergedActor ?? null,

@@ -51,10 +51,19 @@ export function reachedDone(decision: StatusWriteDecision): boolean {
   return decision.statusChanged && decision.status === "done";
 }
 
+/** A task that reached a SETTLED terminal state that its dependents must be
+ * re-evaluated against: `done` (the work finished) OR `superseded` (the work
+ * was replaced by another task, so dependents are no longer blocked). Both
+ * reach `onTaskDone`, the one dependents engine; `failed` does not (a
+ * dependent never starts on top of a failure). */
+export function reachedSettled(decision: StatusWriteDecision): boolean {
+  return decision.statusChanged && (decision.status === "done" || decision.status === "superseded");
+}
+
 export function createTaskWriteFunnel(deps: TaskWriteFunnelDeps) {
   function settle(task: TaskRow, decision: StatusWriteDecision): StatusWriteDecision {
     deps.afterWrite(task.board_id);
-    if (reachedDone(decision)) deps.onTaskDone(task.id);
+    if (reachedSettled(decision)) deps.onTaskDone(task.id);
     return decision;
   }
   return {

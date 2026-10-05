@@ -1,22 +1,12 @@
-// Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
-// serviços não são fechados daquela sessão".
+// Counterpart of the old session-teardown smoke.
 //
-// A sonda mostrou que o unmount do card JÁ chamava kill e que um `bash`
-// morria na hora — o que escondia o defeito real: `kill` mandava um
-// `SIGHUP` (o default do node-pty) e apagava a entrada do registry na
-// MESMA linha, sem nunca confirmar a morte. Um processo que ignora ou
-// demora no SIGHUP virava órfão, e como a entrada já tinha sumido,
-// `isAlive`/`card_status` passavam a responder "exited" com o processo
-// vivo — a app perdia até a capacidade de saber que ele existia.
+// BEFORE: leaving a session terminated its processes; the card unmount called
+// `pty.kill` and main killed immediately.
 //
-// Um shell propaga SIGHUP e some, e é por isso que o caminho mais testado
-// parecia certo. CLIs de agente são justamente as que instalam handler de
-// sinal pra desligar com calma, ou seja, exatamente as que sobreviviam.
-//
-// O teste abaixo reproduz isso sem depender de nenhuma CLI real: um
-// `exec` faz o processo do PTY VIRAR um shell que ignora HUP e TERM, então
-// só o último degrau da escada (SIGKILL) o encerra. Se o escalonamento
-// regredir pra um sinal só, este arquivo fica vermelho.
+// NOW: leaving a session UNMOUNTS the UI (zero render) but KEEPS the processes
+// alive; an EXPLICIT "Stop session" is what kills. This file proves both halves
+// and keeps the signal-LADDER proof (a process that ignores HUP/TERM only dies
+// on SIGKILL) for the explicit-stop path.
 import { execSync } from "node:child_process";
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
@@ -39,16 +29,10 @@ async function toolJson(name, args) {
   if (rpc.error) throw new Error(JSON.stringify(rpc.error));
   return JSON.parse(rpc.result.content[0].text);
 }
-/** `pgrep -f` casa pelo argv inteiro, então o marcador precisa estar NO
- * argv do processo sondado — um `# comentário` some no parse do shell e não
- * apareceria.
- *
- * O `[S]` no padrão não é enfeite: sem ele, a linha de comando do PRÓPRIO
- * `pgrep` (e do shell que o `execSync` cria) contém o marcador literal e
- * casa consigo mesma, então `markerAlive()` às vezes respondia "vivo" com o
- * processo já morto. Isso deu um FAIL intermitente que parecia bug do
- * escalonamento de kill e não era — a escada estava certa, a sonda é que se
- * enxergava. `[S]TELLAR…` casa a mesma coisa sem conter a string literal. */
+/** `pgrep -f` matches the whole argv, so the marker must be IN the probed
+ * process's argv — a `# comment` disappears in the shell parse and would not
+ * show up. The `[S]` in the pattern keeps the `pgrep`/shell command line itself
+ * from matching the literal (the probe seeing itself). */
 function markerAlive() {
   const pattern = `[${MARKER[0]}]${MARKER.slice(1)}`;
   try {
@@ -57,13 +41,13 @@ function markerAlive() {
     return false;
   }
 }
-async function waitForMarkerGone(ms) {
+async function waitFor(fn, ms) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (!markerAlive()) return true;
+    if (fn()) return true;
     await new Promise((r) => setTimeout(r, 250));
   }
-  return !markerAlive();
+  return fn();
 }
 async function centerOf(page, selector) {
   return JSON.parse(
@@ -81,42 +65,53 @@ try {
   await bootIntoFreshSession(page, "Sessao A");
   await new Promise((r) => setTimeout(r, 700));
 
+  const boardId = await page.evalJs(`
+    (async () => {
+      const boards = await window.store.boards.list();
+      return boards.find((b) => b.name === "Sessao A")?.id ?? boards[0].id;
+    })()
+  `);
   const bashA = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "terminal").id;
 
-  // `exec` é o ponto: substitui o shell, então quem ignora os sinais passa
-  // a ser o PRÓPRIO processo do PTY — que é o caso real (uma CLI de agente
-  // com handler de shutdown), não um neto qualquer.
+  // `exec` makes the PTY process BECOME a shell that ignores HUP and TERM: only
+  // the last ladder step (SIGKILL) terminates it. This is the real case of an
+  // agent CLI with a shutdown handler.
   await toolJson("send_to_card", {
     target: bashA,
     text: `exec sh -c 'trap "" HUP TERM; while true; do sleep 1; done' ${MARKER}`,
   });
   await new Promise((r) => setTimeout(r, 2000));
   check("o processo que resiste a HUP/TERM está rodando no card", markerAlive(), true);
-  check("...e o card se reporta vivo", (await toolJson("card_status", { target: bashA })).status, "running");
 
-  // --- sai da sessão ---
+  // --- leave the session: NOW the process STAYS alive ---
   const homeBtn = await centerOf(page, ".topbar-home");
   await page.click(homeBtn.x, homeBtn.y);
+  await new Promise((r) => setTimeout(r, 1500));
 
-  // A escada é HUP → 2s → TERM → 2s → KILL; a folga cobre o agendamento.
-  check("sair da sessão encerra mesmo um processo que ignora HUP e TERM", await waitForMarkerGone(12_000), true);
+  check("sair da sessão MANTÉM o processo vivo (sessão em segundo plano)", markerAlive(), true);
+  const xtermOnHome = await page.evalJs(`document.querySelectorAll('.xterm').length`);
+  check("na Home não há xterm montado (UI do board desmontada: zero render)", xtermOnHome, 0);
 
-  // --- escopo: na Home não há card operável ---
+  const bg = await page
+    .evalJs(`(async () => JSON.stringify(await window.store.boardBackgroundStatus()))()`)
+    .then(JSON.parse);
+  check("o board aparece como vivo no estado de fundo", bg.boards?.[boardId]?.alive, true);
+  check("...e conta como uma sessão de fundo", bg.backgroundCount >= 1, true);
+
+  // --- EXPLICIT "stop session": kills, and proves the signal ladder ---
+  await page.evalJs(`window.store.boardStop(${JSON.stringify(boardId)})`);
+  check("parar sessão encerra mesmo um processo que ignora HUP e TERM", await waitFor(() => !markerAlive(), 12_000), true);
+
+  // --- scope: on Home there is no operable card ---
   const onHome = await toolJson("list_cards", {});
   check("na Home o list_cards fica vazio (nenhum card montado pra operar)", onHome.cards.length, 0);
 
-  // --- sessão nova: só os cards dela ---
+  // --- new session: only its own cards ---
   await bootIntoFreshSession(page, "Sessao B");
   await new Promise((r) => setTimeout(r, 1500));
   const onB = await toolJson("list_cards", {});
   check("depois de trocar, o list_cards traz só a sessão aberta", onB.cards.every((c) => c.id !== bashA), true);
   check("...e ela tem o próprio terminal", onB.cards.some((c) => c.kind === "terminal"), true);
-  const staleStatus = await toolJson("card_status", { target: bashA });
-  check(
-    "um card da sessão anterior responde 'não existe', não 'exited' (era isso que lia como 'a sessão antiga continua lá')",
-    staleStatus.ok === false && /no open terminal card/.test(staleStatus.error ?? ""),
-    true,
-  );
 } finally {
   finish();
   await stopApp(app);
@@ -126,7 +121,7 @@ try {
     try {
       execSync(`pkill -9 -f '[${MARKER[0]}]${MARKER.slice(1)}'`);
     } catch {
-      /* nada a fazer */
+      /* nothing to do */
     }
   }
 }

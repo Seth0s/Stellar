@@ -108,11 +108,14 @@ export function providersConfigPath(userDataDir: string): string {
 /**
  * UM provider de CLI, em JSON — um espelho declarativo de `ProviderDef`
  * (`providers.ts`): id/label/binaryNames/installCommand iguais, e o
- * `capacity` com os mesmos campos menos o que um adaptador data-driven
- * NÃO consegue expressar: o que só existe como implementação medida de um
- * nativo (o `midTurnQueue` do cursor, os `submitStartedPattern`) fica de
- * fora e continua `undefined` num dinâmico — inventar essa medição para
- * outra CLI é justamente o que este projeto não faz.
+ * `capacity` com os mesmos campos — inclusive os que nasceram como
+ * implementação de um nativo e depois foram MEDIDOS num dinâmico: o
+ * `midTurnQueue` do cursor/cline e, agora, o `submitStartedPattern` do
+ * commandcode. Um deles continua fora, de propósito: o `buildArgs` à mão
+ * (o sintetizador só cobre o que a `capacity` expressa). Inventar uma
+ * medição para uma CLI que não foi observada é justamente o que este
+ * projeto não faz — por isso cada campo aqui é OPCIONAL e ausente significa
+ * "não medido", nunca um default.
  */
 export type DynamicProviderSpec = {
   /** Id estável usado em `spawn_agent`, no card e no banco. */
@@ -252,6 +255,18 @@ export type DynamicProviderSpec = {
     delivery: {
       briefMechanism: "positional" | "flag" | "none";
       briefFlag?: string;
+      /**
+       * Vocabulário de TELA que esta CLI imprime quando ACEITOU o prompt e o
+       * turno começou (task 2026-10-05, defeito do composer: mensagem que chegou
+       * virava `unknown` porque o provider dinâmico não declarava marcador
+       * nenhum). É o espelho, no arquivo, do `ProviderCapacity.delivery.
+       * submitStartedPattern` dos nativos — e a FONTE é TEXTO porque o arquivo é
+       * JSON e não carrega `RegExp`; quem compila é `dynamicProviderDef`, com
+       * flag `i` (a chrome varia em caixa — a medição do commandcode mostra
+       * `esc to interrupt` em minúsculas). Ausente = não medido, e a checagem
+       * afirmativa é pulada (nunca inventada).
+       */
+      submitStartedPattern?: string;
       /**
        * Como esta CLI sinaliza o FIM de um turno (task 0dd5c145). Ausente =
        * não sinaliza, e a UI NÃO promete — mesma regra da ausência de esforço.
@@ -903,6 +918,22 @@ export function parseSessionStore(raw: unknown): StoreParse<SessionStore> {
     read = { exists, content: content.value };
   }
 
+  let prompt: Extract<SessionStore, { kind: "files" }>["prompt"];
+  if (raw.prompt !== undefined && raw.prompt !== null) {
+    if (!isRecord(raw.prompt)) {
+      return { ok: false, reason: refusal(`${field}.prompt`, "an object with `file` (a glob with `{id}`) and optional `field`", raw.prompt) };
+    }
+    const file = nonEmptyString(raw.prompt.file);
+    if (file === null || !file.includes("{id}")) {
+      return { ok: false, reason: refusal(`${field}.prompt.file`, 'a glob with `{id}` naming the first-prompt file, relative to `root` (e.g. "{id}.checkpoints.jsonl")', raw.prompt.file === undefined ? RECEIVED_NOTHING : raw.prompt.file) };
+    }
+    const promptField = raw.prompt.field === undefined || raw.prompt.field === null ? undefined : nonEmptyString(raw.prompt.field);
+    if (promptField === null) {
+      return { ok: false, reason: refusal(`${field}.prompt.field`, "a non-empty JSON key (defaults to `prompt` when omitted)", raw.prompt.field) };
+    }
+    prompt = promptField === undefined ? { file } : { file, field: promptField };
+  }
+
   return {
     ok: true,
     value: {
@@ -913,6 +944,7 @@ export function parseSessionStore(raw: unknown): StoreParse<SessionStore> {
       cwd: cwd.value,
       time: time.value,
       ...(read !== undefined ? { read } : {}),
+      ...(prompt !== undefined ? { prompt } : {}),
     },
   };
 }
@@ -1264,6 +1296,39 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
       ok: false,
       reason: refusal("capacity.delivery.briefMechanism", `one of ${acceptedList(DELIVERY_BRIEF_MECHANISMS)}`, deliveryRaw.briefMechanism),
     };
+  }
+
+  // O INÍCIO DE TURNO (2026-10-05) — OPCIONAL, e AUSENTE é o default honesto
+  // ("não medido"): sem ele a checagem afirmativa é pulada e o laço degrada para
+  // a atividade genérica, NUNCA para um `sent` otimista. A fonte é COMPILADA
+  // aqui, na porta, pelo mesmo motivo do `turnEnd` logo abaixo: uma declaração
+  // inválida vira recusa com motivo, em vez de um `new RegExp` que explode no
+  // meio de um boot.
+  if (deliveryRaw.submitStartedPattern !== undefined && deliveryRaw.submitStartedPattern !== null) {
+    const pattern = nonEmptyString(deliveryRaw.submitStartedPattern);
+    if (!pattern) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.submitStartedPattern",
+          'a non-empty regex SOURCE string (e.g. "esc to interrupt") — omit it when this CLI was never measured',
+          deliveryRaw.submitStartedPattern,
+        ),
+      };
+    }
+    try {
+      new RegExp(pattern);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.submitStartedPattern",
+          "a source that compiles as a regular expression",
+          `${pattern} (${err instanceof Error ? err.message : String(err)})`,
+        ),
+      };
+    }
+    delivery.submitStartedPattern = pattern;
   }
 
   // O FIM DE TURNO (task 0dd5c145) — OPCIONAL, e AUSENTE é o default honesto
@@ -1755,6 +1820,12 @@ function capacitySchema(): Record<string, unknown> {
         // mecanismo, então o `if/then` do schema exige `pattern` só quando o
         // mecanismo declarado é `screen` (e nenhum quando é `hook`).
         extra: {
+          submitStartedPattern: asNonEmptyStr(
+            "Vocabulário de TELA que esta CLI imprime quando ACEITOU o prompt e o turno começou (o sinal que " +
+              "promove a entrega de `unknown` para `sent`). FONTE de regex em TEXTO (o arquivo é JSON e não carrega " +
+              "`RegExp`), compilada com flag `i` — ex.: \"esc to interrupt\". AUSENTE (o default) = não medido, e a " +
+              "checagem afirmativa é PULADA: nunca inventamos um marcador para uma CLI que não foi observada.",
+          ),
           midTurnQueue: {
             type: "object",
             description:
@@ -2672,13 +2743,18 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
         // teste da gramática (que lê `providerById`, não o spec) pegou.
         ...(declared.session.store ? { store: declared.session.store } : {}),
       },
-      // `submitStartedPattern` fica de fora de propósito: é vocabulário de
-      // TELA medido, e não foi medido para nenhum dinâmico. Ausente =
-      // "não medido", que é a verdade — inventar aqui mudaria o
-      // comportamento do `isActive` sem prova.
       delivery: {
         briefMechanism: declared.delivery.briefMechanism,
         ...(declared.delivery.briefFlag ? { briefFlag: declared.delivery.briefFlag } : {}),
+        // O INÍCIO DE TURNO (2026-10-05) — COMPILADO aqui, como o turnEnd: o
+        // arquivo guarda a FONTE (JSON não carrega `RegExp`) e o registro vivo
+        // carrega o `RegExp`. Sem este `...` o campo passaria no schema, no
+        // validador e MORRERIA aqui — a classe exata que o gate de round-trip
+        // pega. Flag `i` porque a medição do commandcode traz `esc to interrupt`
+        // em minúsculas e a chrome varia em caixa na tela.
+        ...(declared.delivery.submitStartedPattern
+          ? { submitStartedPattern: new RegExp(declared.delivery.submitStartedPattern, "i") }
+          : {}),
         // O FIM DE TURNO (task 0dd5c145) — COMPILADO aqui: o arquivo guarda a
         // FONTE como texto (JSON não carrega `RegExp`) e o registro vivo
         // carrega o `RegExp`. Este `...` é o que faz a declaração CHEGAR ao

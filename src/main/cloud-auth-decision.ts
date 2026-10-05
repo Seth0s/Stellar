@@ -181,18 +181,35 @@ export function parseMe(raw: unknown): CloudAccount | null {
 // Envelope de erro do backend.
 // ---------------------------------------------------------------------------
 
-export type CloudApiError = { status: number; code: string; message: string };
+/**
+ * `feature`, `plan` and `expiredAt` are set only by the plan refusals: the 402
+ * envelope adds them so the app can tell "this needs the Pro plan" from "this
+ * plan expired" without reading a human message. Absent elsewhere, so the
+ * ordinary error path is unchanged.
+ */
+export type CloudApiError = {
+  status: number;
+  code: string;
+  message: string;
+  feature?: string;
+  plan?: string;
+  expiredAt?: string;
+};
 
 export function parseCloudApiError(status: number, raw: unknown, fallbackMessage: string): CloudApiError {
   if (typeof raw === "object" && raw !== null) {
     const err = (raw as Record<string, unknown>).error;
     if (typeof err === "object" && err !== null) {
       const e = err as Record<string, unknown>;
-      return {
+      const error: CloudApiError = {
         status,
         code: typeof e.code === "string" ? e.code : "unknown",
         message: typeof e.message === "string" ? e.message : fallbackMessage,
       };
+      if (typeof e.feature === "string" && e.feature !== "") error.feature = e.feature;
+      if (typeof e.plan === "string" && e.plan !== "") error.plan = e.plan;
+      if (typeof e.expired_at === "string" && e.expired_at !== "") error.expiredAt = e.expired_at;
+      return error;
     }
   }
   return { status, code: "unknown", message: fallbackMessage };

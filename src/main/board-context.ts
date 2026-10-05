@@ -49,7 +49,16 @@ export type BoardContextEntry = {
   taskId?: string;
 };
 
-export type BoardContext = { rules: BoardContextEntry[]; traps: BoardContextEntry[] };
+export type BoardContext = {
+  rules: BoardContextEntry[];
+  traps: BoardContextEntry[];
+  /**
+   * Extra directories the board's gates may read OUTSIDE the task repository —
+   * a tool shared by every repository of the workspace. Absolute paths only;
+   * they are mounted read-only in the gate sandbox. Absent means none.
+   */
+  gateToolPaths?: string[];
+};
 
 export const EMPTY_BOARD_CONTEXT: BoardContext = { rules: [], traps: [] };
 
@@ -98,11 +107,30 @@ function parseEntries(raw: unknown): BoardContextEntry[] {
   return out;
 }
 
+/** Reads the declared gate tool directories: strings, trimmed, de-duplicated.
+ *  Any other shape becomes an empty list, never an invented path. */
+function parseGateToolPaths(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const text = item.trim();
+    if (text === "" || out.includes(text)) continue;
+    out.push(text);
+  }
+  return out;
+}
+
 /** Tolerante por contrato: forma errada vira seção vazia, nunca exceção. */
 export function parseBoardContext(raw: unknown): BoardContext {
   if (typeof raw !== "object" || raw === null) return { rules: [], traps: [] };
   const obj = raw as Record<string, unknown>;
-  return { rules: parseEntries(obj.rules), traps: parseEntries(obj.traps) };
+  const gateToolPaths = parseGateToolPaths(obj.gateToolPaths);
+  return {
+    rules: parseEntries(obj.rules),
+    traps: parseEntries(obj.traps),
+    ...(gateToolPaths.length > 0 ? { gateToolPaths } : {}),
+  };
 }
 
 /**
@@ -186,10 +214,10 @@ export function attachBoardContext(brief: string | undefined, block: string): st
  * (`report.boardTraps`). Semear armadilha seria inventar medição.
  */
 export function seedBoardContext(raw: unknown): BoardContext {
-  const rules = parseEntries(
-    typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).rules : undefined,
-  );
-  return { rules, traps: [] };
+  const obj = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : undefined;
+  const rules = parseEntries(obj?.rules);
+  const gateToolPaths = parseGateToolPaths(obj?.gateToolPaths);
+  return { rules, traps: [], ...(gateToolPaths.length > 0 ? { gateToolPaths } : {}) };
 }
 
 /**

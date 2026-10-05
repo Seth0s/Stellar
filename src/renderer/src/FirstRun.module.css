@@ -1,0 +1,141 @@
+.wrap {
+  position: absolute;
+  inset: 0;
+  top: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--v2-s18);
+  box-sizing: border-box;
+  background: radial-gradient(760px 480px at 50% 30%, var(--v2-glow) 0%, var(--v2-bg) 70%);
+  color: var(--v2-text);
+}
+
+.inner {
+  width: 100%;
+  max-width: 820px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s17);
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--v2-s7);
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--v2-f34);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.intro {
+  margin: 0;
+  max-width: 520px;
+  font-size: var(--v2-f15);
+  line-height: 1.55;
+  color: var(--v2-text-3);
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--v2-s8);
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s7);
+  padding: var(--v2-s12);
+  border-radius: var(--v2-r14);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-mid);
+  color: var(--v2-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.choice:hover {
+  border-color: var(--v2-choice-border-hover);
+  background: var(--v2-choice-bg-hover);
+}
+
+.choiceIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--v2-r10);
+  background: var(--v2-primary-soft);
+  display: grid;
+  place-items: center;
+}
+
+.choiceIconAlt {
+  background: var(--v2-choice-icon-alt);
+}
+
+.choiceTitle {
+  font-size: var(--v2-f17);
+  font-weight: 600;
+}
+
+.choiceDesc {
+  font-size: var(--v2-f13h);
+  line-height: 1.55;
+  color: var(--v2-text-3);
+}
+
+.choiceLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  font-size: var(--v2-f13);
+  color: var(--v2-link);
+}
+
+.langRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--v2-s7);
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-5);
+}
+
+.segGroup {
+  display: flex;
+  padding: var(--v2-s1h);
+  border-radius: var(--v2-r8);
+  background: var(--v2-inset);
+  border: 1px solid var(--v2-line-mid);
+}
+
+.seg {
+  height: 30px;
+  padding: 0 var(--v2-s6);
+  border: 0;
+  border-radius: var(--v2-r6);
+  background: transparent;
+  color: var(--v2-text-3);
+  font: inherit;
+  font-size: var(--v2-f12h);
+  cursor: pointer;
+}
+
+.segOn {
+  background: var(--v2-seg-active);
+  color: var(--v2-text);
+}
+
+@media (max-width: 640px) {
+  .choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

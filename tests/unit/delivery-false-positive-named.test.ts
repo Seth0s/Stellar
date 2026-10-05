@@ -28,11 +28,16 @@ function declared(providerId: string): Record<string, unknown> {
 }
 
 describe("(b) o falso positivo de 'mensagem enviada' — a forma e o veredito NOVO", () => {
-  it("commandcode (GENÉRICO) não declara `submitStartedPattern` — a checagem afirmativa é pulada", () => {
+  it("commandcode PASSOU a declarar o início de turno MEDIDO (2026-10-05) — a checagem afirmativa não é mais pulada", () => {
     const delivery = declared("commandcode").capacity as Record<string, unknown> | undefined;
     const d = (delivery?.delivery ?? {}) as Record<string, unknown>;
-    // A prova documental: sem vocabulário de início de turno declarado.
-    expect(d.submitStartedPattern).toBeUndefined();
+    // 2026-10-05: o defeito do composer ("Sem confirmação · Master: unknown")
+    // tinha DUAS metades. Aqui está a do provider dinâmico: ele era GENÉRICO e
+    // não declarava vocabulário de início de turno, então a checagem afirmativa
+    // era PULADA e o veredito caía em `unknown` para uma mensagem que chegou.
+    // Medido ao vivo (Command Code v1.74.1) e declarado como FONTE de regex.
+    expect(typeof d.submitStartedPattern).toBe("string");
+    expect(String(d.submitStartedPattern)).toContain("esc to interrupt");
     // Ele DECLARA o fim de turno por tela (o marcador que a sonda mediu).
     expect(JSON.stringify(d.turnEnd)).toContain("Worked for");
   });

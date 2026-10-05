@@ -193,6 +193,10 @@ export type IdleWithoutReportDecision =
    *  ninguém o executa". Mesma pergunta, resposta DIFERENTE — e por isso uma
    *  frase diferente, nunca a acusação (task 14b8b224). */
   | { action: "notify_no_agent" }
+  /** The turn's output carries a report's shape (the task's reportSchema keys)
+   * but the report tool was never called: the notice says so instead of the
+   * generic "idle without report". */
+  | { action: "notify_screen_report" }
   | { action: "skip"; reason: IdleWithoutReportSkipReason };
 
 /**
@@ -292,6 +296,12 @@ export function decideIdleWithoutReport(input: {
    * nenhum, que é a lição que este módulo já pagou uma vez.
    */
   hasAgentReader: boolean;
+  /**
+   * The turn's output carries a report's shape: the task's reportSchema keys
+   * appear in the turn text. The caller computes it with `looksLikeReportShape`
+   * and passes it as a fact; omitted/false keeps the previous behaviour.
+   */
+  screenLooksLikeReport?: boolean;
   /** Override for tests; production uses IDLE_WITHOUT_REPORT_MS. */
   idleWithoutReportMs?: number;
 }): IdleWithoutReportDecision {
@@ -316,6 +326,10 @@ export function decideIdleWithoutReport(input: {
   //     por um fato que o próprio card emitiu;
   //   - só silêncio (sem fato de turno) → INFERIDO: frase factual, sem acusar.
   const due = (): IdleWithoutReportDecision => {
+    // Most specific evidence first: the turn's output has a report's shape (the
+    // reportSchema keys). It states what is seen, and holds even with no line
+    // reader — the text was written by someone.
+    if (input.screenLooksLikeReport === true) return { action: "notify_screen_report" };
     if (input.hasAgentReader === false) return { action: "notify_no_agent" };
     return input.declaredIdle ? { action: "notify" } : { action: "notify_unproven" };
   };
@@ -329,4 +343,46 @@ export function decideIdleWithoutReport(input: {
     return { action: "skip", reason: "not_idle_long_enough" };
   }
   return due();
+}
+
+/**
+ * Does the turn's output look like a report? Pure, and the single source of
+ * the answer: the caller (the bus scan) reads the card's turn text plus the
+ * task's `reportSchema` keys and asks here.
+ *
+ * The shape of a report is its declared keys (`filesChanged`, `gatesOutput`,
+ * …). With no declared `reportSchema` there is nothing to match against, so
+ * the function returns false rather than guessing. With a schema it requires
+ * `MIN` distinct keys (the smaller of 2 and the schema size): one lone key can
+ * be an ordinary word, two already are a report's skeleton.
+ *
+ * Case-sensitive on purpose: contract keys are exact identifiers, and case or
+ * accent folding would make any text — including the brief itself, which lists
+ * the keys — fire on its own.
+ */
+export const MIN_REPORT_SHAPE_KEYS = 2;
+
+export function looksLikeReportShape(output: string, reportSchemaKeys: readonly string[]): boolean {
+  if (typeof output !== "string" || output.length === 0) return false;
+  const keys: string[] = [];
+  for (const raw of reportSchemaKeys) {
+    const key = typeof raw === "string" ? raw.trim() : "";
+    if (key.length > 0 && !keys.includes(key)) keys.push(key);
+  }
+  if (keys.length === 0) return false;
+  const needed = Math.min(MIN_REPORT_SHAPE_KEYS, keys.length);
+  let found = 0;
+  for (const key of keys) {
+    if (output.includes(key)) found++;
+    if (found >= needed) return true;
+  }
+  return false;
+}
+
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. The `notify_screen_report` phrase:
+ * the card ended its turn with the report written on screen instead of calling
+ * the tool. It belongs to the agent-facing catalogue by convention; it lives
+ * here so the fix is testable in the same pure module. */
+export function screenReportPointerBody(): string {
+  return "ended the turn with a report ON SCREEN but never called the report tool — read the card (or ask it to call report).";
 }

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Stellar — nova task</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0b0d12}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.wc{width:34px;height:26px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;border-radius:6px;cursor:pointer}
+.wc:hover{background:#1a1e29;color:#e8eaf0}
+.lbl{font-size:12.5px;color:#c9cede}
+.hint{font-size:11.5px;color:#8d94a6}
+.in{height:38px;box-sizing:border-box;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:13px;outline:none;width:100%}
+.in:focus{border-color:#6474e8}
+.pill{height:30px;padding:0 12px;border-radius:15px;font:inherit;font-size:12.5px;cursor:pointer}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:6px;background:#1b1f2b;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#d6dae4}
+.x{border:0;background:transparent;color:#8d94a6;cursor:pointer;padding:0;display:grid;place-items:center}
+.ghost{height:36px;padding:0 14px;border-radius:8px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ghost:hover{border-color:#3a4258;color:#fff}
+.primary{height:36px;padding:0 16px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.primary:hover{background:#5770f0}
+.sw{appearance:none;width:34px;height:20px;border-radius:10px;background:#2a2f3d;position:relative;cursor:pointer;margin:0;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#c9cede}
+.sw:checked{background:#4a5fe0}
+.sw:checked::after{left:17px;background:#fff}
+.tb{width:28px;height:26px;border:0;border-radius:5px;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.tb:hover{background:#1c2130;color:#fff}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
+    <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
+    <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
+    <span style="flex: 1"></span>
+    <button class="wc" aria-label="Minimizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 6h8"></path></svg></button>
+    <button class="wc" aria-label="Maximizar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="7" height="7" rx="1"></rect></svg></button>
+    <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; background: rgba(5,6,10,.78)">
+    <div role="dialog" aria-labelledby="ct-t" style="width: 100%; max-width: 1180px; height: 100%; max-height: 820px; display: flex; flex-direction: column; border-radius: 18px; background: #12151d; border: 1px solid #2a3042; box-shadow: 0 30px 80px rgba(0,0,0,.55); overflow: hidden">
+      <div style="flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid #1d2130">
+        <h1 id="ct-t" style="margin: 0; font-size: 18px; font-weight: 600">Nova task</h1>
+        <div style="display: flex; padding: 3px; border-radius: 9px; background: #0f1218; border: 1px solid #222736" role="group" aria-label="Destino">
+          <button onClick="{{toTeam}}" style="{{segTeam}}">Board do time · Idy Platform</button>
+          <button onClick="{{toBoard}}" style="{{segBoard}}">Só este board · Idyplatform</button>
+        </div>
+        <span style="flex: 1"></span>
+        <button class="ghost" style="height: 32px">Modelo: Correção com revisão</button>
+        <button class="wc" aria-label="Fechar"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
+      </div>
+
+      <div style="flex: 1; min-height: 0; display: flex">
+        <div style="flex: 1; min-width: 0; overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <label for="tt" class="lbl">Título</label>
+            <input id="tt" class="in" style="height: 42px; font-size: 15px" value="Fila de retries com backoff em 429">
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl">Tipo de trabalho</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px" role="radiogroup" aria-label="Tipo de trabalho">
+              <sc-for list="{{purposes}}" as="p" hint-placeholder-count="5">
+                <button class="pill" role="radio" aria-checked="{{p.on}}" onClick="{{p.pick}}" style="{{p.style}}">{{p.label}}</button>
+              </sc-for>
+            </div>
+            <span class="hint">{{purposeHint}}</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <label for="ds" class="lbl">Contrato</label>
+            <div style="border-radius: 10px; border: 1px solid #2a2f3d; background: #0f1218; overflow: hidden">
+              <div style="display: flex; gap: 2px; padding: 4px 6px; border-bottom: 1px solid #1d2130" role="toolbar" aria-label="Formatação">
+                <button class="tb" aria-label="Negrito" style="font-weight: 700">B</button><button class="tb" aria-label="Itálico" style="font-style: italic">I</button><button class="tb" aria-label="Código" style="font-family: 'JetBrains Mono', monospace">&lt;/&gt;</button><button class="tb" aria-label="Lista">•</button><button class="tb" aria-label="Checklist">☐</button><button class="tb" aria-label="Mencionar arquivo">@</button>
+                <span style="flex: 1"></span>
+                <button class="tb" style="width: auto; padding: 0 8px">Pré-visualizar</button>
+              </div>
+              <textarea id="ds" style="width: 100%; height: 150px; box-sizing: border-box; padding: 12px; border: 0; background: transparent; color: #e8eaf0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.6; resize: vertical; outline: none">## Objetivo
+Requisições com 429 voltam para a fila com backoff exponencial (base 2 s, teto 60 s, jitter).
+
+## Aceite
+- [ ] teste de unidade do cálculo do atraso
+- [ ] teste de integração com o servidor falso devolvendo 429
+- [ ] nada muda para 5xx</textarea>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <span class="lbl">Território (onde o agente pode escrever)</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid #2a2f3d; background: #0f1218; min-height: 38px; box-sizing: border-box">
+                <span class="chip">src/queue/**<button class="x" aria-label="Remover src/queue"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button></span>
+                <span class="chip">tests/queue/**<button class="x" aria-label="Remover tests/queue"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button></span>
+                <input aria-label="Adicionar caminho" placeholder="+ caminho ou glob" style="flex: 1; min-width: 100px; border: 0; background: transparent; color: #e8eaf0; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; outline: none">
+              </div>
+              <span class="hint" style="color: #8ee6a8">Sem conflito com tasks rodando</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <span class="lbl">Gates (o app roda quando o relatório chega)</span>
+              <div style="display: flex; flex-direction: column; gap: 6px">
+                <div style="display: flex; align-items: center; gap: 8px"><span class="chip" style="flex: 1">npm run check:types</span><label class="hint" style="display: flex; align-items: center; gap: 6px"><input class="sw" type="checkbox">exclusivo</label></div>
+                <div style="display: flex; align-items: center; gap: 8px"><span class="chip" style="flex: 1">npm test -- queue</span><label class="hint" style="display: flex; align-items: center; gap: 6px"><input class="sw" type="checkbox" checked>exclusivo</label></div>
+                <button class="ghost" style="height: 30px; font-size: 12px; align-self: flex-start">+ gate</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 6px"><label for="dp" class="lbl">Depende de</label><input id="dp" class="in" value="#41 Cliente HTTP com timeout"><span class="hint">começa quando ela fechar</span></div>
+            <div style="display: flex; flex-direction: column; gap: 6px"><label for="rv" class="lbl">Revisão</label><select id="rv" class="in"><option>Ana Ribeiro</option><option>Eu</option><option>Agente revisor (antigravity)</option><option>Sem revisão</option></select><span class="hint">só o revisor conclui</span></div>
+            <div style="display: flex; flex-direction: column; gap: 6px"><label for="pv" class="lbl">Provider sugerido</label><select id="pv" class="in"><option>Command Code</option><option>Claude · Sonnet</option><option>Codex</option><option>Livre</option></select><span class="hint">o dono pode trocar</span></div>
+          </div>
+
+          <sc-if value="{{isTeam}}" hint-placeholder-val="{{true}}">
+            <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #0f1218; border: 1px solid #20242f">
+              <span class="lbl">Distribuição no time</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 8px" role="radiogroup" aria-label="Distribuição">
+                <sc-for list="{{assignModes}}" as="a" hint-placeholder-count="3">
+                  <button class="pill" role="radio" aria-checked="{{a.on}}" onClick="{{a.pick}}" style="{{a.style}}">{{a.label}}</button>
+                </sc-for>
+              </div>
+              <sc-if value="{{isPerson}}" hint-placeholder-val="{{true}}">
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+                  <div style="display: flex; flex-direction: column; gap: 6px"><label for="ps" class="lbl">Pessoa</label><select id="ps" class="in"><option>Bruno Melo · 2 rodando</option><option>Carla Pinto · 3 rodando</option></select></div>
+                  <div style="display: flex; flex-direction: column; gap: 6px"><label for="sp" class="lbl">Sprint</label><select id="sp" class="in"><option>Sprint 14 (atual)</option><option>Sprint 15</option><option>Backlog</option></select></div>
+                  <div style="display: flex; flex-direction: column; gap: 6px"><label for="pr" class="lbl">Prioridade</label><select id="pr" class="in"><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <details style="border-radius: 10px; border: 1px solid #20242f; background: #0f1218; padding: 12px 14px">
+            <summary style="cursor: pointer; font-size: 13px; color: #c9cede">Avançado: commit, relatório e limites</summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding-top: 12px">
+              <label style="display: flex; align-items: center; gap: 10px; font-size: 13px"><input class="sw" type="checkbox">O agente pode commitar (por padrão, só quem revisa commita)</label>
+              <div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">O relatório tem de trazer</span><div style="display: flex; flex-wrap: wrap; gap: 6px"><span class="chip">filesChanged</span><span class="chip">decision</span><span class="chip">evidence</span><span class="chip">notDone</span><span class="chip">gatesOutput</span></div></div>
+              <label style="display: flex; align-items: center; gap: 10px; font-size: 13px"><input class="sw" type="checkbox" checked>Até 2 novas tentativas se o agente falhar</label>
+            </div>
+          </details>
+        </div>
+
+        <aside style="width: 380px; flex: none; display: flex; flex-direction: column; gap: 12px; padding: 20px; box-sizing: border-box; background: #0f1117; border-left: 1px solid #1d2130; overflow: auto" aria-label="Pré-visualização">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8f9cff">O AGENTE RECEBE</span>
+          <div style="padding: 14px; border-radius: 10px; background: #0b0d12; border: 1px solid #1d2130; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.65; color: #a3aabb; white-space: pre-line">TASK #58 · {{purposeLabel}}
+Fila de retries com backoff em 429
+
+TERRITÓRIO  src/queue/**, tests/queue/**
+GATES       check:types · npm test -- queue (exclusivo)
+DEPENDE DE  #41 (rodando)
+REVISÃO     Ana Ribeiro
+COMMIT      não: quem revisa commita
+RELATÓRIO   filesChanged, decision, evidence, notDone, gatesOutput</div>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .08em; color: #8f9cff; margin-top: 6px">ONDE APARECE</span>
+          <div style="padding: 12px; border-radius: 10px; background: #12151d; border: 1px solid #20242f; font-size: 12.5px; line-height: 1.55; color: #c9cede">{{whereText}}</div>
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f2c96a"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle><path d="M8 5v3.5M8 11h.01"></path></svg>Espera #41 terminar para começar</div>
+        </aside>
+      </div>
+
+      <div style="flex: none; display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid #1d2130">
+        <span class="hint" style="flex: 1">Rascunho salvo há 3 s · Ctrl Enter cria</span>
+        <button class="ghost">Salvar como modelo</button>
+        <button class="ghost">Criar e outra</button>
+        <button class="primary">{{submitLabel}}</button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { dest: 'team', purpose: 'fix', assign: 'person' }; }
+  renderVals() {
+    const s = this.state;
+    const segOn = 'height: 30px; padding: 0 12px; border: 0; border-radius: 7px; background: #1d2232; color: #e8eaf0; font: inherit; font-size: 12.5px; cursor: pointer';
+    const segOff = 'height: 30px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: #a3aabb; font: inherit; font-size: 12.5px; cursor: pointer';
+    const pillStyle = (on) => on ? 'border: 1px solid #5a6be0; background: #1b2240; color: #ffffff' : 'border: 1px solid #2a2f3d; background: #0f1218; color: #a3aabb';
+    const P = [
+      ['investigate', 'Investigar', 'A entrega é conhecimento: causa raiz com evidência, sem mudar código.'],
+      ['implement', 'Implementar', 'Construir algo novo dentro do território.'],
+      ['fix', 'Corrigir', 'Corrigir um defeito em algo que já existe, com teste que falha antes.'],
+      ['measure', 'Medir', 'Coletar números ou evidência do estado atual.'],
+      ['integrate', 'Integrar', 'Verificar a convergência de um lote de tasks, sobre a árvore já unida.']
+    ];
+    const cur = P.find((p) => p[0] === s.purpose) || P[2];
+    const A = [['person', 'Para uma pessoa'], ['open', 'Deixar sem dono'], ['auto', 'Despachar sozinho na Fila do time']];
+    const team = s.dest === 'team';
+    const where = !team ? 'Na Fila deste board (Idyplatform). Só você vê.'
+      : s.assign === 'person' ? 'No board do time, coluna Atribuída, e na Fila do board do Bruno marcada "do time".'
+      : s.assign === 'open' ? 'No board do time, coluna Sem dono. Membros podem pedir para pegar.'
+      : 'No board do time. Quando a dependência fechar, vai para quem estiver livre e conhecer o território.';
+    return {
+      segTeam: team ? segOn : segOff, segBoard: team ? segOff : segOn,
+      toTeam: () => this.setState({ dest: 'team' }), toBoard: () => this.setState({ dest: 'board' }),
+      purposes: P.map((p) => ({ label: p[1], on: p[0] === s.purpose ? 'true' : 'false', style: pillStyle(p[0] === s.purpose), pick: () => this.setState({ purpose: p[0] }) })),
+      purposeHint: cur[2], purposeLabel: cur[1].toUpperCase(),
+      isTeam: team,
+      assignModes: A.map((a) => ({ label: a[1], on: a[0] === s.assign ? 'true' : 'false', style: pillStyle(a[0] === s.assign), pick: () => this.setState({ assign: a[0] }) })),
+      isPerson: s.assign === 'person',
+      whereText: where,
+      submitLabel: !team ? 'Criar na Fila' : s.assign === 'person' ? 'Criar e atribuir a Bruno' : 'Criar no board do time'
+    };
+  }
+}
+</script>
+</body>
+</html>

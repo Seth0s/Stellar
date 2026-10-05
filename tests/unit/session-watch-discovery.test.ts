@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import Database from "better-sqlite3";
 import {
   discoverSessionCandidates,
@@ -45,8 +44,9 @@ const HOME = "/tmp/stellar-session-watch-fixture-home";
 const NOW = Date.now();
 const FLOOR = NOW - 1_000;
 const STALE = NOW - 3_600_000;
-/** Com MAIÚSCULAS de propósito: o slug do commandcode prova-se por este cwd
- * ter que ser encontrado no disco como `tmp-fixture-commandcode`. */
+/** Upper-case on purpose: the commandcode slug is proven by this cwd having to
+ * be found on disk as `tmp-fixture-command-code` (kebab-case: `CommandCode`
+ * splits at its case boundary). */
 const FIXTURE_CC_CWD = "/tmp/Fixture/CommandCode";
 
 function write(path: string, content: string | Buffer, mtimeMs?: number): void {
@@ -115,8 +115,9 @@ beforeAll(async () => {
   // sessão é o par `<id>.meta.json` + `<id>.jsonl`. Os sidecars que o CLI
   // escreve na MESMA pasta (`<id>.checkpoints.jsonl`, `<id>.prompts.jsonl`)
   // existem aqui de propósito: eles não podem virar candidato.
-  const ccSlug = FIXTURE_CC_CWD.replace(/\//g, "-").replace(/^-/, "").toLowerCase();
-  const ccDir = `${HOME}/.commandcode/projects/${ccSlug}`;
+  // Hardcoded (not computed with the function under test): kebab-case of
+  // /tmp/Fixture/CommandCode is tmp-fixture-command-code.
+  const ccDir = `${HOME}/.commandcode/projects/tmp-fixture-command-code`;
   write(`${ccDir}/fx-cc-a.meta.json`, JSON.stringify({ traceIds: [], title: "a" }), NOW);
   write(`${ccDir}/fx-cc-a.jsonl`, pad(200), NOW);
   write(`${ccDir}/fx-cc-a.checkpoints.jsonl`, pad(40), NOW);

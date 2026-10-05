@@ -166,6 +166,28 @@ export function isDenied(spec: WorkHomeToolSpec, relPath: string): boolean {
 }
 
 /**
+ * Caminhos lógicos cujo CONTEÚDO carrega caminhos absolutos reescritos (o
+ * settings filtrado: `settings.json`, `config.toml`, `cli-config.json`). É
+ * DERIVADO da tabela — um segundo lugar para manter a lista divergiria. Só o
+ * conteúdo destes é templatizado na coleta e expandido na chegada; prosa de
+ * skill/memória NUNCA é tocada.
+ */
+export const TEMPLATED_CONTENT_PATHS: ReadonlySet<string> = new Set(
+  Object.values(WORK_HOME_TOOL_SPECS).flatMap((spec) =>
+    spec.rules
+      .filter(
+        (rule): rule is Extract<WorkHomeRule, { kind: "file" }> =>
+          rule.kind === "file" && rule.filter !== undefined && rule.filter.kind !== "none",
+      )
+      .map((rule) => `{${spec.tool}}/${rule.relPath}`),
+  ),
+);
+
+export function isTemplatedContentPath(logicalPath: string): boolean {
+  return TEMPLATED_CONTENT_PATHS.has(logicalPath);
+}
+
+/**
  * Filtra um `settings.json`: mantém SOMENTE as chaves de comportamento
  * declaradas. `null` = não sai (não é JSON-objeto, ou nenhuma chave
  * declarada está presente). Nunca devolve o conteúdo cru: um parse que falha

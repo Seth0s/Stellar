@@ -43,6 +43,13 @@ export type RunLockedInput = {
   spawnFn?: LockedSpawn;
   /** Seam de teste — a produção usa `effectivePath()`. */
   pathValue?: string;
+  /**
+   * Test seam: an explicit lock key, bypassing the key derived from the cwd
+   * (git root, else the resolved cwd). A test gives its own key under a temp
+   * directory so it can never contend with the repository lock the app holds.
+   * Production callers never set it.
+   */
+  lockKey?: string;
 };
 
 export type RunLockedEvidence = {
@@ -115,7 +122,7 @@ function shellArgv(command: string): { file: string; args: string[] } {
 export async function runLockedCommand(input: RunLockedInput): Promise<RunLockedEvidence> {
   const requestedCwd = resolve(input.cwd);
   const gitRoot = await resolveGitRoot(requestedCwd);
-  const lockKey = gateLockKey(input.scope, lockKeyFor(gitRoot, requestedCwd));
+  const lockKey = input.lockKey ?? gateLockKey(input.scope, lockKeyFor(gitRoot, requestedCwd));
   const timeoutMs = input.timeoutMs && input.timeoutMs > 0 ? input.timeoutMs : DEFAULT_GATE_TIMEOUT_MS;
   const spawnFn = input.spawnFn ?? (spawn as LockedSpawn);
   const env = { ...process.env, PATH: input.pathValue ?? effectivePath() };
