@@ -123,3 +123,18 @@ export function unreportedUnprovenIdlePointerBody(idleMs: number): string {
   const minutes = Math.max(1, Math.round(idleMs / 60_000));
   return `no report for ${minutes}min and no turn fact — silence, not abandonment: check the card before resuming.`;
 }
+
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd.
+ *
+ * The reminder typed into the card ITSELF when it ended its turn without
+ * calling `report` (idle self-reminder). Not a card-to-card message: it carries
+ * no `[de: …]` prefix, so the agent reads it as the app's own notice, like the
+ * "task for you" pointer. It leaves room for the card to be wrong about being
+ * done — "if you are not done, ignore this" — because the screen proves the turn
+ * ended, never that the work did. */
+export function selfReportReminderBody(taskId: string): string {
+  return (
+    `You ended your turn without calling the report tool for task ${taskId}. ` +
+    "If you are done, call report now; if you are not done, ignore this."
+  );
+}

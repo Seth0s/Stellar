@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Fila: gráficos</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.chip{height:30px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer}
+.chip:hover{color:#e8eaf0}
+.chipOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.panel{border:1px solid #1d2230;border-radius:14px;background:#0f1218;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.k{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8d94a6;margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 860px; box-sizing: border-box; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230">
+  <header style="padding: 14px 18px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #1d2230">
+    <a href="Fila.dc.html" aria-label="Voltar à Fila" style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 2L4 7l5 5"></path></svg>Fila</a>
+    <h1 style="margin: 0; font-size: 17px; font-weight: 600">Gráficos</h1>
+    <div role="group" aria-label="Período" style="display: flex; gap: 6px; margin-left: 8px">
+      <button type="button" class="{{pS}}" onClick="{{goS}}">Sprint atual</button>
+      <button type="button" class="{{p7}}" onClick="{{go7}}">7 dias</button>
+      <button type="button" class="{{p30}}" onClick="{{go30}}">30 dias</button>
+    </div>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12.5px; color: #8d94a6">Board 64 · {{periodo}} · contando só vereditos atribuíveis</span>
+  </header>
+
+  <section aria-label="Números do período" style="padding: 14px 18px 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px">
+    <div class="panel" style="padding: 12px 14px; gap: 4px"><span class="k">Concluídas</span><span style="font-size: 28px; font-weight: 600">{{concl}}</span><span style="font-size: 12.5px; color: #8fdcc0">+4 que o período anterior</span></div>
+    <div class="panel" style="padding: 12px 14px; gap: 4px"><span class="k">Ciclo médio</span><span style="font-size: 28px; font-weight: 600">2 h 40</span><span style="font-size: 12.5px; color: #a3aabb">da criação ao done</span></div>
+    <div class="panel" style="padding: 12px 14px; gap: 4px"><span class="k">Rodadas até aprovar</span><span style="font-size: 28px; font-weight: 600">1,6</span><span style="font-size: 12.5px; color: #a3aabb">mediana 1</span></div>
+    <div class="panel" style="padding: 12px 14px; gap: 4px"><span class="k">Reabertas</span><span style="font-size: 28px; font-weight: 600">2</span><span style="font-size: 12.5px; color: #a3aabb">depois de concluídas</span></div>
+    <div class="panel" style="padding: 12px 14px; gap: 4px"><span class="k">Com veredito</span><span style="font-size: 28px; font-weight: 600">78%</span><span style="font-size: 12.5px; color: #a3aabb">o resto sem atribuição</span></div>
+  </section>
+
+  <div style="flex: 1; min-height: 0; padding: 12px 18px 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+    <section class="panel" aria-label="Vereditos por provider">
+      <h2 class="k">Vereditos por provider</h2>
+      <div style="display: flex; gap: 14px; font-size: 12px; color: #a3aabb"><span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #3fb68b"></span>aprovada</span><span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #8a3b30"></span>reprovada</span></div>
+      <div style="display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; flex-direction: column; gap: 5px"><div style="display: flex; font-size: 13px"><span style="flex: 1">commandcode</span><span class="mono" style="color: #a3aabb">21 · 4</span></div><div style="display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: #161a24"><span style="width: 70%; background: #3fb68b"></span><span style="width: 13%; background: #8a3b30"></span></div></div>
+        <div style="display: flex; flex-direction: column; gap: 5px"><div style="display: flex; font-size: 13px"><span style="flex: 1">claude</span><span class="mono" style="color: #a3aabb">9 · 1</span></div><div style="display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: #161a24"><span style="width: 30%; background: #3fb68b"></span><span style="width: 3%; background: #8a3b30"></span></div></div>
+        <div style="display: flex; flex-direction: column; gap: 5px"><div style="display: flex; font-size: 13px"><span style="flex: 1">cline</span><span class="mono" style="color: #a3aabb">6 · 3</span></div><div style="display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: #161a24"><span style="width: 20%; background: #3fb68b"></span><span style="width: 10%; background: #8a3b30"></span></div></div>
+        <div style="display: flex; flex-direction: column; gap: 5px"><div style="display: flex; font-size: 13px"><span style="flex: 1">antigravity</span><span class="mono" style="color: #a3aabb">2 · 0</span></div><div style="display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: #161a24"><span style="width: 7%; background: #3fb68b"></span></div></div>
+      </div>
+      <p style="margin: auto 0 0; font-size: 12.5px; color: #8d94a6; line-height: 1.5">Providers com menos de 3 vereditos aparecem com o aviso "pouco dado", sem taxa.</p>
+    </section>
+
+    <section class="panel" aria-label="Rodadas até aprovar">
+      <h2 class="k">Rodadas até aprovar</h2>
+      <div style="flex: 1; display: flex; align-items: flex-end; gap: 14px; padding: 8px 4px 0; border-bottom: 1px solid #262b3a">
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px"><span class="mono" style="font-size: 12px; color: #c9cede">22</span><span style="width: 100%; height: 200px; border-radius: 6px 6px 0 0; background: #7d8cff"></span></div>
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px"><span class="mono" style="font-size: 12px; color: #c9cede">9</span><span style="width: 100%; height: 82px; border-radius: 6px 6px 0 0; background: #7d8cff"></span></div>
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px"><span class="mono" style="font-size: 12px; color: #c9cede">4</span><span style="width: 100%; height: 36px; border-radius: 6px 6px 0 0; background: #7d8cff"></span></div>
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px"><span class="mono" style="font-size: 12px; color: #c9cede">2</span><span style="width: 100%; height: 18px; border-radius: 6px 6px 0 0; background: #f0a43e"></span></div>
+      </div>
+      <div style="display: flex; gap: 14px; padding: 0 4px; font-size: 12.5px; color: #a3aabb"><span style="flex: 1; text-align: center">1</span><span style="flex: 1; text-align: center">2</span><span style="flex: 1; text-align: center">3</span><span style="flex: 1; text-align: center">4+</span></div>
+      <p style="margin: 0; font-size: 12.5px; color: #8d94a6; line-height: 1.5">4+ rodadas: <a href="#">#ba68dd A5b</a>, <a href="#">#d00a03 gate no report</a></p>
+    </section>
+
+    <section class="panel" aria-label="Tempo de ciclo">
+      <h2 class="k">Tempo de ciclo das últimas tasks</h2>
+      <div style="display: flex; gap: 14px; font-size: 12px; color: #a3aabb"><span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #4a5068"></span>na fila</span><span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #7d8cff"></span>rodando</span><span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #f0a43e"></span>em revisão</span></div>
+      <div style="display: flex; flex-direction: column; gap: 9px">
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px"><span class="mono" style="width: 64px; color: #a3aabb">#d97be5</span><div style="flex: 1; display: flex; height: 12px; border-radius: 4px; overflow: hidden"><span style="width: 10%; background: #4a5068"></span><span style="width: 45%; background: #7d8cff"></span><span style="width: 20%; background: #f0a43e"></span></div><span class="mono" style="width: 44px; text-align: right">1 h 50</span></div>
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px"><span class="mono" style="width: 64px; color: #a3aabb">#ba68dd</span><div style="flex: 1; display: flex; height: 12px; border-radius: 4px; overflow: hidden"><span style="width: 30%; background: #4a5068"></span><span style="width: 62%; background: #7d8cff"></span><span style="width: 6%; background: #f0a43e"></span></div><span class="mono" style="width: 44px; text-align: right">4 h 10</span></div>
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px"><span class="mono" style="width: 64px; color: #a3aabb">#e0b6b8</span><div style="flex: 1; display: flex; height: 12px; border-radius: 4px; overflow: hidden"><span style="width: 4%; background: #4a5068"></span><span style="width: 55%; background: #7d8cff"></span><span style="width: 8%; background: #f0a43e"></span></div><span class="mono" style="width: 44px; text-align: right">1 h 35</span></div>
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px"><span class="mono" style="width: 64px; color: #a3aabb">#9012e6</span><div style="flex: 1; display: flex; height: 12px; border-radius: 4px; overflow: hidden"><span style="width: 18%; background: #4a5068"></span><span style="width: 25%; background: #7d8cff"></span><span style="width: 4%; background: #f0a43e"></span></div><span class="mono" style="width: 44px; text-align: right">55 min</span></div>
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12.5px"><span class="mono" style="width: 64px; color: #a3aabb">#104e4f</span><div style="flex: 1; display: flex; height: 12px; border-radius: 4px; overflow: hidden"><span style="width: 8%; background: #4a5068"></span><span style="width: 52%; background: #7d8cff"></span><span style="width: 22%; background: #f0a43e"></span></div><span class="mono" style="width: 44px; text-align: right">2 h 05</span></div>
+      </div>
+      <p style="margin: auto 0 0; font-size: 12.5px; color: #8d94a6; line-height: 1.5">Passe o mouse numa barra para ver as horas de cada fase; clique para abrir a task.</p>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { p: 's' }; }
+  renderVals() {
+    const p = this.state.p;
+    const c = (k) => (p === k ? 'chip chipOn' : 'chip');
+    const label = { s: 'Sprint Ciclo 2', '7': 'últimos 7 dias', '30': 'últimos 30 dias' }[p];
+    const concl = { s: '18', '7': '24', '30': '61' }[p];
+    return { pS: c('s'), p7: c('7'), p30: c('30'), goS: () => this.setState({ p: 's' }), go7: () => this.setState({ p: '7' }), go30: () => this.setState({ p: '30' }), periodo: label, concl };
+  }
+}
+</script>
+</body>
+</html>

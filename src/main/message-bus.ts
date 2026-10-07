@@ -13,6 +13,7 @@ import {
   silentBootPointerBody,
   unreportedNoAgentPointerBody,
   unreportedUnprovenIdlePointerBody,
+  selfReportReminderBody,
 } from "./agent-facing-authorship";
 import { formatCardAuthoredDelivery } from "./pasted-content-decision";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
@@ -60,6 +61,8 @@ import {
   looksLikeReportShape,
   screenReportPointerBody,
 } from "./idle-without-report-decision";
+import { decideSelfReminder } from "./idle-self-reminder-decision";
+import type { ScreenTurnState } from "./screen-turn-state";
 import { decideCardStatus, describeCardStatus, hasAgentReadingLine, isShellProvider } from "./card-status-decision";
 import {
   decideReportAcceptance,
@@ -1622,6 +1625,10 @@ export function createMessageBus(
      * never called the tool" apart from ordinary silence. Optional so test
      * doubles stay source-compatible. */
     getCardRecentOutput?: (cardId: string) => string | null;
+    /** The LATCHED screen state of the card's turn (`screen-turn-state.ts`),
+     *  kept by the PTY registry per chunk so it does not decay with the rolling
+     *  output tail. Optional: absent = `unknown`, never `ended`. */
+    getCardScreenTurnState?: (cardId: string) => ScreenTurnState;
     /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica
      * na caixa sem submeter" — `typeAndSubmit`'s portão de prontidão
      * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
@@ -1933,6 +1940,8 @@ export function createMessageBus(
       releasedBy: string | null;
       nextImplementerCardId?: string | null;
       actor: StatusWriteActor;
+      /** Free the link without writing any status (a card closing). */
+      keepStatus?: boolean;
     }) =>
       | { ok: false; error: string }
       | {
@@ -2302,6 +2311,20 @@ export function createMessageBus(
   const NO_EPISODE_ANCHOR = 0;
   const idleWithoutReportNotified = new Map<string, number>();
   /**
+   * Idle SELF-REMINDER, per card and per episode (see
+   * `idle-self-reminder-decision.ts`): when the turn was first seen ended
+   * (`idleSince`, null while the card is seen working), and when the card
+   * itself was reminded (`remindedAt` + the delivery that carried it). The
+   * reminder is typed through `enqueueCardDelivery`, which renews
+   * `lastWorkGrantedAt` — so the episode ANCHOR moves because of our own
+   * message; `anchor` is re-adopted in that one case (see the scan) instead of
+   * opening a new episode that would remind again, forever.
+   */
+  const selfReminders = new Map<
+    string,
+    { anchor: number; idleSince: number | null; remindedAt: number | null; deliveryId: string | null }
+  >();
+  /**
    * CARD HEALTH — per card, the set of health levels ALREADY warned (keys from
    * `healthAlerts`: `quota:80`, `quota:95`, `context`). "Once per level": while
    * the key is here the alert does not repeat; when the reading drops back
@@ -2453,8 +2476,10 @@ export function createMessageBus(
           (c) =>
             c.role === TASK_CARD_REVIEWER_ROLE && c.card_id !== targetCardId && callbacks.isCardAlive(c.card_id),
         ).length,
-        // O report de sucesso DESTA task (não "o último report do card").
-        lastReportOk: lastAcceptedReportOkForTask(targetCardId, taskId),
+        // The success report of THIS task (not "the card's last report"), accepted
+        // IN THE ROUND: at or after this card was linked to the task. A link with no
+        // date proves no round, so it yields no success (absence never signs a task).
+        lastReportOk: lastAcceptedReportOkForTask(targetCardId, taskId, linkedAtFor(targetCardId, taskId)),
         // Task 156e6d08: `v.verdict` já vem LIDO do store (o que se pode
         // atribuir a esta task) e `v.rule` diz por quê — a decisão de fechar o
         // card precisa das duas: um carimbo de fan-out antigo tem
@@ -2466,6 +2491,14 @@ export function createMessageBus(
       });
     }
     return linked;
+  }
+
+  /** When the card was linked to the task (live implementer/reviewer row), or
+   *  null for a legacy row that carries no date. */
+  function linkedAtFor(cardId: string, taskId: string): number | null {
+    const row = (callbacks.listTaskCardsForCard(cardId) ?? []).find((l) => l.task_id === taskId);
+    const at = row?.linked_at;
+    return typeof at === "number" ? at : null;
   }
 
   /**
@@ -2484,12 +2517,21 @@ export function createMessageBus(
    * sucesso (a mesma postura do resto do repo). Sem nenhum report desta task,
    * `false`, e o fechamento RECUSA em vez de concluir por engano.
    */
-  function lastAcceptedReportOkForTask(cardId: string, taskId: string): boolean {
+  function lastAcceptedReportOkForTask(cardId: string, taskId: string, roundStartedAt: number | null): boolean {
+    // No dated link, no round: nothing a report could be "in".
+    if (roundStartedAt === null) return false;
     let after = 0;
     let lastOk: boolean | null = null;
     for (;;) {
       const row = callbacks.getReport(cardId, after);
       if (!row) break;
+      // Filed before this card was linked to the task: work for something else (a
+      // card linked by mistake after it reported keeps that report, which is not
+      // this task's). Skip it but keep walking — a later one may count.
+      if (row.updated_at < roundStartedAt) {
+        after = row.seq;
+        continue;
+      }
       let parsed: unknown;
       try {
         // Lido pelo MESMO decodificador da entrada (task 10cf58d0): uma linha
@@ -2552,6 +2594,36 @@ export function createMessageBus(
     const cardCwd = cards.find((c) => c.id === requesterId)?.cwd ?? null;
     const leftover = worktreeLeftoverNotice(cardCwd);
     return leftover ? { ok: decision.status === "done", warning: leftover } : { ok: decision.status === "done" };
+  }
+
+  /**
+   * Releases the closing card's link to a task WITHOUT concluding it and without
+   * touching its status. The store's release (`releaseTaskCardFromTask`, with
+   * `keepStatus`) clears the principal pointer and frees the live link; a card that is only the principal pointer (no `task_cards` row —
+   * the legacy orphans) has nothing to release there, so the pointer alone is
+   * cleared through the normal write, with no status proposed.
+   */
+  function releaseTaskLinkOnCardClose(taskId: string, cardId: string, requesterId: string): boolean {
+    const released = callbacks.releaseTaskCardFromTask?.({
+      taskId,
+      cardId,
+      reason: "card closed without an accepted report of this task in the round",
+      releasedBy: requesterId || null,
+      actor: "agent",
+      keepStatus: true,
+    });
+    if (released?.ok) return true;
+    const task = callbacks.getTask(taskId);
+    if (!task || task.card_id !== cardId) return false;
+    callbacks.upsertTask({
+      ...task,
+      card_id: null,
+      updated_at: Date.now(),
+      actor: "app",
+      actorCardId: requesterId || null,
+      statusProposed: false,
+    });
+    return true;
   }
 
   function linkImplementerToTask(
@@ -3875,7 +3947,7 @@ export function createMessageBus(
    * idle-without-report-decision.ts; this only feeds facts and fires the
    * pointer. Exported as a test seam (same pattern as resolveCardExit).
    */
-  function scanIdleWithoutReport(): void {
+  function scanIdleWithoutReport(opts: { nowMs?: number } = {}): void {
     // PERF (task 9dd877c8) — este scan roda a cada 5s para sempre, e usava
     // `callbacks.listTasks()` (31 colunas, `prompt`+`result_json` inclusos)
     // para ler dois campos. Agora lê `id`/`card_id`/`status`. O
@@ -3887,7 +3959,7 @@ export function createMessageBus(
     const terminalCards = listTerminalCards();
     // UM relógio só para esta passada — o mesmo instante alimenta a observação
     // da resposta (task fc68f565), o piso, a idade da frase e o `card_status`.
-    const scanNow = Date.now();
+    const scanNow = opts.nowMs ?? Date.now();
     observeAnswersToDirector(scanNow);
     // Poda do estado da resposta: card que não é mais terminal não tem episódio
     // a cumprir, e o mapa é por card VIVO (mesma disciplina do resto do sinal).
@@ -3958,6 +4030,14 @@ export function createMessageBus(
       // linha entrou (`reports` é append-only por `seq`), então a comparação
       // com a âncora responde "houve report NESTE episódio?".
       const lastReportAt = callbacks.getReport(cardId)?.updated_at ?? null;
+      // Turn end read from the SCREEN: a TUI that keeps repainting never goes
+      // quiet, so the byte clock cannot see it — but the turn state is in the
+      // text (spinner absent + end marker present, declared per provider in
+      // `capacity.delivery.screenTurn`, latched by the PTY registry). A screen
+      // that says `working` beats the hook: a turn in progress is never "parked".
+      const screenTurnState = callbacks.getCardScreenTurnState?.(cardId) ?? "unknown";
+      const hookDeclaredIdle = turnEndedAt !== null && (lastActivityAt === null || lastActivityAt <= turnEndedAt);
+      const declaredIdle = screenTurnState === "working" ? false : hookDeclaredIdle || screenTurnState === "ended";
       const idleFacts = {
         alive: callbacks.isCardAlive(cardId),
         waitingOnConsent: waitingOnConsent.has(cardId),
@@ -3987,7 +4067,7 @@ export function createMessageBus(
         // O `idle` de `card-status-decision.ts`, com os MESMOS fatos: turno
         // DECLARADO encerrado e nenhuma saída depois dele. Fato declarado, não
         // silêncio — por isso o portão não espera o piso quando isto é true.
-        declaredIdle: turnEndedAt !== null && (lastActivityAt === null || lastActivityAt <= turnEndedAt),
+        declaredIdle,
         hasLinkedRunningTask: !!linkedTask && !isTerminalStatus(linkedTask.status),
         alreadyNotified: idleWithoutReportNotified.get(cardId) === episodeAnchor,
         msSinceLastActivity: idleMs,
@@ -4005,7 +4085,57 @@ export function createMessageBus(
           decision = decideIdleWithoutReport({ ...idleFacts, screenLooksLikeReport: true });
         }
       }
+      // Remind the CARD ITSELF before bothering the orchestrator: with the turn
+      // end DECLARED (hook or screen) and no report in the episode, the card is
+      // reminded ONCE after the floor, and the orchestrator is told only if it
+      // still has no report one more interval later. It applies only to what the
+      // app can prove is the end of an agent's turn (`notify` /
+      // `notify_screen_report`): no reader, no linked task, a shell, or a card
+      // that already reported never gets here.
+      const stagedByTurnFact =
+        declaredIdle &&
+        (decision.action === "notify" || decision.action === "notify_screen_report") &&
+        !!linkedTask &&
+        !isShellProvider(card.provider ?? null);
+      if (!stagedByTurnFact) {
+        const open = selfReminders.get(cardId);
+        if (open) open.idleSince = null; // seen working (or gated): the idle clock restarts
+      }
       if (decision.action === "skip") continue;
+      if (stagedByTurnFact && linkedTask) {
+        let st = selfReminders.get(cardId);
+        if (st && st.anchor !== episodeAnchor) {
+          // The anchor moved. If the move is the reminder's OWN delivery (work was
+          // granted between its enqueue and its settle), it is the same episode;
+          // anything else is real new work and a new episode.
+          const sent = st.deliveryId ? deliveryRecords.get(st.deliveryId) : undefined;
+          const windowEnd = sent?.settledAt ?? now;
+          const ownDelivery = st.remindedAt !== null && episodeAnchor >= st.remindedAt && episodeAnchor <= windowEnd;
+          if (ownDelivery) st.anchor = episodeAnchor;
+          else st = undefined;
+        }
+        if (!st) {
+          st = { anchor: episodeAnchor, idleSince: null, remindedAt: null, deliveryId: null };
+          selfReminders.set(cardId, st);
+        }
+        if (st.idleSince === null) st.idleSince = now;
+        const step = decideSelfReminder({
+          idleForMs: now - st.idleSince,
+          remindedAgoMs: st.remindedAt === null ? null : now - st.remindedAt,
+        });
+        if (step.action === "wait") continue;
+        if (step.action === "remind") {
+          // Stamp BEFORE enqueue (same discipline as the other stamps): a slow
+          // FIFO must not turn into a burst on the next poll.
+          st.remindedAt = now;
+          const sent = enqueueCardDelivery(cardId, formatAgentFacingAuthorship(null, selfReportReminderBody(linkedTask.id)), {
+            steer: false,
+          });
+          st.deliveryId = "receipt" in sent ? sent.receipt.id : null;
+          continue;
+        }
+        // "escalate": fall through and tell the orchestrator, once.
+      }
       // Stamp BEFORE enqueue so a slow FIFO cannot double-fire on the next poll.
       idleWithoutReportNotified.set(cardId, episodeAnchor);
       // A FRASE É DO TAMANHO DA PROVA (task 14b8b224): sem leitor é uma coisa,
@@ -4778,6 +4908,8 @@ export function createMessageBus(
               reason: "card closed with releaseReservations",
               releasedBy: req.requesterId ?? null,
               actor: "agent",
+              // Closing a card frees the reservation; it never decides the task.
+              keepStatus: true,
             });
           }
         } else if (moveTo) {
@@ -4805,10 +4937,12 @@ export function createMessageBus(
       // recusado seria pior que recusar. Ver o módulo puro pra medição que
       // escolheu recusar vs auto-fechar.
       const conclusions: string[] = [];
+      const releases: string[] = [];
       for (const linked of collectCloseCardLinkedTasks(target, requesterId)) {
         const effect = decideCloseCardTaskEffect(linked);
         if (effect.action === "refuse") return { ok: false, error: effect.error };
         if (effect.action === "conclude-task") conclusions.push(effect.taskId);
+        if (effect.action === "release-link") releases.push(effect.taskId);
       }
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
@@ -4831,15 +4965,21 @@ export function createMessageBus(
             // A conclusão só é aplicada DEPOIS do consentimento: um close
             // negado não pode concluir task nenhuma.
             const concludedTasks: string[] = [];
+            const releasedTasks: string[] = [];
             const warnings: string[] = [];
             for (const taskId of conclusions) {
               const result = concludeTaskOnCardClose(taskId, requesterId);
               if (result.warning) warnings.push(result.warning);
               else if (result.ok) concludedTasks.push(taskId);
             }
+            // Same consent rule as the conclusion: a denied close releases nothing.
+            for (const taskId of releases) {
+              if (releaseTaskLinkOnCardClose(taskId, target, requesterId)) releasedTasks.push(taskId);
+            }
             resolve({
               ok: true,
               ...(concludedTasks.length > 0 ? { concludedTasks } : {}),
+              ...(releasedTasks.length > 0 ? { releasedTasks } : {}),
               ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
             });
           },
@@ -5411,6 +5551,7 @@ export function createMessageBus(
       // Accepted report ends the SINAL 3 episode — a later idle wait for
       // follow-up must not re-fire the "idle sem report" pointer.
       idleWithoutReportNotified.delete(req.requesterId);
+      selfReminders.delete(req.requesterId);
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
@@ -7605,6 +7746,7 @@ export function createMessageBus(
     }
     // Exit owns the failure signal now — drop any idle-without-report stamp.
     idleWithoutReportNotified.delete(cardId);
+    selfReminders.delete(cardId);
     const waiters = pendingCardExits.get(cardId);
     if (waiters) {
       pendingCardExits.delete(cardId);
@@ -8921,6 +9063,7 @@ export function createMessageBus(
     clearInterval(idleWithoutReportTimer);
     clearInterval(reservationWatchdogTimer);
     idleWithoutReportNotified.clear();
+    selfReminders.clear();
     notifiedHealthAlerts.clear();
     reservationStuckNotified.clear();
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);

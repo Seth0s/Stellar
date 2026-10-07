@@ -17,10 +17,36 @@
 //
 // `lipo` é do macOS. No Linux só dá `cargo check` dos alvos darwin (prova de
 // COMPILAÇÃO), não o binário final — declarado, não fingido.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// The relay is optional at runtime: without the binary, `stellar-mcp` falls
+// back to the Node shim. So a machine without Rust still packages the app,
+// with a warning. Release CI sets STELLAR_REQUIRE_RELAY=1 so an official build
+// never ships without the relay.
+const requireRelay = process.env.STELLAR_REQUIRE_RELAY === "1";
+
+/** `cargo` from PATH, else from rustup's default home, else null. */
+function resolveCargo() {
+  if (spawnSync("cargo", ["--version"], { stdio: "ignore" }).status === 0) return "cargo";
+  const exe = process.platform === "win32" ? "cargo.exe" : "cargo";
+  const home = process.env.CARGO_HOME || join(homedir(), ".cargo");
+  const candidate = join(home, "bin", exe);
+  return existsSync(candidate) ? candidate : null;
+}
+
+const cargo = resolveCargo();
+if (!cargo) {
+  const message =
+    "build.mjs: Rust (cargo) not found in PATH or ~/.cargo/bin. The package will use the Node shim instead of the relay. " +
+    "Install Rust (https://rustup.rs) and run `source ~/.cargo/env` to build it.";
+  if (requireRelay) throw new Error(`${message} STELLAR_REQUIRE_RELAY=1 makes this an error.`);
+  console.warn(`\n⚠ ${message}\n`);
+  process.exit(0);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "bin");
@@ -41,7 +67,7 @@ function cargoBuild(target) {
   const args = ["build", "--release", "--manifest-path", manifest];
   if (target) args.push("--target", target);
   console.log(`build.mjs: cargo ${args.slice(0, 1)[0]} ${args.slice(1).join(" ")}`);
-  execFileSync("cargo", args, { stdio: "inherit" });
+  execFileSync(cargo, args, { stdio: "inherit" });
   return join(targetDir, ...(target ? [target] : []), "release", binNameFor(target));
 }
 

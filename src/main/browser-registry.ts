@@ -1,7 +1,7 @@
 import { app, BrowserWindow, type Session } from "electron";
 import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
-import { decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
+import { createFocusGate, decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
 import {
   decideNativeDialogRisk,
   describeNativeDialogRefusal,
@@ -136,6 +136,9 @@ type Entry = {
   /** Último estado de foco conhecido (`setFocused`) — `decideBrowserFrame`
    * precisa dele também no `paint`, não só na hora de trocar o rate. */
   focused: boolean;
+  /** The focused flag with the release grace (`createFocusGate`):
+   * `setFocused(false)` takes effect after `FOCUS_RELEASE_GRACE_MS`. */
+  focusGate: { set: (focused: boolean) => void; dispose: () => void };
   /** docs/PERF.md §9.4, risco 1 — três momentos em que o canvas do
    * renderer NÃO tem conteúdo válido pra colar um recorte em cima:
    * acabou de nascer (`create`), acabou de mudar de tamanho (`resize`),
@@ -843,7 +846,25 @@ export function createBrowserRegistry(callbacks: {
       });
     });
 
-    entries.set(id, { win, visible: true, focused: true, needsFullFrame: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
+    const entry: Entry = {
+      win,
+      visible: true,
+      focused: true,
+      focusGate: { set: () => {}, dispose: () => {} },
+      needsFullFrame: true,
+      scaleFactor,
+      console: [],
+      network: [],
+      cdp: null,
+      originalUserAgent: null,
+      networkEnableRefs: 0,
+    };
+    // The grace applies to the flag the paint handler and `applyFrameRate` read.
+    entry.focusGate = createFocusGate((focused) => {
+      entry.focused = focused;
+      applyFrameRate(entry);
+    });
+    entries.set(id, entry);
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
     // então o registro é feito uma vez só e despachado por
@@ -1344,8 +1365,7 @@ export function createBrowserRegistry(callbacks: {
   function setFocused(id: string, focused: boolean) {
     const entry = entries.get(id);
     if (!entry) return;
-    entry.focused = focused;
-    applyFrameRate(entry);
+    entry.focusGate.set(focused);
   }
 
   function sendMouseEvent(id: string, evt: BrowserMouseEvent) {
@@ -2599,6 +2619,7 @@ export function createBrowserRegistry(callbacks: {
     // unmount → IPC detach" e "card fechando → IPC destroy" nunca
     // precisa de sincronização nova por causa disso.
     entry.cdp?.detach();
+    entry.focusGate.dispose();
     entry.win.destroy();
     entries.delete(id);
   }

@@ -44,8 +44,8 @@ bash docs/backend-v1/integracao/harness/fresh-backend.sh
 # 4) roteiro E2E
 node docs/backend-v1/integracao/harness/e2e.mjs
 # 5) provas HTTP independentes
-node docs/backend-v1/integracao/harness/probe-github.mjs          # login GitHub ponta a ponta
-node docs/backend-v1/integracao/harness/probe-team-memory.mjs     # 404 de perfil desconhecido + 400 de memória na base do time
+node docs/backend-v1/integracao/harness/check-github-login.mjs    # login GitHub ponta a ponta
+node docs/backend-v1/integracao/harness/check-team-memory.mjs     # 404 de perfil desconhecido + 400 de memória na base do time
 # 6) gates dos dois repos (sob `acbridge gate-lock`)
 bash docs/backend-v1/integracao/harness/cloud-gates.sh
 bash docs/backend-v1/integracao/harness/stellar-gates.sh

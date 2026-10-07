@@ -2427,6 +2427,7 @@ function createWindow() {
     // Retained output tail of a card, so the bus can tell a report written to
     // the screen from a normal idle without a renderer round-trip.
     getCardRecentOutput: (cardId) => registry.getRecentOutput(cardId),
+    getCardScreenTurnState: (cardId) => registry.getScreenTurnState(cardId),
     markCardTurnComplete: (cardId) => registry.markTurnComplete(cardId),
     // Activity bar — send_to_card writes the body from main, outside
     // the renderer's xterm onData hook. Same channel shape as
@@ -2955,7 +2956,11 @@ function createWindow() {
         // would DUPLICATE what the hold delivers.
         const wasRetained = registry.isRetained(id);
         registry.setRetained(id, false);
-        return wasRetained ? { id, scrollback: registry.getScrollback(id) ?? "" } : { id };
+        // The geometry travels with the ring: the ring's bytes (cursor-addressed
+        // TUI output included) were produced for the PTY's size, so the new xterm
+        // must replay them at that size, not at its 80x24 default.
+        const size = registry.getSize(id);
+        return wasRetained ? { id, scrollback: registry.getScrollback(id) ?? "", ...(size ?? {}) } : { id };
       }
       // Precisa acontecer ANTES do spawn: `cursor`/`antigravity` leem o
       // registro de MCP do disco na subida, então registrar depois só

@@ -1111,3 +1111,49 @@ a inicializar a shared image surface (troca de driver/sessão — re-rodar a son
 barato e ela já fala), ou (b) medição nos outros dois sistemas, onde o handle é
 outro. A alternativa que JÁ tem número e não depende de nada disto continua a de
 §9.3 (recorte por `dirty`) e o teto de 30fps de §7.
+
+## 16. Cinco cards de navegador: de 99% para 75% de um núcleo (2026-10-07)
+
+**Queixa do dono:** com cinco navegadores abertos, usados ou não, a CPU chega a
+99%.
+
+**Instrumento** — `scripts/verify/measure-browser-cpu.mjs` (instância isolada, cinco
+cards, quatro com animação: CSS, canvas+rAF, timers a 16 ms, CSS; uma página
+parada). CPU por processo lida de `/proc` (utime+stime numa janela de 12 s) para a
+árvore inteira do app. Percentual de **um** núcleo.
+
+| cenário | antes | depois |
+|---|---|---|
+| A) cinco cards na tela, ponteiro no fundo vazio | 57–59% (main 31, gpu 14, renderer da UI 10) | **29%** (main 15, gpu 7, UI 5) |
+| A2) ponteiro sobre o card animado (canvas) | **98–99%** (main 52, gpu 24, UI 16) | **74–75%** (main 39, gpu 18, UI 12) |
+| B) canvas movido, nenhum card na tela | 7–8% | 5% |
+
+**Onde o custo mora.** As páginas somam ~3% de um núcleo (renderers de página
+1–3% cada). O resto é o pipeline por quadro: `toJPEG` na thread principal, IPC,
+decodificação e `drawImage` no renderer da UI, GPU. Custa **quadros por segundo**,
+não a página — e a conta antiga era 30 fps (o card mais alto da pilha) + 4×8 fps =
+62 quadros/s com o ponteiro parado no fundo. Um card parado no topo da pilha pagava
+30 fps para sempre.
+
+**O que mudou** (`src/shared/browser-activity.ts`, `browser-frame-decision.ts`,
+`BrowserCard.tsx`):
+
+1. **Em uso ≠ no topo.** O card pinta à taxa cheia só com o ponteiro sobre ele ou o
+   foco do teclado no canvas dele. Ser o card mais alto do z-order deixou de valer.
+2. **Visível sem uso: 8 → 4 fps.** Cinco cards parados pedem 20 quadros/s, não 62.
+3. **Carência de 2,5 s** (`FOCUS_RELEASE_GRACE_MS`) ao largar o card e ao criá-lo: o
+   que acabou de ser pedido (carga, transição de um clique) termina à taxa cheia.
+4. **Janela do app escondida** (`visibilityState: hidden`) para de pintar todos os
+   cards, como sair da viewport do board já fazia.
+
+**O que NÃO mudou, e por quê.**
+- *Congelar página oculta* (`Page.setWebLifecycleState` frozen): as páginas fora da
+  tela seguem rodando timers e rAF (os renderers de página têm o mesmo CPU em A e em
+  B), então há ~3 pontos a ganhar. Não foi feito: `executeJavaScript` (eval, click,
+  type, snapshot…) pendura numa página congelada, e descongelar em cada operação do
+  agente é uma superfície grande por um ganho pequeno.
+- *Qualidade JPEG 90 e supersample 3×*: decisões explícitas do dono (nitidez), fora
+  desta rodada.
+- O que sobra em A2 (≈45 pontos) é UM card animado em tela cheia a 30 fps sob o
+  ponteiro: é o custo do quadro, e o caminho de textura de GPU que o eliminaria não
+  existe nesta máquina (§15).

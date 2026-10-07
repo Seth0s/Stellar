@@ -394,6 +394,41 @@ export type TurnEndSignal =
   | { mechanism: "screen"; pattern: RegExp };
 
 /**
+ * The screen state of a turn, declared per provider. `turnEnd` above fires ONCE
+ * when its marker scrolls past; a TUI that keeps repainting afterwards (so the
+ * byte clock never ages) needs the STATE: the turn is over when an end marker is
+ * on screen and the working marker (spinner / "esc to interrupt") does not come
+ * after it. Both patterns run over the ANSI-stripped tail; the LAST occurrence
+ * of each decides (see `screen-turn-state.ts`).
+ *
+ *   - `working`: what the screen shows only while the agent is busy;
+ *   - `ended`: what the screen shows once the turn is over (a "Worked for 27m"
+ *     line, or an idle footer that replaces the busy one).
+ *
+ * Measured on real cards, never copied from another provider — the samples are
+ * pinned in tests/unit/fixtures/screen-turn/.
+ */
+export type ScreenTurnDecl = { working: RegExp; ended: RegExp };
+
+/**
+ * MEASURED SCREEN TURN the shipped JSON does not declare — same reason and same
+ * place as `MEASURED_MID_TURN_QUEUES`/`MEASURED_HEALTH`: `commandcode` is
+ * DYNAMIC, its screen was measured after the JSON existed, and the table is
+ * applied at registration so the spec round-trip stays intact.
+ *
+ * Measured (card 98576220 and the fixtures): while working the spinner line is
+ * `○ Crystallizing…  esc to interrupt • 6m 18s • ↓ 141.7k`; when the turn ends
+ * the line `✻ Worked for 9m 51s` is printed and the spinner is gone. Note
+ * `? for shortcuts` is on screen in BOTH states, so it is no marker.
+ */
+const MEASURED_SCREEN_TURNS: Readonly<Record<ProviderId, ScreenTurnDecl>> = {
+  commandcode: {
+    working: /esc to interrupt/,
+    ended: /Worked for (?:\d+h\s*)?(?:\d+m\s*)?\d+(?:s| seconds?)/,
+  },
+};
+
+/**
  * A AÇÃO ONE-SHOT (o "Resumir" do Rail) — declarada, não adivinhada por `id`
  * (task efc5b6fd).
  *
@@ -511,6 +546,14 @@ export type ProviderCapacity = {
      * Ausente = não sinaliza (ou não foi medido), e a UI não promete.
      */
     turnEnd?: TurnEndSignal;
+
+    /**
+     * How to read, from the screen tail the app already keeps, whether the turn
+     * is OVER right now — ver `ScreenTurnDecl`. Declared per provider as data,
+     * next to the trust-prompt and quota patterns; ABSENT = not measured on a
+     * real card, and the honest answer is "unknown".
+     */
+    screenTurn?: ScreenTurnDecl;
 
     /**
      * Mid-turn holding UI: submit while the agent is busy parks the text
@@ -1327,6 +1370,14 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
         briefMechanism: "flag",
         briefFlag: "-i",
         submitStartedPattern: /[\u2800-\u28FF]\s*(Generating|Reviewing Initial Input)\.\.\./i,
+        // Measured on live cards (agy 1.3.1): the footer SWAPS with the state — busy shows
+        // `esc to cancel` (plus `Tip: Press esc to interrupt generation.`),
+        // idle shows `? for shortcuts` and never both. No "Worked for" line
+        // exists, so the idle footer is the end marker.
+        screenTurn: {
+          working: /esc to cancel|Press esc to interrupt generation/,
+          ended: /\? for shortcuts/,
+        },
       },
     },
     // Windows confirmado contra a documentação real do Antigravity CLI
@@ -1460,14 +1511,24 @@ export function registerDynamicProviders(
     // health, and into the REGISTRY — the spec/JSON and the round-trip are
     // untouched.
     const needsHealth = !!measuredHealth && !def.capacity.health;
+    // Same rule for the screen turn state: only when the provider did not
+    // declare its own, and into the REGISTRY.
+    const measuredScreenTurn = MEASURED_SCREEN_TURNS[def.id];
+    const needsScreenTurn = !!measuredScreenTurn && !def.capacity.delivery.screenTurn;
     const resolved =
-      needsQueue || needsHealth
+      needsQueue || needsHealth || needsScreenTurn
         ? {
             ...def,
             capacity: {
               ...def.capacity,
-              ...(needsQueue && measuredQueue
-                ? { delivery: { ...def.capacity.delivery, midTurnQueue: measuredQueue } }
+              ...(needsQueue || needsScreenTurn
+                ? {
+                    delivery: {
+                      ...def.capacity.delivery,
+                      ...(needsQueue && measuredQueue ? { midTurnQueue: measuredQueue } : {}),
+                      ...(needsScreenTurn && measuredScreenTurn ? { screenTurn: measuredScreenTurn } : {}),
+                    },
+                  }
                 : {}),
               ...(needsHealth && measuredHealth ? { health: measuredHealth } : {}),
             },

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Barra lateral: todos os passos</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#05060a}</style>
+</helmet>
+<div style="width: 1880px; height: 1960px; box-sizing: border-box; padding: 0; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 40px; row-gap: 60px">
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">1 · Recolhida</span><span style="font-size: 13px; color: #8d94a6">só ícones; o tooltip mostra nome e tecla</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="collapsed" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">2 · Aberta</span><span style="font-size: 13px; color: #8d94a6">nomes e teclas de tudo</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="tools" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">3 · Novo card</span><span style="font-size: 13px; color: #8d94a6">escolher o tipo</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="add" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">4 · Novo agente, passo 1</span><span style="font-size: 13px; color: #8d94a6">quem roda, com a cota à vista</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="terminal1" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">5 · Novo agente, passo 2</span><span style="font-size: 13px; color: #8d94a6">pasta, modelo, esforço, sessão</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="terminal2" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">6 · Achar card</span><span style="font-size: 13px; color: #8d94a6">busca e estado de cada card</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="cards" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">7 · Caneta</span><span style="font-size: 13px; color: #8d94a6">cor e espessura</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="pen" hint-size="440px,900px"></dc-import></div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">8 · Ações de IA</span><span style="font-size: 13px; color: #8d94a6">resumir e organizar</span></div>
+      <div style="width: 440px; height: 900px; border-radius: 12px; overflow: hidden; border: 1px solid #1d2230"><dc-import name="Rail" step="ai" hint-size="440px,900px"></dc-import></div>
+    </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1880,"height":1960}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

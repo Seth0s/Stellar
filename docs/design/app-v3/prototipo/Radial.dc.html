@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Menu radial de criação</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.kbd{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:5px;border:1px solid #2f3546;border-bottom-width:2px;background:#12151d;font:500 11px 'JetBrains Mono',monospace;color:#e8eaf0}
+.node{position:absolute;transform:translate(-50%,-50%);border-radius:50%;display:grid;place-items:center;cursor:pointer;border:1px solid #2f3650;background:#141823;color:#c9cede;font:inherit;padding:0;transition:transform .12s ease,background .12s ease,border-color .12s ease}
+.node:hover{background:#1d2440;border-color:#7d8cff;color:#fff;transform:translate(-50%,-50%) scale(1.08)}
+.on{background:#24306a;border-color:#8b99ff;color:#fff}
+.dim{opacity:.45}
+.lab{position:absolute;transform:translate(-50%,0);font-size:12px;color:#c9cede;white-space:nowrap;pointer-events:none;text-align:center;line-height:1.3}
+@media (prefers-reduced-motion: reduce){.node{transition:none}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background-color: #0b0d12; background-image: radial-gradient(#1b2030 1px, transparent 1px); background-size: 22px 22px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div aria-hidden="true" style="position: absolute; left: 80px; top: 90px; width: 380px; height: 240px; border-radius: 12px; background: #0f1218; border: 1px solid #232838; opacity: .5"></div>
+  <div aria-hidden="true" style="position: absolute; right: 90px; top: 520px; width: 420px; height: 280px; border-radius: 12px; background: #0f1218; border: 1px solid #232838; opacity: .5"></div>
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: radial-gradient(circle at 720px 450px, #05060a00 0, #05060a00 200px, #05060aaa 420px)"></div>
+
+  <div aria-hidden="true" style="position: absolute; left: 720px; top: 450px; width: 360px; height: 360px; margin: -180px 0 0 -180px; border-radius: 50%; border: 1px solid #252b3e; background: #0d1018cc"></div>
+  <div aria-hidden="true" style="position: absolute; left: 720px; top: 450px; width: 190px; height: 190px; margin: -95px 0 0 -95px; border-radius: 50%; border: 1px dashed #2a3048"></div>
+
+  <div role="menu" aria-label="Criar ou trocar ferramenta">
+    <sc-for list="{{tools}}" as="n" hint-placeholder-count="4">
+      <button type="button" role="menuitem" class="{{n.cls}}" style="{{n.style}}" aria-label="{{n.aria}}" onMouseEnter="{{n.hover}}" onClick="{{n.hover}}"><span style="font-size: 12px; font-weight: 600">{{n.glyph}}</span></button>
+    </sc-for>
+    <sc-for list="{{spawns}}" as="n" hint-placeholder-count="8">
+      <button type="button" role="menuitem" class="{{n.cls}}" style="{{n.style}}" aria-label="{{n.aria}}" onMouseEnter="{{n.hover}}" onClick="{{n.pick}}"><span style="font-size: 18px">{{n.glyph}}</span></button>
+      <span class="lab" style="{{n.labStyle}}">{{n.label}}<br><span style="color: #8d94a6; font-family: 'JetBrains Mono', monospace; font-size: 11px">{{n.key}}</span></span>
+    </sc-for>
+    <sc-if value="{{subOpen}}" hint-placeholder-val="{{ false }}">
+      <sc-for list="{{provs}}" as="p" hint-placeholder-count="5">
+        <button type="button" role="menuitem" class="{{p.cls}}" style="{{p.style}}" aria-label="{{p.aria}}" onMouseEnter="{{p.hover}}"><span style="width: 12px; height: 12px; border-radius: 50%; background: {{p.dot}}"></span></button>
+        <span class="lab" style="{{p.labStyle}}">{{p.label}}<br><span style="color: {{p.qColor}}; font-size: 11px">{{p.quota}}</span></span>
+      </sc-for>
+    </sc-if>
+  </div>
+
+  <div aria-live="polite" style="position: absolute; left: 720px; top: 450px; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; background: #12162a; border: 1px solid #3b4570; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center; box-shadow: 0 0 0 6px #7d8cff14">
+    <span style="font-size: 13.5px; font-weight: 600; padding: 0 10px; line-height: 1.2">{{centerLabel}}</span>
+    <span style="font-size: 11px; color: #a3aabb; padding: 0 12px; line-height: 1.3">{{centerHint}}</span>
+  </div>
+  <span aria-hidden="true" style="position: absolute; left: 716px; top: 446px; width: 8px; height: 8px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #05060a"></span>
+
+  <footer style="position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-radius: 12px; background: #12151dee; border: 1px solid #262b3a; font-size: 13px; color: #c9cede; white-space: nowrap">
+    <span>Abre com <strong>botão direito</strong> ou <strong>segurando 0,5 s</strong> no fundo, ou <span class="kbd">Q</span> no lugar do cursor</span>
+    <span><span class="kbd">1</span>–<span class="kbd">8</span> escolhe</span>
+    <span><span class="kbd">Esc</span> fecha</span>
+    <span style="color: #8d94a6">o card nasce onde você abriu o menu</span>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { hover: 'agent', sub: true, prov: 'claude' }; }
+  renderVals() {
+    const s = this.state, cx = 720, cy = 450;
+    const pos = (r, deg, size) => { const a = (deg - 90) * Math.PI / 180; return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a), size }; };
+    const st = (p) => 'left: ' + p.x.toFixed(1) + 'px; top: ' + p.y.toFixed(1) + 'px; width: ' + p.size + 'px; height: ' + p.size + 'px';
+    const lab = (p) => 'left: ' + p.x.toFixed(1) + 'px; top: ' + (p.y + p.size / 2 + 6).toFixed(1) + 'px';
+    const T = [['pointer','V','Ponteiro'],['pen','P','Caneta'],['connector','C','Conector'],['select','S','Seleção']];
+    const tools = T.map(([id, k, label], i) => { const p = pos(95, 45 + i * 90, 38); return { cls: 'node' + (s.hover === id ? ' on' : ''), style: st(p), glyph: k, aria: label + ' (' + k + ')', hover: () => this.setState({ hover: id, sub: false }) }; });
+    const S = [['agent','›_','Agente','1','Claude, Antigravity… ou shell'],['browser','◎','Navegador','2','página real com console'],['ide','{ }','Código','3','pasta com editor'],['changes','±','Mudanças','4','diff do repo'],['sticky','▤','Nota','5','sticky ou lista'],['task','✓','Task aqui','6','abre o formulário'],['chat','◌','Chat','7','conversa com provider'],['remote','▣','Janela','8','app do sistema']];
+    const spawns = S.map(([id, glyph, label, key, hint], i) => { const p = pos(180, i * 45, 54); return { cls: 'node' + (s.hover === id ? ' on' : ''), style: st(p), labStyle: lab(p), glyph, label, key, aria: label + ' (' + key + ')', hover: () => this.setState({ hover: id }), pick: () => this.setState({ hover: id, sub: id === 'agent' }) }; });
+    const P = [['claude','Claude','#f0883e','77% semana','#e6cfae',false],['antigravity','Antigravity','#5b8cff','só Gemini','#e6cfae',false],['bash','Shell','#8d94a6','','#8d94a6',false],['commandcode','Command Code','#e85d9b','sem cota','#f2a093',true],['codex','Codex','#8d94a6','sem crédito','#f2a093',true]];
+    const provs = P.map(([id, label, dot, quota, qColor, off], i) => { const p = pos(285, -40 + i * 20, 40); return { cls: 'node' + (s.prov === id ? ' on' : '') + (off ? ' dim' : ''), style: st(p), labStyle: 'left: ' + (p.x + 30).toFixed(1) + 'px; top: ' + (p.y - 14).toFixed(1) + 'px; transform: none; text-align: left', label, dot, quota, qColor, aria: label + (off ? ', sem cota' : ''), hover: () => this.setState({ prov: id, hover: 'agent' }) }; });
+    const all = Object.fromEntries(S.map(x => [x[0], [x[2], x[4]]]).concat(T.map(x => [x[0], [x[2], 'ferramenta · ' + x[1]]])));
+    let center = all[s.hover] || ['', ''];
+    if (s.hover === 'agent' && s.sub) { const pr = P.find(x => x[0] === s.prov); center = [pr[1], pr[5] ? 'sem cota agora' : 'clique para abrir aqui']; }
+    return { tools, spawns, provs, subOpen: s.sub, centerLabel: center[0], centerHint: center[1] };
+  }
+}
+</script>
+</body>
+</html>

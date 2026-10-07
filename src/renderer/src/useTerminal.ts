@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { t } from "../../shared/i18n";
 import { toast } from "./useToast";
@@ -20,6 +19,8 @@ import {
 import { TURN_END_BUFFER_MAX, feedTurnEndChunk, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { decideTerminalFit } from "./terminal-fit-decision";
+import { replayGeometry } from "./terminal-replay";
+import { attachWebglRenderer } from "./terminal-webgl";
 import {
   UNFOCUSED_FLUSH_MS,
   appendPendingDraw,
@@ -344,7 +345,7 @@ export function useTerminal(
    * xterm as soon as the instance exists (Effect 2); until then, any LIVE byte
    * that arrives is queued here so it does not cross the replay out of order.
    * `null` means no pending replay. */
-  const pendingReplayRef = useRef<{ scrollback: string; queued: string[] } | null>(null);
+  const pendingReplayRef = useRef<{ scrollback: string; queued: string[]; cols?: number; rows?: number } | null>(null);
   /** Next xterm `onData` was preceded by a human gesture (key / paste). */
   const humanGesturePendingRef = useRef(false);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
@@ -624,7 +625,7 @@ export function useTerminal(
       // Hold it so Effect 2 (which creates the xterm) flushes it before any
       // live byte.
       if ("scrollback" in result && typeof result.scrollback === "string") {
-        pendingReplayRef.current = { scrollback: result.scrollback, queued: [] };
+        pendingReplayRef.current = { scrollback: result.scrollback, queued: [], cols: result.cols, rows: result.rows };
       }
       if (initialInput && !result.consumedBrief) void window.pty.write(id, initialInput, "delivery");
       setPtyId(result.id);
@@ -681,8 +682,13 @@ export function useTerminal(
   // keeps accumulating even while the card is off-screen.
   useEffect(() => {
     if (!ptyId) return;
-    function buildTerminal(withWebgl: boolean) {
+    function buildTerminal() {
+      // A reattached card replays its ring at the size the PTY has (and the ring
+      // was produced for), not at the 80x24 default — see terminal-replay.ts.
+      const geometry = replayGeometry(pendingReplayRef.current, { cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
       const t = new Terminal({
+        cols: geometry.cols,
+        rows: geometry.rows,
         fontSize: BASE_FONT_SIZE,
         cursorBlink: false,
         fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
@@ -694,32 +700,8 @@ export function useTerminal(
       });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
-      if (withWebgl) {
-        try {
-          const webgl = new WebglAddon();
-          // Bug real (Pop!_OS, 2026-09-09): letra isolada saindo como bloco
-          // cheio ("WHERE TRUE" -> "██ERE TRUE"), e faixas de linha inteiras
-          // idem. O texto no buffer está certo — quem erra é o desenho.
-          // Perder o contexto WebGL em runtime (reset de driver Mesa,
-          // suspend/resume, troca de GPU) NÃO é o mesmo que falhar na
-          // CRIAÇÃO do contexto (isso o catch abaixo e o rebuild dentro do
-          // `term.open()` lá embaixo já cobrem): sem handler nenhum, o xterm
-          // segue desenhando pra sempre com o atlas de textura morto, e o
-          // que sai é exatamente esse bloco cheio. `dispose()` no addon é o
-          // que o próprio @xterm/addon-webgl documenta pra este evento —
-          // solto o addon e o xterm cai no renderer DOM (o default do
-          // @xterm/xterm 6 quando nenhum addon de renderer está carregado),
-          // sem precisar reconstruir a instância inteira. Nada guarda uma
-          // ref pro addon de propósito: o único consumidor dela seria este
-          // callback, que já fecha sobre `webgl`.
-          webgl.onContextLoss(() => webgl.dispose());
-          t.loadAddon(webgl);
-        } catch {
-          // Some GPU/driver combinations report WebGL2 as available here but
-          // only actually fail later, inside open() below — this check still
-          // catches the common case for free.
-        }
-      }
+      // The WebGL renderer is NOT loaded here: it is loaded after `open()` in
+      // Effect 3 (terminal-webgl.ts), so a failing GPU cannot cost the terminal.
       // JetBrains Mono já suporta ligaduras — só não renderizavam sem este
       // addon (nenhum código aqui as detectava/desenhava). `font-ligatures`
       // (dependência real do addon) faz detecção pura-JS via opentype.js,
@@ -733,7 +715,7 @@ export function useTerminal(
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
     }
-    const { t: term, f: fit } = buildTerminal(true);
+    const { t: term, f: fit } = buildTerminal();
     termRef.current = term;
     fitRef.current = fit;
     registerTerminal(id, term);
@@ -798,8 +780,8 @@ export function useTerminal(
 
     async function attach() {
       if (openedRef.current) return;
-      let term = termRef.current;
-      let fit = fitRef.current;
+      const term = termRef.current;
+      const fit = fitRef.current;
       if (!term || !fit || !el) return;
       // Set synchronously, BEFORE the await below — a second attach()
       // call racing in during the await must still see this and bail,
@@ -809,25 +791,10 @@ export function useTerminal(
       // Re-check after the await: the containing effect could have been
       // cleaned up (card closed/identity changed) while we were waiting.
       if (!containerRef.current || termRef.current !== term) return;
-      try {
-        term.open(el);
-      } catch {
-        // Confirmed on this machine: an ANGLE/libGLESv2 crash surfaced here,
-        // not above — WebglAddon's context creation happens lazily during
-        // open(), not loadAddon(). The terminal instance may be left
-        // half-initialized after that; start over clean with the plain
-        // canvas2d renderer instead of trying to recover it in place. A
-        // one-time rebuild here (unlike the rest of this hook) is fine —
-        // it only ever happens on the very first attach, before any real
-        // content exists yet.
-        term.dispose();
-        const rebuilt = buildTerminalNoWebgl();
-        term = rebuilt.t;
-        fit = rebuilt.f;
-        termRef.current = term;
-        fitRef.current = fit;
-        term.open(el);
-      }
+      term.open(el);
+      // After open, and isolated: a GPU failure leaves the terminal on the DOM
+      // renderer with its buffer, listeners and registry entry intact.
+      attachWebglRenderer(term);
       fitVerified(term, fit, 0);
       registerDomListeners(term, fit, el);
     }
@@ -866,25 +833,6 @@ export function useTerminal(
       fit.fit();
       if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
     }
-    function buildTerminalNoWebgl() {
-      const t = new Terminal({
-        fontSize: BASE_FONT_SIZE,
-        cursorBlink: false,
-        fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
-        theme: buildTerminalTheme(providerId),
-        scrollback: 10000,
-      });
-      const f = new FullWidthFitAddon();
-      t.loadAddon(f);
-      try {
-        t.loadAddon(new LigaturesAddon());
-      } catch {
-        // sem ligaduras nesse ambiente — terminal continua funcional.
-      }
-      t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
-      return { t, f };
-    }
-
     function registerDomListeners(term: Terminal, _fit: FullWidthFitAddon, el: HTMLDivElement) {
       // "não consigo mandar foto pelo terminal" (2026-08-27) — xterm.js's
       // own default paste handler only ever reads `text/plain`; an image on

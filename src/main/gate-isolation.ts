@@ -30,6 +30,17 @@
  * cache in `node_modules/.vite` — the same the gate in the shared tree already
  * does.
  *
+ * THE GIT DIRECTORY. A linked worktree's `.git` is a FILE: `gitdir: <repo>/.git/
+ * worktrees/<name>`. That target lives in the main repository — under `$HOME`, or
+ * in `/tmp` — and the sandbox masks both (`--tmpfs $HOME`, `--tmpfs /tmp`), so
+ * inside it every git command in the worktree died with `fatal: not a git
+ * repository` (measured: `git rev-parse --show-toplevel` exit 128; the project's own
+ * tests that need git failed on a green tree). The main repository's COMMON git
+ * directory is therefore mounted READ-ONLY at the same path: the worktree stays a
+ * working checkout for `rev-parse`, `status`, `diff`, `log`, and the gate still
+ * cannot write objects or refs of the real repository. Git writes that need the
+ * real repository (a commit, a new ref) fail loudly, which is the point.
+ *
  * CLEANUP IS ALWAYS THE LAST STEP, including on failure: an orphan worktree on
  * a machine with six streams is pain. `removeIsolatedWorktree` does the
  * `git worktree remove --force` and prunes dead references.
@@ -38,7 +49,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { rm, symlink, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
 
@@ -57,8 +68,8 @@ export type GateIsolationPrep =
       sourceRoot: string;
       /** Paths that were actually applied (tracked + dirty untracked). */
       applied: string[];
-      /** Extra mounts for the sandbox — today only `node_modules`, when
-       * symlinked. Empty when there is nothing to re-expose. */
+      /** Extra mounts for the sandbox: `node_modules` when symlinked, and the main
+       * repository's git directory (read-only) so git works in the worktree. */
       mounts: GateIsolationMount[];
     }
   | { ok: false; error: string; applied: string[] };
@@ -159,6 +170,23 @@ function safeIsDir(path: string): boolean {
 }
 
 /**
+ * The absolute path of the repository's COMMON git directory as seen from the
+ * worktree (`<main repo>/.git`, even when the source tree is itself a linked
+ * worktree), or `null` when git cannot say or it is not a directory. It is the
+ * directory the worktree's `.git` file points into, so it is what the sandbox has
+ * to expose.
+ */
+export async function resolveCommonGitDir(worktree: string): Promise<string | null> {
+  const res = await git(["rev-parse", "--git-common-dir"], worktree);
+  if (res.code !== 0) return null;
+  const raw = res.stdout.trim();
+  if (raw === "") return null;
+  // Relative answers (`.git`) are relative to the worktree; absolute ones pass through.
+  const abs = isAbsolute(raw) ? raw : resolve(worktree, raw);
+  return safeIsDir(abs) ? abs : null;
+}
+
+/**
  * Creates the isolated worktree, makes `node_modules` reachable and applies
  * only the declared paths. Never throws: every failure resolves to `{ ok:false
  * }` with the real reason, and ROLLS BACK any worktree it created.
@@ -193,6 +221,9 @@ export async function prepareGateIsolation(opts: {
       );
     }
   }
+
+  const gitDir = await resolveCommonGitDir(worktree);
+  if (gitDir) mounts.push({ src: gitDir, dest: gitDir, ro: true });
 
   const applied = await applyDeclaredFiles({ sourceRoot, worktree, files: opts.files });
   if (!applied.ok) return await rollback(applied.error, applied.applied);

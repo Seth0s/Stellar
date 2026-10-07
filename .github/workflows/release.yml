@@ -169,6 +169,8 @@ jobs:
 
       - name: build MCP relay stub (host target)
         run: node resources/relay/build.mjs
+        env:
+          STELLAR_REQUIRE_RELAY: "1"
 
       - run: npm run build
 
@@ -237,6 +239,8 @@ jobs:
 
       - name: build MCP relay stub (macOS universal: x64 + arm64, lipo)
         run: node resources/relay/build.mjs --universal
+        env:
+          STELLAR_REQUIRE_RELAY: "1"
 
       - run: npm run build
 
@@ -297,6 +301,8 @@ jobs:
 
       - name: build MCP relay stub (host target)
         run: node resources/relay/build.mjs
+        env:
+          STELLAR_REQUIRE_RELAY: "1"
 
       - run: npm run build
 

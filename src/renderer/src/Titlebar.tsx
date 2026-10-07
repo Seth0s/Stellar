@@ -64,7 +64,7 @@ export function Titlebar() {
     <div className="titlebar">
       <span className="titlebar-drag">
         <span className="titlebar-title">
-          <StellarMark size={15} />
+          <StellarMark size={16} />
           Stellar
         </span>
       </span>

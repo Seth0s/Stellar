@@ -94,6 +94,7 @@
         "zip"
       ],
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
@@ -101,6 +102,7 @@
         "nsis",
         "portable"
       ],
+      "icon": "build/icon.ico",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {

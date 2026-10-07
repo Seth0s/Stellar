@@ -3,6 +3,8 @@ import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, providerById, providerTrustPrompt, shouldImposeSessionId, type SpawnOpts } from "./providers";
 import { feedTurnEndChunk } from "../shared/turn-end-signal";
+import { foldScreenTurn, type ScreenTurnState } from "./screen-turn-state";
+import type { ScreenTurnDecl } from "./providers";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, spawnWatchReservation, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideTrustPromptAction, describeTrustPromptOutsideRootWarning } from "./spawn-trust-prompt-decision";
@@ -21,9 +23,8 @@ import { agentProcessName } from "./process-name-decision";
 import {
   appendScrollback,
   createScrollback,
-  readScrollback,
+  readScrollbackWithModes,
   resolveScrollbackMaxBytes,
-  trimLeadingPartialEscape,
   type ScrollbackState,
 } from "./session-scrollback";
 import {
@@ -529,6 +530,14 @@ type Entry = {
    *  so the flush path does not re-resolve the provider; null when the provider
    *  declares none. */
   turnEndPattern: RegExp | null;
+  /** Screen turn STATE declaration (`capacity.delivery.screenTurn`), compiled at
+   *  spawn; null when the provider declares none. */
+  screenTurnDecl: ScreenTurnDecl | null;
+  /** The LATCHED screen state of the turn (`screen-turn-state.ts`): survives the
+   *  rolling output tail and flips only on a recognised marker. */
+  screenTurnState: ScreenTurnState;
+  /** Tail of the previous flush so a split marker is still recognised. */
+  screenTurnCarry: string;
   /** Tail from the previous flush, kept so a turn-end marker split across
    *  chunks is still matched; cleared when the marker matches. */
   turnEndCarry: string;
@@ -954,6 +963,11 @@ export function createPtyRegistry(registryOpts: {
         registryOpts.onTurnEnd?.(id);
       }
     }
+    if (e.screenTurnDecl) {
+      const folded = foldScreenTurn(e.screenTurnState, e.screenTurnCarry, stripped, e.screenTurnDecl);
+      e.screenTurnState = folded.state;
+      e.screenTurnCarry = folded.carry;
+    }
     for (const rawUrl of cleaned.match(URL_PATTERN) ?? []) {
       const url = trimTrailingUnbalancedClosers(rawUrl);
       if (!e.seenUrls.has(url)) {
@@ -1214,6 +1228,9 @@ export function createPtyRegistry(registryOpts: {
       turnEndedAt: null,
       turnEndPattern,
       turnEndCarry: "",
+      screenTurnDecl: providerById(providerId)?.capacity.delivery.screenTurn ?? null,
+      screenTurnState: "unknown",
+      screenTurnCarry: "",
       hasReceivedData: false,
       providerId,
       cwd,
@@ -1746,6 +1763,14 @@ export function createPtyRegistry(registryOpts: {
     e.proc.resize(cols, rows);
   }
 
+  /** The PTY's CURRENT geometry (what the process believes and what the ring was
+   *  produced for); null with no live entry. A reattaching xterm sizes itself to
+   *  this before replaying the ring. */
+  function getSize(id: string): { cols: number; rows: number } | null {
+    const e = entries.get(id);
+    return e ? { cols: e.cols, rows: e.rows } : null;
+  }
+
   function interrupt(id: string) {
     entries.get(id)?.proc.write("\x03");
   }
@@ -1953,6 +1978,12 @@ export function createPtyRegistry(registryOpts: {
   }
 
   /** The card's retained ANSI-stripped output tail, or null for an unknown id. */
+  /** The latched screen state of the card's turn; `unknown` with no entry or no
+   *  declaration — never `ended` by omission. */
+  function getScreenTurnState(id: string): ScreenTurnState {
+    return entries.get(id)?.screenTurnState ?? "unknown";
+  }
+
   function getRecentOutput(id: string): string | null {
     return entries.get(id)?.recentOutputTail ?? null;
   }
@@ -1966,7 +1997,7 @@ export function createPtyRegistry(registryOpts: {
   function getScrollback(id: string): string | null {
     const entry = entries.get(id);
     if (!entry) return null;
-    return trimLeadingPartialEscape(readScrollback(entry.scrollback));
+    return readScrollbackWithModes(entry.scrollback);
   }
 
   /** Marks/unmarks the card as belonging to a BACKGROUND session. While `true`,
@@ -1991,5 +2022,5 @@ export function createPtyRegistry(registryOpts: {
     return entry.trustPromptPending || entry.inputLineBuffer.length > 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount, getRecentOutput, traceForCard, getScrollback, setRetained, isRetained, isAwaitingHuman };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount, getRecentOutput, getScreenTurnState, getSize, traceForCard, getScrollback, setRetained, isRetained, isAwaitingHuman };
 }

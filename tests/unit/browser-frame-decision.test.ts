@@ -41,10 +41,11 @@ describe("decideBrowserFrame — rota e taxa do frame do card de navegador", () 
     expect(d.encodeJpeg).toBe(true);
   });
 
-  it("caminho cpu-jpeg fora de foco: preserva UNFOCUSED_FRAME_RATE = 8, ainda encoda", () => {
+  it("caminho cpu-jpeg fora de foco: UNFOCUSED_FRAME_RATE = 4 (era 8), ainda encoda", () => {
     const d = decideBrowserFrame({ visible: true, focused: false, sharedTextureAvailable: false });
     expect(d.path).toBe("cpu-jpeg");
     expect(d.frameRate).toBe(UNFOCUSED_FRAME_RATE);
+    expect(UNFOCUSED_FRAME_RATE).toBe(4);
     expect(d.encodeJpeg).toBe(true);
   });
 

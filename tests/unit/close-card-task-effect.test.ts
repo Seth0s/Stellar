@@ -129,17 +129,39 @@ describe("decideCloseCardTaskEffect", () => {
     });
   });
 
-  // S9: sem review exigido, mas o último report aceito não foi ok:true —
-  // fechar deixaria a task aberta e órfã em silêncio.
-  it("S9: sem review, último report não ok:true é recusado", () => {
+  // S9: no review required and no accepted success report of this task in the
+  // round, asked by someone who is not the implementer: nothing to conclude, so
+  // the link is released and the status is left alone.
+  it("S9: sem review, sem report ok:true da rodada, pedido por terceiro → solta o vínculo", () => {
     const result = decideCloseCardTaskEffect({
       ...base,
       reviewWanted: false,
       lastReportOk: false,
     });
+    expect(result).toEqual({ action: "release-link", taskId: "T1" });
+  });
+
+  // S9b: the implementer asking for its own close is leaving by itself.
+  it("S9b: o próprio implementer pedindo, sem report ok:true da rodada, é recusado", () => {
+    const result = decideCloseCardTaskEffect({
+      ...base,
+      reviewWanted: false,
+      lastReportOk: false,
+      requesterRoleOnTask: "implementer",
+    });
     expect(result).toEqual({
       action: "refuse",
       error: describeCloseWithoutSuccessRefusal("T1", "C1"),
+    });
+  });
+
+  // S9c: a reviewer link on a task with no review requirement has nothing to sign.
+  it("S9c: o card fechado é revisor numa task sem review exigido → só fecha, mesmo com report ok:true", () => {
+    expect(decideCloseCardTaskEffect({ ...base, targetRole: "reviewer", lastReportOk: true })).toEqual({
+      action: "allow-close",
+    });
+    expect(decideCloseCardTaskEffect({ ...base, targetRole: "reviewer", lastReportOk: false })).toEqual({
+      action: "allow-close",
     });
   });
 
