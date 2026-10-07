@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Card Fila</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.chip{height:30px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip:hover{color:#e8eaf0;border-color:#3a4258}
+.chipOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.btn{min-height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.tile{border:1px solid #1f2433;border-radius:12px;background:#11141c;padding:12px;display:flex;flex-direction:column;gap:9px;cursor:pointer}
+.tile:hover{border-color:#343c55;background:#141823}
+.live{width:8px;height:8px;border-radius:50%;background:#7d8cff;flex:none;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #7d8cff88}70%{box-shadow:0 0 0 7px #7d8cff00}100%{box-shadow:0 0 0 0 #7d8cff00}}
+.bar{height:3px;border-radius:2px;background:#1d2230;overflow:hidden}
+.barFill{height:100%;width:40%;background:#7d8cff;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+.rail{width:44px;flex:none;border:1px solid #1d2230;border-radius:12px;background:#0c0f15;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;cursor:pointer;color:#a3aabb;font:inherit}
+.rail:hover{border-color:#343c55;color:#e8eaf0}
+.vert{writing-mode:vertical-rl;transform:rotate(180deg);font-size:13px;letter-spacing:.04em}
+@media (prefers-reduced-motion: reduce){.live,.barFill{animation:none}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 860px; box-sizing: border-box; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230">
+
+  <header style="padding: 14px 18px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #1d2230">
+    <h1 style="margin: 0; font-size: 17px; font-weight: 600">Fila</h1>
+    <a href="Sprints.dc.html" style="font-size: 13px">Board 64 · Sprint Ciclo 2 ▾</a>
+    <div role="group" aria-label="Filtro" style="display: flex; gap: 6px; margin-left: 8px">
+      <button type="button" class="{{fTudo}}" onClick="{{goTudo}}">Tudo <span style="color: #8d94a6">14</span></button>
+      <button type="button" class="{{fVoce}}" onClick="{{goVoce}}">Precisa de você <span style="color: #f0b25c">3</span></button>
+      <button type="button" class="{{fVivas}}" onClick="{{goVivas}}">Com agente vivo <span style="color: #8d94a6">2</span></button>
+    </div>
+    <span style="flex: 1"></span>
+    <label style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 1px solid #2a2f3d; border-radius: 8px; width: 220px; box-sizing: border-box">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="4.5"></circle><path d="M9.5 9.5L13 13"></path></svg>
+      <input aria-label="Buscar task" placeholder="Buscar por título ou #id" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #e8eaf0; font: inherit; font-size: 13px; outline: none">
+    </label>
+    <a href="Graficos.dc.html" class="btn">Gráficos</a>
+    <a href="CriarTask.dc.html" class="btn" style="background: #4a5fe0; border-color: #4a5fe0; font-weight: 600; color: #fff">+ Nova task</a>
+  </header>
+
+  <sc-if value="{{showStrip}}" hint-placeholder-val="{{ true }}">
+    <section aria-label="Precisa de você" style="margin: 12px 18px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+      <div style="border: 1px solid #5a3d17; background: #1f170d; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0b25c"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f0b25c"></span>Pergunta para você · há 2 h</div>
+        <span style="font-size: 13.5px; line-height: 1.4">#0c8694 R1 foi disparada sozinha, mas o celular está em pausa. O que fazer?</span>
+        <div style="display: flex; gap: 6px"><button type="button" class="btn">Manter pausada</button><button type="button" class="btn">Liberar</button></div>
+      </div>
+      <div style="border: 1px solid #5a3d17; background: #1f170d; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0b25c"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f0b25c"></span>Pergunta para você · há 2 h</div>
+        <span style="font-size: 13.5px; line-height: 1.4">#70584525 A5c e mais 3 esperam liberação depois do commit do ciclo.</span>
+        <div style="display: flex; gap: 6px"><button type="button" class="btn">Ver as 4</button></div>
+      </div>
+      <div style="border: 1px solid #27305a; background: #131829; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a9b8ff"><span style="width: 7px; height: 7px; border-radius: 50%; background: #7d8cff"></span>Protótipo para aprovar</div>
+        <span style="font-size: 13.5px; line-height: 1.4">#a550a7ae Detalhe da task no card Fila, mais organizado</span>
+        <div style="display: flex; gap: 6px"><button type="button" class="btn">Abrir</button></div>
+      </div>
+    </section>
+  </sc-if>
+
+  <div style="flex: 1; min-height: 0; padding: 12px 18px 16px; display: flex; gap: 12px; overflow-x: auto">
+
+    <section aria-label="Esperando" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8d94a6"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Esperando</h2><span style="font-size: 12.5px; color: #8d94a6">3</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">deps ou você</span></div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#0c8694</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2a1d10; color: #f0b25c">pergunta</span></div>
+        <span style="font-size: 14px; line-height: 1.35">R1 — Relay do celular (WSS), presença e Web Push</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #e6cfae"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f0b25c"></span>Espera sua resposta</div>
+      </div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#49cfbe</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #1d2333; color: #c3cbff">implementar</span></div>
+        <span style="font-size: 14px; line-height: 1.35">R2 — Conexão do desktop e pareamento por QR</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#8d94a6" stroke-width="1.4" aria-hidden="true"><path d="M2 6h8M7 3l3 3-3 3"></path></svg>Depois de <a href="#">#0c8694 R1</a></div>
+      </div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#a49a83</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #1d2333; color: #c3cbff">implementar</span></div>
+        <span style="font-size: 14px; line-height: 1.35">A5d — Criação rápida de task (tela 15)</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #e6cfae"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f0b25c"></span>Pausada até você liberar</div>
+      </div>
+    </section>
+
+    <section aria-label="Pronta" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #c9cede"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Pronta</h2><span style="font-size: 12.5px; color: #8d94a6">4</span></div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#c5b6ae</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">próxima</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Terminal: scroll e desenho travam depois de sair da sessão e voltar</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb"><span style="width: 18px; height: 18px; border-radius: 5px; background: #2a1d14; color: #f0a46b; display: grid; place-items: center; font-size: 10px; font-weight: 600">CL</span>Reservada para IMPL · Claude</div>
+      </div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#3fe745</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Navegadores: CPU a 99% com 5 abertos, e o canvas não se move sobre eles</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #8d94a6">Sem card · commandcode sem cota</div>
+      </div>
+      <div class="tile">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#91a568</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Card Fila: "Substituídas" como coluna própria</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #8d94a6">Sem card</div>
+      </div>
+    </section>
+
+    <section aria-label="Rodando" style="flex: 1 1 0; min-width: 240px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #7d8cff"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Rodando</h2><span style="font-size: 12.5px; color: #8d94a6">2</span></div>
+      <div class="tile" style="border-color: #2b3460">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#511abc</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span class="mono" style="font-size: 11.5px; color: #8d94a6">38 min</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Card que termina o turno sem report recebe o lembrete</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px"><span class="live"></span><span style="flex: 1">IMPL · Claude escrevendo testes</span><span style="font-size: 11.5px; color: #8d94a6">ctx 34%</span></div>
+        <div class="bar" aria-hidden="true"><div class="barFill"></div></div>
+      </div>
+      <div class="tile" style="border-color: #2b3460">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#ad6787</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">investigar</span><span style="flex: 1"></span><span class="mono" style="font-size: 11.5px; color: #8d94a6">12 min</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Investigação: terminal ao voltar da sessão</span>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px"><span class="live"></span><span style="flex: 1">EXPLORER · Gemini lendo useTerminal.ts</span></div>
+        <div class="bar" aria-hidden="true"><div class="barFill"></div></div>
+      </div>
+    </section>
+
+    <section aria-label="Revisão" style="flex: 1 1 0; min-width: 240px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #f0a43e"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Revisão</h2><span style="font-size: 12.5px; color: #8d94a6">1</span></div>
+      <div class="tile" style="border-color: #4a3618">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#e0b6b8</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">rodada 2</span></div>
+        <span style="font-size: 14px; line-height: 1.35">Terminais fora da tela não desenham</span>
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+          <span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #3a1c18; color: #f2a093">check:types ✕ outro card</span>
+          <span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">vitest ✓</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb"><span style="width: 18px; height: 18px; border-radius: 5px; background: #14223a; color: #8fb4ff; display: grid; place-items: center; font-size: 10px; font-weight: 600">RV</span>Esperando o REVISOR</div>
+      </div>
+    </section>
+
+    <section aria-label="Concluída" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #3fb68b"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Concluída</h2><span style="font-size: 12.5px; color: #8d94a6">hoje 3</span></div>
+      <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#d97be5</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">A9 — Gate de plano e upgrade</span></div>
+        <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo revisor · 2 rodadas</span>
+      </div>
+      <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#ba68dd</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">A5b — Tasks do time: criar, detalhe, excluir</span></div>
+        <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo Master · 4 rodadas</span>
+      </div>
+      <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+        <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#9012e6</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Território compartilhado</span></div>
+        <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo Master · 1 rodada</span>
+      </div>
+      <a href="#" style="font-size: 12.5px">Ver todas as 212</a>
+    </section>
+
+    <sc-if value="{{openFail}}" hint-placeholder-val="{{ false }}">
+      <section aria-label="Falhas" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Falhas</h2><span style="font-size: 12.5px; color: #8d94a6">1</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleFail}}" aria-label="Recolher falhas" style="min-height: 26px; padding: 0 8px">‹</button></div>
+        <div class="tile"><div style="display: flex; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#711281</span></div><span style="font-size: 14px; line-height: 1.35">Cinco smokes que o destravamento expôs</span><span style="font-size: 12px; color: #f2a093">✕ julgada · 23/09</span></div>
+      </section>
+    </sc-if>
+    <sc-if value="{{closedFail}}" hint-placeholder-val="{{ true }}">
+      <button type="button" class="rail" onClick="{{toggleFail}}" aria-label="Mostrar falhas"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><span style="font-size: 12px">1</span><span class="vert">Falhas</span></button>
+    </sc-if>
+
+    <sc-if value="{{openSup}}" hint-placeholder-val="{{ false }}">
+      <section aria-label="Substituídas" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Substituídas</h2><span style="font-size: 12.5px; color: #8d94a6">6</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleSup}}" aria-label="Recolher substituídas" style="min-height: 26px; padding: 0 8px">‹</button></div>
+        <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">R4 — Avisos no celular</span><span style="font-size: 12px; color: #a3aabb">→ <a href="#">#878514a8</a></span></div>
+        <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">B9b — Integrações II</span><span style="font-size: 12px; color: #a3aabb">→ <a href="#">#ebfc5e30</a> concluída</span></div>
+        <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">A4 — Time no app</span><span style="font-size: 12px; color: #a3aabb">→ <a href="#">#36f32fed</a> concluída</span></div>
+      </section>
+    </sc-if>
+    <sc-if value="{{closedSup}}" hint-placeholder-val="{{ true }}">
+      <button type="button" class="rail" onClick="{{toggleSup}}" aria-label="Mostrar substituídas"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><span style="font-size: 12px">6</span><span class="vert">Substituídas</span></button>
+    </sc-if>
+  </div>
+
+  <footer style="padding: 10px 18px; border-top: 1px solid #1d2230; display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: #8d94a6">
+    <span style="display: flex; align-items: center; gap: 6px"><span class="live"></span>2 agentes trabalhando</span>
+    <span>1 esperando revisão</span>
+    <span style="color: #f0b25c">3 precisam de você</span>
+    <span style="flex: 1"></span>
+    <span>Atualizado agora</span>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { f: 'tudo', sup: false, fail: false }; }
+  renderVals() {
+    const f = this.state.f;
+    const c = (k) => (f === k ? 'chip chipOn' : 'chip');
+    return {
+      fTudo: c('tudo'), fVoce: c('voce'), fVivas: c('vivas'),
+      goTudo: () => this.setState({ f: 'tudo' }), goVoce: () => this.setState({ f: 'voce' }), goVivas: () => this.setState({ f: 'vivas' }),
+      showStrip: f !== 'vivas',
+      openSup: this.state.sup, closedSup: !this.state.sup, toggleSup: () => this.setState({ sup: !this.state.sup }),
+      openFail: this.state.fail, closedFail: !this.state.fail, toggleFail: () => this.setState({ fail: !this.state.fail })
+    };
+  }
+}
+</script>
+</body>
+</html>

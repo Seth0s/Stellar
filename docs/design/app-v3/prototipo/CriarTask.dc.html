@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Fila: nova task</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.btn{min-height:36px;padding:0 14px;border-radius:9px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13.5px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.primary{background:#4a5fe0;border-color:#4a5fe0;font-weight:600;color:#fff}
+.lbl{font-size:13px;color:#c9cede;font-weight:500}
+.hint{font-size:12px;color:#8d94a6}
+.field{min-height:40px;padding:0 12px;border-radius:9px;border:1px solid #2a2f3d;background:#0c0f15;color:#e8eaf0;font:inherit;font-size:14px;box-sizing:border-box;width:100%}
+.pill{height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer}
+.pill:hover{color:#e8eaf0}
+.pillOn{background:#1d2333;border-color:#5a6be0;color:#e8eaf0}
+.tag{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;background:#161a24;border:1px solid #2a2f3d;font-size:12.5px}
+.sec{display:flex;flex-direction:column;gap:14px;padding:18px 0;border-bottom:1px solid #1d2230}
+.sh{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8d94a6}
+.tb{width:32px;height:30px;border:0;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer;border-radius:6px}
+.tb:hover{background:#1d2230;color:#e8eaf0}
+.sw{width:38px;height:22px;border-radius:999px;border:0;cursor:pointer;position:relative;flex:none}
+</style>
+</helmet>
+<div style="width: 1440px; height: 860px; box-sizing: border-box; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+  <section role="dialog" aria-modal="true" aria-labelledby="nt" style="width: 1300px; height: 800px; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; display: flex; flex-direction: column; overflow: hidden">
+    <header style="padding: 16px 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #1d2230">
+      <h1 id="nt" style="margin: 0; font-size: 18px; font-weight: 600">Nova task</h1>
+      <span class="hint">Board 64 · Sprint Ciclo 2</span>
+      <span style="flex: 1"></span>
+      <span class="hint">Rascunho salvo há 4 s</span>
+      <button type="button" class="btn" aria-label="Fechar" style="width: 36px; padding: 0; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9cede" stroke-width="1.6" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+    </header>
+
+    <div style="flex: 1; min-height: 0; display: flex">
+      <form style="flex: 1; min-width: 0; overflow-y: auto; padding: 0 24px">
+        <section class="sec" aria-labelledby="s1">
+          <h2 id="s1" class="sh">1 · O que é</h2>
+          <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Título</span><input class="field" value="Terminal: scroll e desenho travam depois de sair da sessão e voltar"></label>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl" id="tp">Tipo</span>
+            <div role="radiogroup" aria-labelledby="tp" style="display: flex; gap: 8px; flex-wrap: wrap">
+              <sc-for list="{{purposes}}" as="p" hint-placeholder-count="5"><button type="button" role="radio" aria-checked="{{p.on}}" class="{{p.cls}}" onClick="{{p.pick}}">{{p.label}}</button></sc-for>
+            </div>
+            <span class="hint">{{purposeHint}}</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Briefing</span><span class="hint">markdown · é o que o agente lê</span><span style="flex: 1"></span><button type="button" class="btn" style="min-height: 28px; font-size: 12.5px">Usar modelo…</button></div>
+            <div style="border: 1px solid #2a2f3d; border-radius: 10px; overflow: hidden">
+              <div style="display: flex; gap: 2px; padding: 4px 6px; border-bottom: 1px solid #1d2230; background: #12151d">
+                <button type="button" class="tb" aria-label="Negrito" style="font-weight: 700">B</button><button type="button" class="tb" aria-label="Itálico" style="font-style: italic">I</button><button type="button" class="tb mono" aria-label="Código">{}</button><button type="button" class="tb" aria-label="Lista">•</button><button type="button" class="tb" aria-label="Checklist">☐</button>
+                <span style="flex: 1"></span><button type="button" class="tb" style="width: auto; padding: 0 10px">Pré-visualizar</button>
+              </div>
+              <textarea aria-label="Briefing" style="width: 100%; box-sizing: border-box; min-height: 150px; border: 0; background: #0c0f15; color: #d6dae6; font: 13.5px/1.6 'JetBrains Mono', monospace; padding: 12px; resize: vertical">FEEDBACK DO DONO: ao sair da sessão e voltar, o scroll do terminal não funciona…
+
+FAZER
+1. Reproduza numa instância isolada…
+2. Ache a causa com evidência e corrija na raiz.
+
+ACEITE
+- Repro antes (falha) e depois (passa)…</textarea>
+            </div>
+          </div>
+        </section>
+
+        <section class="sec" aria-labelledby="s2">
+          <h2 id="s2" class="sh">2 · O contrato</h2>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl">Território <span class="hint">· arquivos que a task pode tocar</span></span>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
+              <span class="tag mono">src/renderer/src/useTerminal.ts<button type="button" class="tb" aria-label="Remover" style="width: 18px; height: 18px">×</button></span>
+              <span class="tag mono">src/renderer/src/terminal-render*.ts<button type="button" class="tb" aria-label="Remover" style="width: 18px; height: 18px">×</button></span>
+              <span class="tag mono" style="border-color: #6b4a1c; background: #22190d">src/renderer/src/App.tsx<span style="font-family: 'Space Grotesk'; color: #f0b25c">compartilhado</span><button type="button" class="tb" aria-label="Remover" style="width: 18px; height: 18px">×</button></span>
+              <input class="field mono" aria-label="Adicionar caminho" placeholder="+ caminho ou glob" style="width: 220px; min-height: 30px; font-size: 12.5px">
+            </div>
+            <div style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: #22190d; border: 1px solid #5a3d17; font-size: 13px; color: #e6cfae; line-height: 1.5">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#f0b25c" stroke-width="1.5" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M8 2l6.5 11.5h-13z"></path><path d="M8 6.5v3M8 11.5h.01"></path></svg>
+              <span>App.tsx também está no território de <a href="#">#511abc</a>, rodando. Declarei como compartilhado; escreva a nota de coordenação: <span class="mono">"só o handler de visibilidade; releia antes de editar"</span></span>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl">Gates <span class="hint">· o app roda depois do report, numa worktree isolada</span></span>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <div style="display: flex; gap: 10px; align-items: center"><input class="field mono" value="npm run check:types" style="flex: 1; font-size: 13px"><label class="hint" style="display: flex; align-items: center; gap: 6px"><input type="checkbox">exclusivo na máquina</label></div>
+              <div style="display: flex; gap: 10px; align-items: center"><input class="field mono" value="npx vitest run" style="flex: 1; font-size: 13px"><label class="hint" style="display: flex; align-items: center; gap: 6px"><input type="checkbox">exclusivo na máquina</label></div>
+              <button type="button" class="btn" style="align-self: flex-start; min-height: 30px">+ gate</button>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl">Campos obrigatórios do report</span>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap"><span class="tag mono">filesChanged</span><span class="tag mono">decisaoTomada</span><span class="tag mono">evidenciaMedida</span><span class="tag mono">oQueNaoFiz</span><span class="tag mono">gatesOutput</span><button type="button" class="btn" style="min-height: 28px; font-size: 12.5px">+ campo</button></div>
+          </div>
+          <div style="display: flex; gap: 24px">
+            <label style="display: flex; align-items: center; gap: 10px"><button type="button" class="sw" aria-pressed="false" aria-label="Permitir commit" style="background: #2a2f3d"><span style="position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #8d94a6"></span></button><span style="font-size: 13.5px">Permitir commit</span></label>
+            <label style="display: flex; align-items: center; gap: 10px"><button type="button" class="sw" aria-pressed="{{revOn}}" aria-label="Exigir revisão" onClick="{{toggleRev}}" style="background: {{revBg}}"><span style="position: absolute; left: {{revX}}; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button><span style="font-size: 13.5px">Exigir revisão antes de concluir</span></label>
+          </div>
+        </section>
+
+        <section class="sec" aria-labelledby="s3">
+          <h2 id="s3" class="sh">3 · Quem faz e quando</h2>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl" id="pv">Provider</span>
+            <div role="radiogroup" aria-labelledby="pv" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+              <sc-for list="{{providers}}" as="v" hint-placeholder-count="4">
+                <button type="button" role="radio" aria-checked="{{v.on}}" onClick="{{v.pick}}" style="{{v.style}}"><span style="display: flex; align-items: center; gap: 8px; font-size: 14px"><span style="width: 9px; height: 9px; border-radius: 50%; background: {{v.dot}}"></span>{{v.name}}</span><span style="font-size: 12px; color: {{v.qColor}}">{{v.quota}}</span></button>
+              </sc-for>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Modelo</span><select class="field"><option>Sonnet 5.5</option><option>Opus 5.5</option></select></label>
+            <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Esforço</span><select class="field"><option>alto</option><option>médio</option><option>baixo</option></select></label>
+            <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Sprint</span><select class="field"><option>Ciclo 2 (atual)</option><option>Sem sprint</option></select></label>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl">Depende de <span class="hint">· começa sozinha quando todas concluírem</span></span>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><span class="tag"><span class="mono">#ad6787</span> Investigação do terminal<span style="color: #a9b8ff">rodando</span></span><input class="field" aria-label="Adicionar dependência" placeholder="+ #id ou título" style="width: 200px; min-height: 30px; font-size: 12.5px"></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="lbl" id="qd">Quando começar</span>
+            <div role="radiogroup" aria-labelledby="qd" style="display: flex; gap: 8px; flex-wrap: wrap">
+              <sc-for list="{{whens}}" as="w" hint-placeholder-count="3"><button type="button" role="radio" aria-checked="{{w.on}}" class="{{w.cls}}" onClick="{{w.pick}}">{{w.label}}</button></sc-for>
+            </div>
+          </div>
+        </section>
+
+        <section class="sec" aria-labelledby="s4" style="border-bottom: 0">
+          <button type="button" onClick="{{toggleAdv}}" aria-expanded="{{advOpen}}" style="all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px"><h2 id="s4" class="sh">4 · Avançado</h2><span class="hint">{{advLabel}}</span></button>
+          <sc-if value="{{advOpen}}" hint-placeholder-val="{{ false }}">
+            <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+              <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Novas tentativas</span><input class="field" value="2"></label>
+              <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Providers de reserva</span><input class="field" value="antigravity"></label>
+              <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Pasta</span><input class="field mono" value="Stellar" style="font-size: 13px"></label>
+              <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Perfil de spawn</span><select class="field"><option>nenhum</option></select></label>
+              <label style="display: flex; flex-direction: column; gap: 6px"><span class="lbl">Prioridade sugerida</span><select class="field"><option>alta</option><option>normal</option></select></label>
+            </div>
+          </sc-if>
+        </section>
+      </form>
+
+      <aside aria-label="Prévia" style="width: 360px; flex: none; border-left: 1px solid #1d2230; background: #0c0f15; padding: 18px 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto">
+        <section style="display: flex; flex-direction: column; gap: 8px">
+          <h2 class="sh">O agente recebe</h2>
+          <div class="mono" style="border: 1px solid #1d2230; border-radius: 10px; padding: 12px; font-size: 12px; line-height: 1.6; color: #c9cede; white-space: pre-line">[task #novo · corrigir]
+Terminal: scroll e desenho travam…
+FEEDBACK DO DONO: ao sair da sessão…
+—
+território: useTerminal.ts, terminal-render*.ts, App.tsx (compartilhado: só o handler…)
+gates: npm run check:types · npx vitest run
+report: filesChanged, decisaoTomada, evidenciaMedida, oQueNaoFiz, gatesOutput
+commit: não · revisão: {{revText}}</div>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: #c9cede">
+          <h2 class="sh">Onde aparece</h2>
+          <span>Fila, coluna <strong>{{whereCol}}</strong></span>
+          <span>{{whereCard}}</span>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 8px">
+          <h2 class="sh">Antes de criar</h2>
+          <span style="font-size: 13px; color: #8fdcc0">✓ título e briefing</span>
+          <span style="font-size: 13px; color: #8fdcc0">✓ gates declarados</span>
+          <span style="font-size: 13px; color: #f0b25c">! território compartilhado com #511abc</span>
+        </section>
+      </aside>
+    </div>
+
+    <footer style="padding: 12px 24px; border-top: 1px solid #1d2230; display: flex; align-items: center; gap: 10px">
+      <span class="hint">Ctrl Enter cria</span>
+      <span style="flex: 1"></span>
+      <button type="button" class="btn">Salvar como modelo</button>
+      <button type="button" class="btn">Criar e outra</button>
+      <button type="button" class="btn primary">{{cta}}</button>
+    </footer>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { purpose: 'fix', prov: 'claude', when: 'deps', rev: true, adv: false }; }
+  renderVals() {
+    const s = this.state;
+    const P = [['investigate','Investigar','O que sai é conhecimento, não mudança no código.'],['implement','Implementar','Construir algo novo.'],['measure','Medir','Juntar números sobre o estado atual.'],['fix','Corrigir','Consertar um defeito no que já existe.'],['integrate','Integrar','Convergência verificada de um lote de tasks.']];
+    const V = [['claude','Claude','#f0883e','cota 77% na semana','#e6cfae'],['antigravity','Antigravity','#5b8cff','Gemini ok · Claude/GPT sem cota','#e6cfae'],['commandcode','Command Code','#e85d9b','sem cota até sex','#f2a093'],['codex','Codex','#8d94a6','sem crédito até 11/10','#f2a093']];
+    const W = [['deps','Quando as dependências concluírem'],['now','Agora, num card novo'],['reserve','Reservar para IMPL · Claude']];
+    const whereCol = s.when === 'deps' ? 'Esperando' : (s.when === 'now' ? 'Rodando' : 'Pronta');
+    const whereCard = s.when === 'now' ? 'Abre um card ' + s.prov + ' ao criar' : (s.when === 'reserve' ? 'Na fila do card IMPL · Claude, depois da task atual' : 'Começa sozinha quando #ad6787 concluir');
+    const cta = s.when === 'now' ? 'Criar e despachar' : (s.when === 'reserve' ? 'Criar e reservar' : 'Criar');
+    return {
+      purposes: P.map(([id,label]) => ({ label, on: s.purpose === id ? 'true' : 'false', cls: s.purpose === id ? 'pill pillOn' : 'pill', pick: () => this.setState({ purpose: id }) })),
+      purposeHint: (P.find(p => p[0] === s.purpose) || P[0])[2],
+      providers: V.map(([id,name,dot,quota,qColor]) => ({ name, dot, quota, qColor, on: s.prov === id ? 'true' : 'false', pick: () => this.setState({ prov: id }), style: 'min-height: 60px; padding: 10px 12px; border-radius: 10px; text-align: left; font: inherit; color: #e8eaf0; cursor: pointer; display: flex; flex-direction: column; gap: 4px; border: 1px solid ' + (s.prov === id ? '#5a6be0' : '#2a2f3d') + '; background: ' + (s.prov === id ? '#161c30' : '#0c0f15') })),
+      whens: W.map(([id,label]) => ({ label, on: s.when === id ? 'true' : 'false', cls: s.when === id ? 'pill pillOn' : 'pill', pick: () => this.setState({ when: id }) })),
+      revOn: s.rev ? 'true' : 'false', revBg: s.rev ? '#4a5fe0' : '#2a2f3d', revX: s.rev ? '19px' : '3px', revText: s.rev ? 'exigida' : 'não exigida', toggleRev: () => this.setState({ rev: !s.rev }),
+      advOpen: s.adv, advLabel: s.adv ? 'recolher' : 'tentativas, reservas, pasta, perfil, prioridade', toggleAdv: () => this.setState({ adv: !s.adv }),
+      whereCol, whereCard, cta
+    };
+  }
+}
+</script>
+</body>
+</html>

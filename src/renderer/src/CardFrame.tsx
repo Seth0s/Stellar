@@ -604,6 +604,10 @@ export function CardFrame({
       // agora não faz nada (em vez de zoomar o canvas por baixo) até um
       // clique focar o card, aí sim rolando a página embutida —
       // consistente com todo o resto, sem exceção por tipo de card.
+      //
+      // The one exception is the canvas modifier (Ctrl/Cmd + wheel): it is taken
+      // by the viewport in the capture phase (App.tsx, canvas-gesture-decision.ts)
+      // BEFORE this handler runs, so the canvas zooms even over a browser card.
       onWheel={(e) => e.stopPropagation()}
       onAnimationEnd={(e) => {
         if (closing && e.currentTarget === e.target) onCloseAnimationEnd?.();

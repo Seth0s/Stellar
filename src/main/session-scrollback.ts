@@ -12,8 +12,13 @@
  * Writing the raw stream back into a fresh xterm repaints the recent history,
  * and a cut in the middle of an ANSI escape at the window start is trimmed by
  * `trimLeadingPartialEscape`. This is not an emulator — it does not try to
- * reconstruct exact screen state, only to show again what happened.
+ * reconstruct exact screen state, only to show again what happened. The one piece
+ * of state it DOES keep is the terminal modes at the cut (`terminal-mode.ts`):
+ * a TUI that entered the alternate screen before the cut would otherwise be
+ * replayed into the normal buffer.
  */
+
+import { createTerminalModes, modesReplayPrefix, trackTerminalModes, type TerminalModes } from "./terminal-mode";
 
 /** 2 MB per card. */
 export const DEFAULT_SCROLLBACK_MAX_BYTES = 2 * 1024 * 1024;
@@ -37,10 +42,19 @@ export type ScrollbackState = {
   bytes: number;
   /** Bytes already dropped from the front. */
   droppedBytes: number;
+  /**
+   * The terminal modes (alternate screen, mouse, bracketed paste, …) in force AT
+   * THE CUT — after everything that was dropped from the front and before the
+   * first retained byte. The replay writes them first (`readScrollbackWithModes`),
+   * so the retained bytes land in the mode their program left the terminal in.
+   * Tracked from the dropped text only, never from the retained one: the retained
+   * bytes set their own modes when they are replayed.
+   */
+  cutModes: TerminalModes;
 };
 
 export function createScrollback(): ScrollbackState {
-  return { chunks: [], bytes: 0, droppedBytes: 0 };
+  return { chunks: [], bytes: 0, droppedBytes: 0, cutModes: createTerminalModes() };
 }
 
 function byteLen(text: string): number {
@@ -73,36 +87,55 @@ export function appendScrollback(state: ScrollbackState, chunk: string, maxBytes
   if (chunk.length === 0) return state;
   const chunkBytes = byteLen(chunk);
   if (maxBytes <= 0) {
-    return { chunks: [], bytes: 0, droppedBytes: state.droppedBytes + state.bytes + chunkBytes };
+    // Everything is dropped, in order: the retained text, then this chunk.
+    const cutModes = trackTerminalModes(trackTerminalModes(state.cutModes, readScrollback(state)), chunk);
+    return { chunks: [], bytes: 0, droppedBytes: state.droppedBytes + state.bytes + chunkBytes, cutModes };
   }
   if (chunkBytes >= maxBytes) {
     const tail = tailByBytes(chunk, maxBytes);
     const tailBytes = byteLen(tail);
+    // Dropped, in order: everything retained so far, then the front of this chunk.
+    const dropped = chunk.slice(0, chunk.length - tail.length);
+    const cutModes = trackTerminalModes(trackTerminalModes(state.cutModes, readScrollback(state)), dropped);
     return {
       chunks: [tail],
       bytes: tailBytes,
       droppedBytes: state.droppedBytes + state.bytes + (chunkBytes - tailBytes),
+      cutModes,
     };
   }
   let chunks = state.chunks.concat(chunk);
   let bytes = state.bytes + chunkBytes;
   let droppedBytes = state.droppedBytes;
+  let cutModes = state.cutModes;
   // Evict from the front until it fits; the newly appended chunk is never
-  // removed (the size guard above already guarantees it fits alone).
+  // removed (the size guard above already guarantees it fits alone). What leaves
+  // is folded, in order, into the modes at the cut.
   let first = 0;
   while (bytes > maxBytes && first < chunks.length - 1) {
     const len = byteLen(chunks[first]);
+    cutModes = trackTerminalModes(cutModes, chunks[first]);
     bytes -= len;
     droppedBytes += len;
     first++;
   }
   if (first > 0) chunks = chunks.slice(first);
-  return { chunks, bytes, droppedBytes };
+  return { chunks, bytes, droppedBytes, cutModes };
 }
 
 /** The retained text in chronological order (oldest to newest). */
 export function readScrollback(state: ScrollbackState): string {
   return state.chunks.join("");
+}
+
+/**
+ * What a replay writes into a fresh xterm: the escape sequences that restore the
+ * terminal modes at the ring's cut, then the retained text (its leading partial
+ * escape trimmed). With nothing dropped the modes are the defaults and the prefix
+ * is empty, so a ring that was never cut replays exactly as before.
+ */
+export function readScrollbackWithModes(state: ScrollbackState): string {
+  return modesReplayPrefix(state.cutModes) + trimLeadingPartialEscape(readScrollback(state));
 }
 
 /**

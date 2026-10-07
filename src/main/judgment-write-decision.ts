@@ -338,10 +338,14 @@ export type CloseCardLinkedTask = {
   requesterRoleOnTask: JudgmentRequesterRole;
   /** Reviewer links OTHER than the card being closed whose PTY is alive right now. */
   otherLiveReviewers: number;
-  /** O ÚLTIMO report aceito DA PRÓPRIA TASK (não "do card") declarou
-   * `ok: true`. Task c10a1faf: o card é um SLOT que responde por VÁRIAS tasks,
-   * então um report sobre OUTRA task não pode assinar esta — o coletor
-   * (`message-bus.ts`) já entrega este fato escopado à task. */
+  /** The last accepted report OF THIS TASK (not "of the card") declared
+   * `ok: true`, and it was accepted IN THE ROUND: at or after the moment this
+   * card was linked to the task. A card is a SLOT that answers for several
+   * tasks, so a report about another task cannot sign this one — and a report
+   * filed before the link (a card later linked by mistake) is not work done for
+   * this task either. The collector (`message-bus.ts`) delivers the fact already
+   * scoped to the task and the round; a link with no date proves no round, so
+   * the fact is `false` there. */
   lastReportOk: boolean;
   /** Rodadas gravadas NESTA task para o card que está fechando, cronológicas.
    *
@@ -356,6 +360,9 @@ export type CloseCardLinkedTask = {
 export type CloseCardTaskEffect =
   | { action: "allow-close" }
   | { action: "conclude-task"; taskId: string; reason: "reviewer-signature" | "success-report" }
+  /** The card closes and its link to the task is released; the task's STATUS is
+   * left exactly as it is. Nothing is concluded and nothing is reopened. */
+  | { action: "release-link"; taskId: string }
   | { action: "refuse"; error: string };
 
 /** AGENT-FACING — DO NOT TRANSLATE. `review="wanted"` sem reviewer vivo:
@@ -389,14 +396,12 @@ export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCar
  * era assim que o fechamento "concluía" uma task que nunca começou). */
 export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId: string): string {
   return (
-    `[de: stellar] close_card of "${targetCardId}" refused: the card is linked to open task "${taskId}", ` +
-    `and NO accepted report OF THIS TASK declares success (ok:true) — a report the card filed about a ` +
-    `DIFFERENT task does not sign this one. ` +
-    `Closing now would leave the task open and orphaned (28 of the 38 open tasks today are like this). ` +
-    `Conclude the task first: update_task with status done/failed, or request_task_status for the human — ` +
-    `or, if whoever closes is NOT the implementer of this task (reviewer, outsider or human), ` +
-    `let the card report ok:true FOR THIS TASK, in which case the close itself concludes the task (LAYER 4 still applies: ` +
-    `the implementer closing its own card still does not judge). Nothing was closed.`
+    `[de: stellar] close_card of "${targetCardId}" refused: the card is the implementer of open task "${taskId}" ` +
+    `and asked for its own close, but NO accepted report OF THIS TASK declares success (ok:true) in this round — ` +
+    `a report about a different task, or one filed before the card was linked, does not count. ` +
+    `An implementer cannot leave a task by itself. Report ok:true for this task first, or ask the orchestrator ` +
+    `to close the card (it releases the link and leaves the task status untouched), ` +
+    `or use request_task_status for the human. Nothing was closed.`
   );
 }
 
@@ -523,6 +528,8 @@ export const PROJECT_CODE_EXTS: readonly string[] = [
   // linha o gate anti-drift abaixo reprova a própria árvore por causa de um
   // arquivo rastreado (medido: `.cmd` sozinho no vermelho antes desta entrada).
   ".cmd",
+  // Captured terminal screens kept as test fixtures (tests/unit/fixtures/**).
+  ".txt",
 ];
 const PROJECT_CODE_EXT_SET = new Set(PROJECT_CODE_EXTS);
 
@@ -777,8 +784,20 @@ export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCard
     return { action: "refuse", error: describeStrandedReviewTaskCloseRefusal(input.taskId, input.targetCardId) };
   }
 
+  // Without a review requirement the only thing that can conclude a task at
+  // close is the IMPLEMENTER's accepted success report of this task, in the
+  // round. A reviewer link on such a task has nothing of its own to sign.
+  if (input.targetRole === TASK_CARD_REVIEWER_ROLE) return { action: "allow-close" };
   if (!input.lastReportOk) {
-    return { action: "refuse", error: describeCloseWithoutSuccessRefusal(input.taskId, input.targetCardId) };
+    // The implementer closing its own card is leaving the task by itself, which
+    // `decideTaskCardRelease` never lets it do: refuse and say what to do.
+    if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
+      return { action: "refuse", error: describeCloseWithoutSuccessRefusal(input.taskId, input.targetCardId) };
+    }
+    // Anyone else asking (orchestrator, outsider, human): no valid report means
+    // nothing to conclude. Release the link and leave the status alone — the
+    // task shows up as waiting for a card instead of being signed done.
+    return { action: "release-link", taskId: input.taskId };
   }
   // Mesmo portão de CAMADA 4: um implementer fechando o próprio card não
   // ganha aqui o direito de julgar que `update_task` nega.

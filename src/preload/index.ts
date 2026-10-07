@@ -61,6 +61,9 @@ type SpawnResult =
        * running): the replay ring retained in main, so the new xterm can
        * repaint the recent history. */
       scrollback?: string;
+      /** With `scrollback`: the PTY's geometry the ring was produced for. */
+      cols?: number;
+      rows?: number;
     }
   | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
   | { error: "spawn_failed"; providerId: string };

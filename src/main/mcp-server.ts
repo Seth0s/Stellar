@@ -830,7 +830,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "close_card",
       {
         description:
-          "Ask the human to close ANY open card (yours, one you spawned, or any other) — same consent gate as spawn_agent/spawn_card/open_url. Requires human approval unless the requester's board is in autonomous mode. Closing a live terminal kills its process; no undo.",
+          "Ask the human to close ANY open card (yours, one you spawned, or any other) — same consent gate as spawn_agent/spawn_card/open_url. Requires human approval unless the requester's board is in autonomous mode. Closing a live terminal kills its process; no undo. " +
+          "WHAT HAPPENS TO THE TASKS LINKED TO THE CARD: a task that already ended (done, failed, superseded) is never touched — closing a card never reopens it and never concludes it. " +
+          "An open task is concluded as done (by the app, not as a judgment) only when the card is its implementer, has an accepted report of THAT task with ok:true filed after the card was linked to it (a report about another task, or filed before the link, does not count), and the requester is not that same implementer; with review=\"wanted\" the reviewer's approved verdict signs instead. " +
+          "Otherwise the card closes, its link to the task is released and the task KEEPS its status (it waits for a card again); the answer lists `concludedTasks` and `releasedTasks`. " +
+          "An implementer asking to close its OWN card with no such report is refused: it cannot leave a task by itself — ask the orchestrator. " +
+          "A card holding reserved tasks is refused unless you pass moveReservationsTo or releaseReservations; releasing a reservation frees the link and likewise never changes the status of a task that ended.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           reason: z.string().optional().describe("Why you want this closed — shown to the human in the approval dialog"),

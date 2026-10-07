@@ -9,6 +9,7 @@ import styles from "./BrowserCard.module.css";
 import { matchesShortcut } from "./shortcut-config";
 import type { ShortcutOverrides } from "./shortcut-registry";
 import { sendDesignPick, type DesignPick } from "./design-pick-send";
+import { isBrowserCardActive, shouldBrowserCardPaint } from "../../shared/browser-activity";
 import { decideBrowserUrlCommit, URL_PERSIST_DEBOUNCE_MS } from "../../main/browser-url-persist-decision";
 
 // DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
@@ -221,7 +222,6 @@ function BrowserCardInner({
   zoom,
   zIndex,
   visible,
-  isFocused,
   url,
   ownerCardId,
   onUrlCommit,
@@ -251,7 +251,6 @@ function BrowserCardInner({
   zoom: number;
   zIndex: number;
   visible: boolean;
-  isFocused: boolean;
   url: string;
   ownerCardId: string | null;
   /** Writes the card's CURRENT url back (debounced), so a background
@@ -358,19 +357,14 @@ function BrowserCardInner({
   const rectRef = useRef({ w: rect.w, h: rect.h });
   rectRef.current = { w: rect.w, h: rect.h };
   const [menuOpen, setMenuOpen] = useState(false);
-  // Pendentes #188 ("hover não responsivo"/"textarea não responde") —
-  // relato ao vivo confirmado pelo usuário como sendo dentro da PÁGINA
-  // carregada, não na UI do Stellar. Medido ao vivo: `isFocused` (abaixo)
-  // é só "sou o card mais no topo do z-order" — 2 browser cards lado a
-  // lado, sem se sobrepor, o que NÃO é topmost pinta a 8fps
-  // (`UNFOCUSED_FRAME_RATE`, browser-registry.ts) mesmo recebendo hover
-  // real e contínuo (mousemove é sempre forwardado, sem gate de foco —
-  // `onCanvasPointerMove` abaixo). Um cursor/tooltip/dropdown que segue o
-  // mouse na página embutida travava visivelmente a ~125ms por frame,
-  // exatamente o sintoma relatado. `hovering` cobre esse caso sem mexer
-  // no z-order/raise real: enquanto o ponteiro está fisicamente sobre o
-  // canvas, a página pinta em taxa cheia, esteja ou não no topo da pilha.
+  // `hovering`: while the pointer is physically over the canvas the page paints at
+  // the full rate. A hover effect, a tooltip or a dropdown that follows the mouse
+  // visibly stuttered at the low rate (~125 ms per frame at 8 fps), so use — not
+  // z-order — buys the full rate (see `isBrowserCardActive`).
   const [hovering, setHovering] = useState(false);
+  // The canvas holds the keyboard focus (a click gave it): typing into the page
+  // keeps it active while the pointer is parked elsewhere.
+  const [domFocused, setDomFocused] = useState(false);
   // Pendentes #188 — mini-inspector embutido (BrowserInspector.tsx).
   // `inspectorFocusPoint` chega do menu de contexto ("Inspecionar
   // elemento", espaço de conteúdo) — `null` quando aberto pelo kebab
@@ -679,17 +673,28 @@ function BrowserCardInner({
     };
   }, [id]);
 
+  // The app window itself being minimised or fully covered (`visibilityState`
+  // hidden) stops the card from painting, like leaving the board viewport does.
+  const [windowVisible, setWindowVisible] = useState(() => document.visibilityState !== "hidden");
   useEffect(() => {
-    void window.browser.setVisible(id, visible);
-  }, [id, visible]);
+    const onChange = () => setWindowVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+  useEffect(() => {
+    void window.browser.setVisible(id, shouldBrowserCardPaint({ inViewport: visible, windowVisible }));
+  }, [id, visible, windowVisible]);
 
   // Pre-release audit P2 — lowers paint rate for a visible-but-not-
   // topmost card instead of always painting at full 30fps. `hovering`
   // (see its own doc comment above) overrides the throttle while the
   // pointer is physically over this card, regardless of z-order.
+  // Active = pointer over the card or keyboard focus in it (see
+  // `isBrowserCardActive`). Being the topmost card (the old `isFocused` prop) is NOT use and no
+  // longer buys the full rate: measured, an idle topmost card paid 30 fps forever.
   useEffect(() => {
-    void window.browser.setFocused(id, isFocused || hovering);
-  }, [id, isFocused, hovering]);
+    void window.browser.setFocused(id, isBrowserCardActive({ hovering, domFocused }));
+  }, [id, hovering, domFocused]);
 
   // Trilha A do navegador (browser-registry.ts's `resize` doc comment)
   // originalmente também acompanhava o zoom do board, não só o tamanho de
@@ -1269,6 +1274,8 @@ function BrowserCardInner({
           onPointerUp={onCanvasPointerUp}
           onPointerLeave={onCanvasPointerLeave}
           onWheel={onCanvasWheel}
+          onFocus={() => setDomFocused(true)}
+          onBlur={() => setDomFocused(false)}
           onKeyDown={onCanvasKeyDown}
           onKeyUp={onCanvasKeyUp}
           onCompositionEnd={onCanvasCompositionEnd}

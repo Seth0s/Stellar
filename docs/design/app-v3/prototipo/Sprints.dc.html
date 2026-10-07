@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Fila: sprints</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.btn{min-height:34px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.primary{background:#4a5fe0;border-color:#4a5fe0;font-weight:600;color:#fff}
+.row{border:1px solid #1d2230;border-radius:12px;background:#0f1218;padding:12px 14px;display:flex;align-items:center;gap:12px}
+.icon{width:34px;height:34px;padding:0;justify-content:center}
+</style>
+</helmet>
+<div style="width: 1000px; height: 860px; box-sizing: border-box; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230; position: relative">
+  <header style="padding: 14px 18px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #1d2230">
+    <a href="Fila.dc.html" style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 2L4 7l5 5"></path></svg>Fila</a>
+    <h1 style="margin: 0; font-size: 17px; font-weight: 600">Sprints</h1>
+    <span style="flex: 1"></span>
+    <button type="button" class="btn primary">+ Nova sprint</button>
+  </header>
+
+  <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 16px">
+    <section aria-label="Sprint atual" style="border: 1px solid #2b3460; border-radius: 14px; background: #10142a; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #27305a; color: #c3cbff">atual</span>
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600">Ciclo 2</h2>
+        <span style="font-size: 13px; color: #a3aabb">desde 05/10 · 2 dias</span>
+        <span style="flex: 1"></span>
+        <button type="button" class="btn">Renomear</button>
+        <button type="button" class="btn" onClick="{{openClose}}">Fechar sprint</button>
+      </div>
+      <div style="display: flex; height: 14px; border-radius: 5px; overflow: hidden; background: #161a24" role="img" aria-label="18 concluídas, 1 em revisão, 2 rodando, 4 prontas, 3 esperando">
+        <span style="width: 64%; background: #3fb68b"></span><span style="width: 4%; background: #f0a43e"></span><span style="width: 7%; background: #7d8cff"></span><span style="width: 14%; background: #c9cede"></span><span style="width: 11%; background: #4a5068"></span>
+      </div>
+      <div style="display: flex; gap: 18px; font-size: 13px; color: #c9cede; flex-wrap: wrap">
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #3fb68b"></span>18 concluídas</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #f0a43e"></span>1 em revisão</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #7d8cff"></span>2 rodando</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #c9cede"></span>4 prontas</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #4a5068"></span>3 esperando</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+        <div style="border-radius: 10px; background: #0b0f20; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12px; color: #8d94a6">Ciclo médio</span><span style="font-size: 18px; font-weight: 600">2 h 40</span></div>
+        <div style="border-radius: 10px; background: #0b0f20; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12px; color: #8d94a6">Rodadas até aprovar</span><span style="font-size: 18px; font-weight: 600">1,6</span></div>
+        <div style="border-radius: 10px; background: #0b0f20; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12px; color: #8d94a6">Substituídas</span><span style="font-size: 18px; font-weight: 600">6</span></div>
+      </div>
+    </section>
+
+    <section aria-label="Sprints anteriores" style="display: flex; flex-direction: column; gap: 10px">
+      <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Anteriores</h2>
+      <div class="row"><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14.5px">Ciclo 1 · backend e app v2</span><span style="font-size: 12.5px; color: #a3aabb">28/09 a 05/10 · 41 concluídas · 3 passaram para o Ciclo 2</span></div><span style="font-size: 12px; color: #8fdcc0">fechada</span><button type="button" class="btn icon" aria-label="Mais opções do Ciclo 1"><svg width="14" height="14" viewBox="0 0 14 14" fill="#c9cede" aria-hidden="true"><circle cx="3" cy="7" r="1.3"></circle><circle cx="7" cy="7" r="1.3"></circle><circle cx="11" cy="7" r="1.3"></circle></svg></button></div>
+      <div class="row"><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14.5px">Site v2</span><span style="font-size: 12.5px; color: #a3aabb">20/09 a 27/09 · 14 concluídas · 2 abertas</span></div><span style="font-size: 12px; color: #8fdcc0">fechada</span><button type="button" class="btn icon" aria-label="Mais opções do Site v2"><svg width="14" height="14" viewBox="0 0 14 14" fill="#c9cede" aria-hidden="true"><circle cx="3" cy="7" r="1.3"></circle><circle cx="7" cy="7" r="1.3"></circle><circle cx="11" cy="7" r="1.3"></circle></svg></button></div>
+      <div class="row"><div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14.5px">Sem sprint</span><span style="font-size: 12.5px; color: #a3aabb">tasks antigas, de antes das sprints · 312</span></div><a href="#" style="font-size: 13px">Ver</a></div>
+    </section>
+  </div>
+
+  <sc-if value="{{closing}}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; inset: 0; background: rgba(3,4,8,.72); display: flex; align-items: center; justify-content: center">
+      <section role="dialog" aria-modal="true" aria-labelledby="cl" style="width: 520px; border-radius: 16px; background: #12151d; border: 1px solid #2a2f3d; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+        <h2 id="cl" style="margin: 0; font-size: 18px; font-weight: 600">Fechar o Ciclo 2?</h2>
+        <p style="margin: 0; font-size: 14px; color: #c9cede; line-height: 1.55">10 tasks ainda não terminaram. Nada é apagado: as concluídas ficam no Ciclo 2 e as abertas vão para onde você escolher.</p>
+        <div style="border: 1px solid #1d2230; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #c9cede">
+          <span>2 rodando · os agentes continuam trabalhando</span>
+          <span>1 em revisão · o revisor continua ligado</span>
+          <span>7 prontas ou esperando</span>
+        </div>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #a3aabb">As abertas vão para
+          <select style="min-height: 40px; padding: 0 10px; border-radius: 9px; border: 1px solid #2a2f3d; background: #0f1218; color: #e8eaf0; font: inherit; font-size: 14px"><option>Uma sprint nova: Ciclo 3</option><option>Sem sprint</option></select>
+        </label>
+        <div style="display: flex; gap: 10px; justify-content: flex-end"><button type="button" class="btn" onClick="{{closeDlg}}">Cancelar</button><button type="button" class="btn primary" onClick="{{closeDlg}}">Fechar e criar o Ciclo 3</button></div>
+      </section>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1000,"height":860}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { c: false }; }
+  renderVals() {
+    return { closing: this.state.c, openClose: () => this.setState({ c: true }), closeDlg: () => this.setState({ c: false }) };
+  }
+}
+</script>
+</body>
+</html>

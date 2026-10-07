@@ -5,6 +5,7 @@ import { FilesCard } from "./FilesCard";
 import { ChangesCard } from "./ChangesCard";
 import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
+import { decidePointerDownOwner, decideWheelOwner } from "./canvas-gesture-decision";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { MediaCard, type MediaView } from "./MediaCard";
@@ -3239,6 +3240,31 @@ export function App() {
     toast(t("toast.exported", { path: result.path }));
   }
 
+  /**
+   * Canvas gestures over a card (canvas-gesture-decision.ts): with the canvas
+   * modifier (Ctrl/Cmd) a wheel turn zooms the canvas and a drag pans it, even
+   * over a browser card whose page would otherwise take both. Registered in the
+   * CAPTURE phase of the viewport so it runs before the card (and the page inside
+   * it) sees the event; without the modifier nothing here fires and the card keeps
+   * the gesture as before. Only events that start on a card: on the empty
+   * background the board's own handlers already do the same.
+   */
+  function onViewportWheelCapture(e: React.WheelEvent) {
+    if (decideWheelOwner(e) !== "canvas") return;
+    if (!(e.target as Element).closest?.(".card-frame")) return;
+    e.stopPropagation();
+    onWheel(e);
+  }
+
+  function onViewportPointerDownCapture(e: React.PointerEvent) {
+    if (!(e.target as Element).closest?.(".card-frame")) return;
+    const mode = tool === "connector" ? "connector" : tool === "select" ? "select" : "normal";
+    if (decidePointerDownOwner({ button: e.button, ctrlKey: e.ctrlKey, metaKey: e.metaKey, mode }) !== "canvas") return;
+    e.preventDefault();
+    e.stopPropagation();
+    startPan(e);
+  }
+
   function onBackgroundPointerDown(e: React.PointerEvent) {
     if (e.target !== e.currentTarget) return;
     if (tool === "pen") {
@@ -3458,6 +3484,8 @@ export function App() {
       className="viewport"
       ref={viewportRef}
       onWheel={onWheel}
+      onWheelCapture={onViewportWheelCapture}
+      onPointerDownCapture={onViewportPointerDownCapture}
       onPointerDown={onBackgroundPointerDown}
       onContextMenu={onBackgroundContextMenu}
       onDragOver={(e) => e.preventDefault()}
@@ -3825,7 +3853,6 @@ export function App() {
                 zoom={world.zoom}
                 zIndex={zIndex}
                 visible={isInView(c.rect, visibleRect)}
-                isFocused={zIndex === order.length - 1}
                 url={c.url}
                 ownerCardId={c.ownerCardId}
                 sendTargets={cards.filter((x) => x.kind === "terminal" && x.id !== c.id).map((x) => ({ id: x.id, label: x.label }))}

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Detalhe da task: revisão</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.tab{height:40px;padding:0 14px;border:0;background:transparent;color:#a3aabb;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tab:hover{color:#e8eaf0}
+.on{color:#e8eaf0;border-bottom-color:#7d8cff}
+.btn{min-height:36px;padding:0 14px;border-radius:9px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.mono{font-family:'JetBrains Mono',monospace}
+</style>
+</helmet>
+<div style="width: 1200px; height: 800px; position: relative; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; overflow: hidden">
+  <div aria-hidden="true" style="position: absolute; inset: 0; padding: 28px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; opacity: .25">
+    <span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span>
+  </div>
+
+  <section role="dialog" aria-modal="true" aria-labelledby="ttl" style="position: absolute; left: 40px; top: 32px; width: 1120px; height: 736px; box-sizing: border-box; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; display: flex; flex-direction: column; overflow: hidden">
+
+    <header style="padding: 18px 24px 14px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid #1d2230">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span class="mono" style="font-size: 13px; color: #8d94a6">#e0b6b86a</span>
+        <span style="font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1d2333; color: #c3cbff">corrigir</span>
+        <span style="font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1a2430; color: #9fd3c2">Sprint Ciclo 2</span>
+        <span style="flex: 1"></span>
+        <button class="btn" type="button">Ações</button>
+        <button class="btn" type="button" aria-label="Fechar" style="width: 36px; padding: 0; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9cede" stroke-width="1.6" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+      </div>
+      <h1 id="ttl" style="margin: 0; font-size: 21px; font-weight: 600; line-height: 1.3">Terminais fora da tela não desenham, e app aberto de um card não vira "Stellar"</h1>
+      <ol aria-label="Fase" style="margin: 0; padding: 0; list-style: none; display: flex; align-items: center; gap: 6px; font-size: 12.5px">
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3fb68b"></span>Pronta</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #3fb68b"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3fb68b"></span>Rodando</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #3fb68b"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3fb68b"></span>Relatório</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #3fb68b"></li>
+        <li aria-current="step" style="display: flex; align-items: center; gap: 6px; color: #e8eaf0; font-weight: 600"><span style="width: 10px; height: 10px; border-radius: 50%; background: #f0a43e; box-shadow: 0 0 0 4px #f0a43e33"></span>Revisão · há 6 min</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #2a2f3d"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #3a4258"></span>Concluída</li>
+      </ol>
+    </header>
+
+    <div style="margin: 14px 24px 0; padding: 12px 14px; border-radius: 12px; background: #2a1d10; border: 1px solid #5a3d17; display: flex; align-items: center; gap: 14px">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#f0b25c" stroke-width="1.6" aria-hidden="true" style="flex: none"><path d="M9 2l7.5 13h-15z"></path><path d="M9 7v4M9 13h.01"></path></svg>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 14.5px; font-weight: 600">Esperando revisão · o gate falhou, mas o vermelho não é desta task</span>
+        <span style="font-size: 13px; color: #e6cfae">check:types quebrou em 2 arquivos fora do território (trabalho de outro card em andamento). Os arquivos desta task passam.</span>
+      </div>
+      <button class="btn" type="button">Medir de novo</button>
+      <button class="btn" type="button" style="background: #4a5fe0; border-color: #4a5fe0; color: #fff; font-weight: 600">Revisar</button>
+    </div>
+
+    <nav aria-label="Seções" style="margin: 8px 24px 0; display: flex; gap: 4px; border-bottom: 1px solid #1d2230">
+      <button type="button" class="tab on">Resumo</button>
+      <button type="button" class="tab">Contrato</button>
+      <button type="button" class="tab">Relatórios <span style="font-size: 11.5px; color: #8d94a6">2</span></button>
+      <button type="button" class="tab">Mudanças <span style="font-size: 11.5px; color: #8d94a6">12</span></button>
+      <button type="button" class="tab">Trilha <span style="font-size: 11.5px; color: #8d94a6">17</span></button>
+    </nav>
+
+    <div style="flex: 1; min-height: 0; display: flex">
+      <main style="flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px 24px; display: flex; flex-direction: column; gap: 18px">
+        <section style="display: flex; flex-direction: column; gap: 10px">
+          <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Gates medidos pelo app · 15:44 · worktree isolada</h2>
+          <div style="border: 1px solid #1d2230; border-radius: 12px; overflow: hidden">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid #1d2230"><span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: #3a1c18; color: #f2a093">falhou</span><span class="mono" style="font-size: 13px; flex: 1">npm run check:types</span><span style="font-size: 12.5px; color: #8d94a6">exit 2 · 41 s</span></div>
+            <div style="padding: 10px 14px 12px 14px; border-bottom: 1px solid #1d2230; display: flex; flex-direction: column; gap: 6px; background: #0c0f15">
+              <span style="font-size: 12.5px; color: #a3aabb">De quem é o vermelho</span>
+              <div style="display: flex; gap: 10px; font-size: 13px"><span class="mono" style="flex: 1">src/renderer/src/TeamPage.tsx (4)</span><span style="color: #f0b25c">fora do território · A5b</span></div>
+              <div style="display: flex; gap: 10px; font-size: 13px"><span class="mono" style="flex: 1">src/shared/i18n/catalogs.ts (1)</span><span style="color: #f0b25c">fora do território · A9</span></div>
+              <div style="display: flex; gap: 10px; font-size: 13px"><span class="mono" style="flex: 1">arquivos desta task</span><span style="color: #3fb68b">0 erros</span></div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 11px 14px"><span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: #14302a; color: #8fdcc0">passou</span><span class="mono" style="font-size: 13px; flex: 1">npx vitest run</span><span style="font-size: 12.5px; color: #8d94a6">3838 testes · 64 s</span></div>
+          </div>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: baseline; gap: 10px"><h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Último report · rodada 2 de 2</h2><span style="flex: 1"></span><a href="#" style="font-size: 13px">Comparar com a rodada 1</a></div>
+          <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; line-height: 1.55">
+            <div><span style="color: #8d94a6">Decisão</span> · o read_card de um card fora da tela drena os bytes retidos antes de ler.</div>
+            <div><span style="color: #8d94a6">Medido</span> · renderer 9,9% → 3,0% e GPU 7,2% → 0,2% com 8 cards; leitura fora da tela devolve a saída, sem repetir ao voltar.</div>
+            <div><span style="color: #8d94a6">Não fez</span> · medição com 2 de 6 visíveis (fez com 0 visíveis, caso mais forte).</div>
+          </div>
+        </section>
+      </main>
+
+      <aside aria-label="Quem e do que depende" style="width: 300px; flex: none; border-left: 1px solid #1d2230; padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; background: #0c0f15">
+        <section style="display: flex; flex-direction: column; gap: 10px">
+          <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Quem está nela</h2>
+          <div style="display: flex; align-items: center; gap: 10px"><span style="width: 32px; height: 32px; border-radius: 9px; background: #2a1d14; color: #f0a46b; display: grid; place-items: center; font-size: 12px; font-weight: 600">TL</span><div style="display: flex; flex-direction: column"><span style="font-size: 13.5px">Terminais leves</span><span style="font-size: 12px; color: #8d94a6">implementou · commandcode · parado</span></div></div>
+          <div style="display: flex; align-items: center; gap: 10px"><span style="width: 32px; height: 32px; border-radius: 9px; background: #14223a; color: #8fb4ff; display: grid; place-items: center; font-size: 12px; font-weight: 600">RV</span><div style="display: flex; flex-direction: column"><span style="font-size: 13.5px">REVISOR</span><span style="font-size: 12px; color: #8d94a6">revisa · antigravity · ainda não abriu</span></div></div>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 8px">
+          <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Depende de</h2>
+          <a href="#" style="font-size: 13px">#7bf01f43 Sessão viva em segundo plano · concluída</a>
+          <h2 style="margin: 6px 0 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Bloqueia</h2>
+          <span style="font-size: 13px; color: #a3aabb">Nada</span>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <h2 style="margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Detalhes</h2>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Criada por</span><span>Master · 05/10</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Provider</span><span>commandcode</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Repo</span><span class="mono" style="font-size: 12px">Stellar</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Tentativas</span><span>1 de 2</span></div>
+        </section>
+      </aside>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

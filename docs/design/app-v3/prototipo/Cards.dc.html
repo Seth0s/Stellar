@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Cards no estilo novo</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}
+.mono{font-family:'JetBrains Mono',monospace}
+.card{position:absolute;border-radius:12px;background:#0f1218;border:1px solid #232838;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 30px #0008}
+.focus{border-color:#4a5690;box-shadow:0 0 0 1px #4a5690,0 14px 40px #000a}
+.hd{height:42px;flex:none;display:flex;align-items:center;gap:10px;padding:0 8px 0 12px;border-bottom:1px solid #1d2230;background:#12151d}
+.ic{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:none}
+.nm{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx{font-size:12px;color:#8d94a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pill{font-size:11.5px;padding:2px 8px;border-radius:999px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.ab{width:28px;height:28px;border-radius:7px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;cursor:pointer;flex:none}
+.ab:hover{background:#1d2230;color:#e8eaf0}
+.ft{height:28px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;border-top:1px solid #1d2230;background:#0c0f15;font-size:11.5px;color:#8d94a6;white-space:nowrap;overflow:hidden}
+.live{width:7px;height:7px;border-radius:50%;background:#7d8cff;animation:pulse 1.6s ease-in-out infinite;flex:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #7d8cff88}70%{box-shadow:0 0 0 6px #7d8cff00}100%{box-shadow:0 0 0 0 #7d8cff00}}
+@media (prefers-reduced-motion: reduce){.live{animation:none}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; overflow: hidden">
+  <div style="width: 56px; height: 900px; overflow: hidden; flex: none"><dc-import name="Rail" step="collapsed" hint-size="440px,900px"></dc-import></div>
+
+  <main aria-label="Board" style="flex: 1; position: relative; background-color: #0b0d12; background-image: radial-gradient(#1b2030 1px, transparent 1px); background-size: 22px 22px">
+
+    <section class="card focus" aria-label="Card de terminal" style="left: 40px; top: 40px; width: 560px; height: 380px">
+      <header class="hd">
+        <span class="ic" style="background: #2a1d14"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#f0a46b" stroke-width="1.6" aria-hidden="true"><path d="M3 4l3 3-3 3M7.5 10H11"></path></svg></span>
+        <span class="nm">IMPL · Claude</span>
+        <span class="ctx">Sonnet 5.5 · ~/Projects/Stellar</span>
+        <span style="flex: 1"></span>
+        <span class="pill" style="background: #1a2040; color: #c3cbff"><span class="live"></span>trabalhando</span>
+        <a href="#" class="pill mono" style="background: #161a24; color: #a9b8ff">#511abc</a>
+        <button type="button" class="ab" aria-label="Mais ações"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="7" r="1.3"></circle><circle cx="7" cy="7" r="1.3"></circle><circle cx="11" cy="7" r="1.3"></circle></svg></button>
+        <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+      <div class="mono" style="flex: 1; padding: 12px 14px; font-size: 12.5px; line-height: 1.65; color: #c9cede; background: #0b0d12">
+        <div style="color: #8d94a6">● Read(src/main/idle-without-report-decision.ts)</div>
+        <div style="color: #8d94a6">● Edit(src/main/providers.ts) +31 −2</div>
+        <div>Agora os testes com amostras reais de tela…</div>
+        <div style="color: #8d94a6">● Bash(npx vitest run tests/unit/idle-*)</div>
+        <div style="color: #3fb68b">  ✓ 14 passed</div>
+        <div style="margin-top: 8px; color: #a3aabb">· Julienning… (12m 40s · ↓ 31.2k tokens)</div>
+      </div>
+      <footer class="ft"><span style="display: flex; align-items: center; gap: 6px"><span class="live"></span>ativo há 2 s</span><span>contexto 34%</span><span>cota 77% semana</span><span style="flex: 1"></span><span>implementa #511abc</span></footer>
+    </section>
+
+    <section class="card" aria-label="Card de navegador" style="left: 640px; top: 40px; width: 560px; height: 380px">
+      <header class="hd">
+        <span class="ic" style="background: #142039"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#8fb4ff" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="5.2"></circle><path d="M1.8 7h10.4M7 1.8c2 2 2 8.4 0 10.4M7 1.8c-2 2-2 8.4 0 10.4"></path></svg></span>
+        <span class="nm">Admin Idy</span>
+        <span class="ctx mono">localhost:5173/configuracoes</span>
+        <span style="flex: 1"></span>
+        <span class="pill" style="background: #161a24; color: #a3aabb">agente: Sonnet Frontend</span>
+        <button type="button" class="ab" aria-label="Recarregar"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M11.5 7A4.5 4.5 0 1 1 10 3.6M11.5 2v3h-3"></path></svg></button>
+        <button type="button" class="ab" aria-label="Mais ações"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="7" r="1.3"></circle><circle cx="7" cy="7" r="1.3"></circle><circle cx="11" cy="7" r="1.3"></circle></svg></button>
+        <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+      <div style="flex: 1; background: #f4f5f8; display: flex; flex-direction: column; gap: 10px; padding: 18px">
+        <span style="height: 14px; width: 40%; border-radius: 4px; background: #d8dbe3"></span>
+        <span style="height: 10px; width: 70%; border-radius: 4px; background: #e3e6ed"></span>
+        <span style="height: 120px; border-radius: 8px; background: #e9ecf2"></span>
+      </div>
+      <footer class="ft"><span style="color: #8fdcc0">200</span><span>1340 × 837 · zoom 100%</span><span>console 0 erros</span><span style="flex: 1"></span><span>pausado fora da tela</span></footer>
+    </section>
+
+    <section class="card" aria-label="Card de arquivos" style="left: 40px; top: 460px; width: 300px; height: 380px">
+      <header class="hd">
+        <span class="ic" style="background: #1d2216"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#b9d68a" stroke-width="1.5" aria-hidden="true"><path d="M1.5 3.5h4l1.5 1.5h5.5v6.5h-11z"></path></svg></span>
+        <span class="nm">Stellar</span>
+        <span class="ctx mono">src/renderer</span>
+        <span style="flex: 1"></span>
+        <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+      <div class="mono" style="flex: 1; padding: 10px 12px; font-size: 12.5px; line-height: 1.9; color: #c9cede">
+        <div>▾ src</div><div style="padding-left: 14px">▾ renderer/src</div><div style="padding-left: 28px; color: #f0b25c">M TaskCard.tsx</div><div style="padding-left: 28px">Rail.tsx</div><div style="padding-left: 28px; color: #8fdcc0">A terminal-render.ts</div><div style="padding-left: 28px">useTerminal.ts</div>
+      </div>
+      <footer class="ft"><span>main</span><span style="color: #f0b25c">12 alterados</span><span style="flex: 1"></span><span>2 cards nesta pasta</span></footer>
+    </section>
+
+    <section class="card" aria-label="Card de mudanças" style="left: 380px; top: 460px; width: 420px; height: 300px">
+      <header class="hd">
+        <span class="ic" style="background: #2a1a24"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#e89bc4" stroke-width="1.6" aria-hidden="true"><path d="M4 2v10M10 2v10M2 5h4M8 9h4"></path></svg></span>
+        <span class="nm">Mudanças</span>
+        <span class="ctx mono">Stellar · main</span>
+        <span style="flex: 1"></span>
+        <span class="pill" style="background: #22190d; color: #f0b25c">não commitado</span>
+        <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+      <div style="flex: 1; display: flex; flex-direction: column">
+        <div class="mono" style="display: flex; gap: 10px; padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #1d2230"><span style="flex: 1">src/main/providers.ts</span><span style="color: #3fb68b">+31</span><span style="color: #e0846f">−2</span></div>
+        <div class="mono" style="display: flex; gap: 10px; padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #1d2230"><span style="flex: 1">src/main/idle-without-report…</span><span style="color: #3fb68b">+84</span><span style="color: #e0846f">−12</span></div>
+        <div class="mono" style="display: flex; gap: 10px; padding: 8px 12px; font-size: 12px"><span style="flex: 1">tests/unit/idle-screen-turn…</span><span style="color: #3fb68b">+142</span></div>
+      </div>
+      <footer class="ft"><span style="color: #3fb68b">+340</span><span style="color: #e0846f">−52</span><span>18 arquivos</span><span style="flex: 1"></span><span>de 2 tasks</span></footer>
+    </section>
+
+    <section class="card" aria-label="Nota" style="left: 840px; top: 460px; width: 360px; height: 230px">
+      <header class="hd" style="background: #1f1c10">
+        <span class="ic" style="background: #3a3214"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#f0d36b" stroke-width="1.5" aria-hidden="true"><path d="M2.5 2.5h9v6l-3 3h-6z"></path></svg></span>
+        <span class="nm">Feedbacks</span>
+        <span class="ctx">nota</span>
+        <span style="flex: 1"></span>
+        <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+      <div style="flex: 1; padding: 12px 14px; font-size: 13px; line-height: 1.55; color: #ece4c6; background: #17150c">Cards esquecem report → lembrete automático.<br>Arrastar mídia para o terminal.<br>Fila em duas linhas.</div>
+      <footer class="ft" style="background: #141209"><span>editada há 2 min</span><span style="flex: 1"></span><span>3 viraram task</span></footer>
+    </section>
+
+    <aside aria-label="Anatomia" style="position: absolute; right: 24px; bottom: 24px; width: 520px; border: 1px dashed #343c55; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; background: #0b0d12e6; font-size: 13px; color: #c9cede; line-height: 1.5">
+      <span style="font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Mesma anatomia em todo card</span>
+      <span><strong>Header 42 px:</strong> ícone do tipo na cor dele · nome · contexto (modelo e pasta, url, ramo) · estado em pílula · task ligada · ações. Nome em negrito, contexto em cinza, nunca mais que uma linha.</span>
+      <span><strong>Rodapé 28 px:</strong> o pulso do card. Terminal: atividade, contexto, cota. Navegador: status HTTP, tamanho, console. Arquivos e mudanças: ramo e contagem.</span>
+      <span><strong>Foco:</strong> borda azul e sombra maior. A Fila usa o mesmo header e rodapé.</span>
+    </aside>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

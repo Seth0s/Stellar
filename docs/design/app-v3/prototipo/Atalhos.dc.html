@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Atalhos</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.kbd{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 6px;box-sizing:border-box;border-radius:6px;border:1px solid #2f3546;border-bottom-width:2px;background:#12151d;font:500 12px 'JetBrains Mono',monospace;color:#e8eaf0}
+.chip{height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer}
+.chip:hover{color:#e8eaf0}
+.chipOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.row{display:flex;align-items:center;gap:14px;min-height:44px;padding:4px 12px;border-radius:9px}
+.row:hover{background:#12151d}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+  <section role="dialog" aria-modal="true" aria-labelledby="at" style="width: 1240px; height: 820px; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; display: flex; flex-direction: column; overflow: hidden">
+    <header style="padding: 18px 24px 14px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid #1d2230">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <h1 id="at" style="margin: 0; font-size: 19px; font-weight: 600">Atalhos</h1>
+        <span style="font-size: 13px; color: #8d94a6">abre com <span class="kbd">?</span> em qualquer lugar fora de um campo de texto</span>
+        <span style="flex: 1"></span>
+        <label style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #2a2f3d; border-radius: 9px; width: 280px; box-sizing: border-box">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="4.5"></circle><path d="M9.5 9.5L13 13"></path></svg>
+          <input aria-label="Buscar atalho" placeholder="Buscar: colar, zoom, duplicar…" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #e8eaf0; font: inherit; font-size: 13.5px; outline: none">
+        </label>
+        <button type="button" aria-label="Fechar" style="width: 36px; height: 36px; border-radius: 9px; border: 1px solid #2a2f3d; background: #161a24; color: #c9cede; cursor: pointer; display: grid; place-items: center"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </div>
+      <div role="group" aria-label="Onde vale" style="display: flex; gap: 6px; flex-wrap: wrap">
+        <sc-for list="{{filters}}" as="f" hint-placeholder-count="6"><button type="button" class="{{f.cls}}" onClick="{{f.pick}}">{{f.label}}</button></sc-for>
+        <span style="flex: 1"></span>
+        <span style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #8d94a6"><span style="font-size: 11px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">novo</span>proposto neste desenho</span>
+      </div>
+    </header>
+
+    <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; align-content: start">
+      <sc-for list="{{groups}}" as="g" hint-placeholder-count="4">
+        <section style="display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; align-items: baseline; gap: 10px; padding: 0 12px 6px"><h2 style="margin: 0; font-size: 14px; font-weight: 600">{{g.title}}</h2><span style="font-size: 12px; color: #8d94a6">{{g.when}}</span></div>
+          <sc-for list="{{g.items}}" as="i" hint-placeholder-count="4">
+            <div class="row">
+              <span style="display: flex; gap: 4px; flex: none; min-width: 150px"><sc-for list="{{i.keys}}" as="k" hint-placeholder-count="2"><span class="kbd">{{k}}</span></sc-for></span>
+              <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px">{{i.desc}}</span><sc-if value="{{i.hasNote}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #a3aabb">{{i.note}}</span></sc-if></span>
+              <sc-if value="{{i.novo}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">novo</span></sc-if>
+            </div>
+          </sc-for>
+        </section>
+      </sc-for>
+    </div>
+
+    <footer style="padding: 12px 24px; border-top: 1px solid #1d2230; display: flex; align-items: center; gap: 14px; font-size: 13px; color: #a3aabb">
+      <span>A mesma tecla pode fazer coisas diferentes: vale o que estiver com foco. O card com foco tem borda azul.</span>
+      <span style="flex: 1"></span>
+      <span>Paleta de comandos <span class="kbd">Ctrl</span> <span class="kbd">K</span></span>
+    </footer>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { f: 'all' }; }
+  renderVals() {
+    const it = (keys, desc, note, novo) => ({ keys, desc, note: note || '', hasNote: !!note, novo: !!novo });
+    const G = [
+      { id: 'board', title: 'Board', when: 'com o board em foco, nenhum card selecionado', items: [
+        it(['V'], 'Ponteiro'), it(['P'], 'Caneta'), it(['C'], 'Conector'), it(['S'], 'Seleção'),
+        it(['Esc'], 'Volta ao ponteiro e limpa a seleção'),
+        it(['Ctrl', 'K'], 'Paleta de comandos', 'criar task, abrir card, ir para board, qualquer ação', true),
+        it(['Ctrl', 'F'], 'Achar card', 'mesma lista da barra lateral', true),
+        it(['Ctrl', '⇧', 'N'], 'Novo agente ou terminal', '', true),
+        it(['Ctrl', 'V'], 'Colar imagem ou PDF como card novo', 'num terminal com foco, o mesmo Ctrl V cola texto')
+      ]},
+      { id: 'move', title: 'Mover e zoom', when: 'em qualquer lugar do board', items: [
+        it(['Espaço', 'arrastar'], 'Mover o board, inclusive sobre um navegador', 'hoje o navegador prende a roda e o arraste', true),
+        it(['Ctrl', 'roda'], 'Zoom'),
+        it(['Ctrl', '+'], 'Aproximar'), it(['Ctrl', '−'], 'Afastar'),
+        it(['Ctrl', '0'], 'Ajustar o board à tela', '', true),
+        it(['arrastar header'], 'Mover um card'), it(['arrastar canto'], 'Redimensionar um card')
+      ]},
+      { id: 'card', title: 'Card selecionado', when: 'depois de clicar no header de um card', items: [
+        it(['duplo clique'], 'Renomear (no nome do header)'),
+        it(['Ctrl', '⇧', 'D'], 'Duplicar o card', 'antes era Ctrl D, que num terminal é o fim de entrada do shell', true),
+        it(['Ctrl', 'G'], 'Agrupar a seleção'),
+        it(['Del'], 'Fechar o card', 'pede confirmação se houver um agente trabalhando', true)
+      ]},
+      { id: 'term', title: 'Terminal', when: 'com o cursor dentro do terminal', items: [
+        it(['Ctrl', 'C'], 'Interromper (SIGINT)', 'com texto selecionado, copia em vez de interromper'),
+        it(['Ctrl', '⇧', 'C'], 'Copiar a seleção'),
+        it(['Ctrl', 'V'], 'Colar texto ou imagem'),
+        it(['Ctrl', 'D'], 'Fim de entrada do shell (EOF)'),
+        it(['Ctrl', 'End'], 'Rolar até o fim'),
+        it(['soltar arquivo'], 'Digita o caminho do arquivo', '', true)
+      ]},
+      { id: 'web', title: 'Navegador e chat', when: 'com o foco no navegador ou no chat', items: [
+        it(['⏎'], 'Navegar (na barra de endereço)'),
+        it(['⏎'], 'Enviar a mensagem no chat'),
+        it(['⇧', '⏎'], 'Quebrar linha no chat'),
+        it(['Ctrl', 'L'], 'Ir para a barra de endereço', '', true)
+      ]},
+      { id: 'win', title: 'Janela', when: 'em qualquer lugar', items: [
+        it(['F11'], 'Tela cheia'), it(['?'], 'Esta tela de atalhos')
+      ]}
+    ];
+    const F = [['all', 'Tudo'], ['board', 'Board'], ['move', 'Mover e zoom'], ['card', 'Card'], ['term', 'Terminal'], ['web', 'Navegador e chat'], ['win', 'Janela']];
+    const f = this.state.f;
+    return {
+      filters: F.map(([id, label]) => ({ label, cls: f === id ? 'chip chipOn' : 'chip', pick: () => this.setState({ f: id }) })),
+      groups: G.filter(g => f === 'all' || g.id === f)
+    };
+  }
+}
+</script>
+</body>
+</html>

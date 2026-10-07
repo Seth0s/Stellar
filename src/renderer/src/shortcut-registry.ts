@@ -543,6 +543,22 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     owner: "App.tsx (viewport)",
   },
   {
+    id: "mouse.zoomOverCard",
+    group: "shortcuts.group.mouse",
+    dispatch: "mouse",
+    display: "Ctrl/Cmd+scroll",
+    description: "shortcuts.desc.mouseZoomOverCard",
+    owner: "App.tsx (viewport, capture) / canvas-gesture-decision.ts",
+  },
+  {
+    id: "mouse.panOverCard",
+    group: "shortcuts.group.mouse",
+    dispatch: "mouse",
+    display: "shortcuts.gesture.panOverCard",
+    description: "shortcuts.desc.panOverCard",
+    owner: "App.tsx (viewport, capture) / canvas-gesture-decision.ts",
+  },
+  {
     id: "mouse.moveCard",
     group: "shortcuts.group.mouse",
     dispatch: "mouse",

@@ -24,7 +24,15 @@ import type { ReportRow, TaskCardRow, TaskRow } from "../../src/main/store";
  * (`decideStatusWrite`), porque o REPOINT/`actor` são o que o item 3 mede.
  */
 
-type Link = { task_id: string; card_id: string; role: string; released: boolean; reservation_state: string | null };
+type Link = {
+  task_id: string;
+  card_id: string;
+  role: string;
+  released: boolean;
+  reservation_state: string | null;
+  /** When the card was linked to the task; the "round" of a report starts here. */
+  linked_at: number | null;
+};
 
 const WORK = "/tmp/stellar-c10a1faf-work";
 
@@ -57,7 +65,7 @@ function baseTask(id: string, over: Partial<TaskRow> = {}): TaskRow {
 }
 
 function link(taskId: string, cardId: string, over: Partial<Link> = {}): Link {
-  return { task_id: taskId, card_id: cardId, role: "implementer", released: false, reservation_state: null, ...over };
+  return { task_id: taskId, card_id: cardId, role: "implementer", released: false, reservation_state: null, linked_at: 1, ...over };
 }
 
 type Rig = {
@@ -69,7 +77,15 @@ type Rig = {
   closeRequests: Array<{ requestId: string; target: string; requesterId: string }>;
 };
 
-function makeRig(overrides: { links?: Link[]; reports?: Array<{ cardId: string; seq: number; body: unknown }>; task?: TaskRow } = {}): Rig {
+function makeRig(
+  overrides: {
+    links?: Link[];
+    reports?: Array<{ cardId: string; seq: number; body: unknown }>;
+    task?: TaskRow;
+    /** Reserved task links the card still holds (what `listReservationsForCard` returns). */
+    reservations?: Array<{ task_id: string }>;
+  } = {},
+): Rig {
   const dir = mkdtempSync(join(tmpdir(), "stellar-close-conclusion-"));
   const state: Rig["state"] = { tasks: new Map(), upserts: [] };
   const task = overrides.task ?? baseTask("T", { card_id: null });
@@ -111,7 +127,7 @@ function makeRig(overrides: { links?: Link[]; reports?: Array<{ cardId: string; 
       isBoardAutonomous: () => true,
       describeCardLabel: (id: string) => id,
       getAnyCard: () => ({ boardId: "b1", kind: "terminal", provider: "commandcode" }),
-      listReservationsForCard: () => [],
+      listReservationsForCard: () => overrides.reservations ?? [],
       listTaskCardsForCard: (cardId: string) =>
         links.filter((l) => l.card_id === cardId && !l.released) as unknown as TaskCardRow[],
       getTaskCards: (taskId: string) =>
@@ -129,13 +145,19 @@ function makeRig(overrides: { links?: Link[]; reports?: Array<{ cardId: string; 
           : undefined;
       },
       upsertTask,
-      releaseTaskCardFromTask: (input: { taskId: string; cardId: string; reason: string; releasedBy: string | null; actor: StatusActor }) => {
+      releaseTaskCardFromTask: (input: { taskId: string; cardId: string; reason: string; releasedBy: string | null; actor: StatusActor; keepStatus?: boolean }) => {
         const l = links.find((x) => x.task_id === input.taskId && x.card_id === input.cardId && !x.released);
         if (!l) return { ok: false as const, error: "not a live participant" };
         l.released = true;
         const left = liveImplementers(input.taskId).length;
         let taskStatus: string | null = null;
-        if (left === 0) {
+        // Mirrors the store: with `keepStatus` the link is freed and the pointer
+        // cleared, and no status is written.
+        const principal = state.tasks.get(input.taskId);
+        if (principal && principal.row.card_id === input.cardId) principal.row = { ...principal.row, card_id: null };
+        if (input.keepStatus) {
+          taskStatus = state.tasks.get(input.taskId)?.row.status ?? null;
+        } else if (left === 0) {
           const st = state.tasks.get(input.taskId);
           if (st) {
             const decision = upsertTask({
@@ -170,7 +192,14 @@ describe("close_card: conclusão exige report DA PRÓPRIA task (c10a1faf)", () =
     rig = null;
   });
 
-  it("DEFEITO: card com report ok:true de OUTRA task NÃO conclui esta — task continua pending", async () => {
+  async function closeAndConsent(r: Rig, target: string, requesterId: string, extra: Record<string, unknown> = {}) {
+    const pending = r.bus.handleRequest({ cmd: "close_card", target, requesterId, ...extra } as BusRequest);
+    await new Promise((res) => setTimeout(res, 20));
+    if (r.closeRequests.length > 0) r.bus.resolveCloseCard(r.closeRequests[r.closeRequests.length - 1]!.requestId, true);
+    return (await pending) as { ok: boolean; error?: string; concludedTasks?: string[]; releasedTasks?: string[] };
+  }
+
+  it("DEFEITO: card com report ok:true de OUTRA task NÃO conclui esta — fecha, solta o vínculo e o status fica pending", async () => {
     // O card C está ligado à task T (implementer) e tem um report ok:true que
     // é da task T2 (o slot responde por várias). Antes do conserto, o
     // `lastReportOk` do CARD assinava T como concluída.
@@ -180,19 +209,139 @@ describe("close_card: conclusão exige report DA PRÓPRIA task (c10a1faf)", () =
       reports: [{ cardId: "C", seq: 10, body: { ok: true, taskId: "T2" } }],
     });
 
-    const res = (await rig.bus.handleRequest({ cmd: "close_card", target: "C", requesterId: "O" } as BusRequest)) as {
-      ok: boolean;
-      error?: string;
-      concludedTasks?: string[];
-    };
+    const res = await closeAndConsent(rig, "C", "O");
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
+    // The status was NOT touched and no upsert concluded T.
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+    expect(rig.state.upserts.some((u) => u.id === "T" && u.status === "done")).toBe(false);
+    // The link was released (the task waits for a card again).
+    expect(rig.links.every((l) => l.released)).toBe(true);
+    expect(rig.state.tasks.get("T")!.row.card_id ?? null).toBeNull();
+    // Houve consentimento: nada foi solto antes dele.
+    expect(rig.closeRequests).toHaveLength(1);
+  });
+
+  it("CASO MEDIDO 2 (explorador ligado por engano): o report é ANTERIOR ao vínculo — não conclui, solta o vínculo", async () => {
+    // The explorer reported ok:true naming the task (t=500) and only THEN was linked
+    // to it by mistake (t=1000). That report is not work of this round.
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C", { linked_at: 1000 })],
+      reports: [{ cardId: "C", seq: 500, body: { ok: true, taskId: "T" } }],
+    });
+
+    const res = await closeAndConsent(rig, "C", "O");
+
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+    expect(rig.state.upserts.some((u) => u.id === "T" && u.status === "done")).toBe(false);
+    expect(rig.links.every((l) => l.released)).toBe(true);
+  });
+
+  it("report ok:true ACEITO NA RODADA (depois do vínculo) segue concluindo — a intenção da regra", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C", { linked_at: 1000 })],
+      reports: [
+        { cardId: "C", seq: 500, body: { ok: true, taskId: "T" } }, // before the link: ignored
+        { cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } }, // na rodada: vale
+      ],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks).toEqual(["T"]);
+    expect(res.releasedTasks ?? []).toEqual([]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("done");
+  });
+
+  it("report ok:false na rodada NÃO conclui (o último report da task decide)", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C", { linked_at: 1000 })],
+      reports: [
+        { cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } },
+        { cardId: "C", seq: 3000, body: { ok: false, taskId: "T" } },
+      ],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
     expect(res.concludedTasks ?? []).toEqual([]);
     expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
-    // Nenhum upsert concluiu T.
-    expect(rig.state.upserts.some((u) => u.id === "T" && u.status === "done")).toBe(false);
-    // A recusa foi ANTES do consentimento (nada de modal para algo já recusado).
+  });
+
+  it("vínculo sem data (linha legada) não prova rodada: nada é concluído", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C", { linked_at: null })],
+      reports: [{ cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } }],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+  });
+
+  it("o card que fecha é REVISOR de task sem review exigido: não conclui, só fecha", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "I" }),
+      links: [link("T", "I"), link("T", "C", { role: "reviewer" })],
+      reports: [{ cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } }],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks ?? []).toEqual([]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+  });
+
+  it("o PRÓPRIO implementer pedindo o fechamento sem report da rodada é recusado (não sai sozinho da task)", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C")],
+      reports: [],
+    });
+    const res = await closeAndConsent(rig, "C", "C");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/cannot leave a task by itself/);
     expect(rig.closeRequests).toEqual([]);
+    expect(rig.links.every((l) => !l.released)).toBe(true);
+  });
+
+  it("CASO MEDIDO 1 (B11): task JÁ done + reserva do card + releaseReservations — o status segue done, nada vira pending", async () => {
+    // The implementer card still holds a reservation of a task that was already
+    // judged done. Releasing the reservation on close must not write `pending`
+    // with the requesting card as author, reopening the task.
+    rig = makeRig({
+      task: baseTask("B11", { status: "done", card_id: "C" }),
+      links: [link("B11", "C", { reservation_state: "reserved" })],
+      reservations: [{ task_id: "B11" }],
+    });
+    const res = await closeAndConsent(rig, "C", "O", { releaseReservations: true });
+
+    expect(res.ok).toBe(true);
+    expect(rig.state.tasks.get("B11")!.row.status).toBe("done");
+    expect(rig.state.upserts.filter((u) => u.id === "B11")).toEqual([]);
+    // The link was released and the principal pointer cleared, status untouched.
+    expect(rig.links.every((l) => l.released)).toBe(true);
+    expect(rig.state.tasks.get("B11")!.row.card_id ?? null).toBeNull();
+  });
+
+  it("task done ligada ao card que fecha não é tocada pelo fechamento (nem concluída, nem reaberta)", async () => {
+    rig = makeRig({
+      task: baseTask("B11", { status: "done", card_id: "C" }),
+      links: [link("B11", "C")],
+      reports: [],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks ?? []).toEqual([]);
+    expect(rig.state.tasks.get("B11")!.row.status).toBe("done");
+    expect(rig.state.upserts.filter((u) => u.id === "B11")).toEqual([]);
   });
 
   it("LEGÍTIMO: report ok:true DA PRÓPRIA task conclui com o fechamento (actor app)", async () => {

@@ -63,9 +63,17 @@ export const SHARED_TEXTURE_FRAME_RATE = 60;
 /** Caminho com encode JPEG por frame: reversão explícita de 60→30 — ver o
  * doc comment do módulo. */
 export const CPU_JPEG_FOCUSED_FRAME_RATE = 30;
-/** Fora de foco não custa nada — decisão explícita preservada de
- * `browser-registry.ts` (ver docs/PERF.md). */
-export const UNFOCUSED_FRAME_RATE = 8;
+/** Visible but not being used: the low rate. 8 -> 4 after measuring five visible
+ * cards (docs/PERF.md §16): the encode/IPC/draw pipeline scales with the number
+ * of frames per second and a card nobody is touching gains nothing from more. */
+export const UNFOCUSED_FRAME_RATE = 4;
+
+/** How long a card keeps the focused rate after the person leaves it (pointer
+ * out, canvas blurred), and right after it is created: a page that was just
+ * navigated or clicked is still painting its response (load, transition), and
+ * dropping to the low rate the instant the pointer leaves would freeze that
+ * mid-way. */
+export const FOCUS_RELEASE_GRACE_MS = 2500;
 
 export function decideBrowserFrame(input: {
   /** O card está na viewport. Não é orçamento de pintura: `setVisible` já
@@ -145,4 +153,36 @@ export function shouldCropFrame(
   if (frameArea <= 0) return false;
   const dirtyArea = dirty.width * dirty.height;
   return dirtyArea / frameArea < FULL_FRAME_DIRTY_RATIO;
+}
+
+/**
+ * The focused flag of ONE card with the release grace applied: `set(true)` takes
+ * effect at once and cancels a pending release; `set(false)` takes effect after
+ * `FOCUS_RELEASE_GRACE_MS` unless `set(true)` comes first. `apply` receives every
+ * EFFECTIVE change. Pure but for the timer, so it is testable with fake timers.
+ */
+export function createFocusGate(
+  apply: (focused: boolean) => void,
+  graceMs: number = FOCUS_RELEASE_GRACE_MS,
+): { set: (focused: boolean) => void; dispose: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  return {
+    set(focused) {
+      cancel();
+      if (focused) {
+        apply(true);
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        apply(false);
+      }, graceMs);
+      timer.unref?.();
+    },
+    dispose: cancel,
+  };
 }

@@ -2857,6 +2857,8 @@ export function openStore(userDataDir: string) {
         releasedBy: string | null;
         nextImplementerCardId?: string | null;
         actor: StatusWriteActor;
+        /** Free the link and clear the pointer WITHOUT writing any status. */
+        keepStatus?: boolean;
       },
     ):
       | { ok: false; error: string }
@@ -2907,7 +2909,13 @@ export function openStore(userDataDir: string) {
       let taskStatus: string | null = null;
       let statusHeld = false;
       let declaredStatus: string | null = null;
-      if (liveLeft === 0) {
+      if (input.keepStatus) {
+        // The release is a side effect of something else (a card closing), not a
+        // decision about the task: the link is freed and the principal pointer
+        // cleared above, and the status stays exactly as it is — a finished task
+        // must not be reopened by a card going away.
+        taskStatus = (getTaskStmt.get(input.taskId) as TaskRow | undefined)?.status ?? null;
+      } else if (liveLeft === 0) {
         // `pending` = a Fila mostra a task esperando card — mas PELO FUNIL:
         // decisão humana prevalece (hold + divergência declarada, com o
         // `kind:declaration` que deixa o rastro), mudança aplicada registra
@@ -3740,6 +3748,7 @@ export function openStore(userDataDir: string) {
       releasedBy: string | null;
       nextImplementerCardId?: string | null;
       actor: StatusWriteActor;
+      keepStatus?: boolean;
     }) =>
       releaseTaskCardFromTask(input) as
         | { ok: false; error: string }

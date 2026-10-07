@@ -163,3 +163,30 @@ export function scrollTerminalLinesForTest(cardId: string, lines: number): boole
 
 (window as unknown as { __scrollTerminalLinesForTest: typeof scrollTerminalLinesForTest }).__scrollTerminalLinesForTest =
   scrollTerminalLinesForTest;
+
+/**
+ * Test-only — the terminal modes a live xterm is in right now: which buffer is
+ * active and the input modes a TUI turns on (mouse tracking, bracketed paste,
+ * application cursor keys, focus reports). Same pure-read profile as the other
+ * `__get*` hooks: it lets a smoke prove a replayed session came back in the mode
+ * the application left it in, not just with the right text.
+ */
+export function getTerminalModes(cardId: string): {
+  buffer: "normal" | "alternate";
+  mouseTrackingMode: string;
+  bracketedPasteMode: boolean;
+  applicationCursorKeysMode: boolean;
+  sendFocusMode: boolean;
+} | null {
+  const term = terminals.get(cardId);
+  if (!term) return null;
+  return {
+    buffer: term.buffer.active.type,
+    mouseTrackingMode: term.modes.mouseTrackingMode,
+    bracketedPasteMode: term.modes.bracketedPasteMode,
+    applicationCursorKeysMode: term.modes.applicationCursorKeysMode,
+    sendFocusMode: term.modes.sendFocusMode,
+  };
+}
+
+(window as unknown as { __getTerminalModes: typeof getTerminalModes }).__getTerminalModes = getTerminalModes;

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { IDLE_WITHOUT_REPORT_MS } from "../../src/main/idle-without-report-decision";
+import { SELF_REMINDER_ESCALATE_MS, SELF_REMINDER_FLOOR_MS } from "../../src/main/idle-self-reminder-decision";
 import {
   unreportedIdlePointerBody,
   unreportedNoAgentPointerBody,
@@ -279,18 +280,27 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
       expect(bodies.filter((t) => t.includes(UNPROVEN_POINTER))).toHaveLength(2);
     });
 
-    it("turno DECLARADO (declaredIdle) → cutuca sem esperar o piso de 180s", async () => {
-      // Fato declarado de fim de turno com a ÚLTIMA saída ANTES dele: é o
-      // `idle` de card-status-decision.ts. O relógio de bytes está em 5s, bem
-      // abaixo do piso — e mesmo assim cutuca, porque o fato é declarado.
+    it("turno DECLARADO (declaredIdle) → lembra o card sem esperar o piso de 180s, e só então avisa o orquestrador", async () => {
+      // A declared turn end with the LAST output BEFORE it: the `idle` of
+      // card-status-decision.ts. The byte clock is at 5s, well under the 180s
+      // floor — and it still acts, because the fact is declared. New order: the
+      // card ITSELF first (after the 20s floor), the orchestrator only one more
+      // interval later with no report (the full path, with a screen provider, is
+      // in message-bus-idle-self-reminder.test.ts).
       const now = Date.now();
       const { bus: b, written } = makeBus({
         getCardLastActivityAt: ((id: string) => (id === "worker-1" ? now - 5_000 : now)) as never,
         getCardTurnEndedAt: ((id: string) => (id === "worker-1" ? now - 1_000 : null)) as never,
       });
 
-      b.scanIdleWithoutReport();
-      const bodies = await waitForBodies(written, 1);
+      b.scanIdleWithoutReport({ nowMs: now });
+      b.scanIdleWithoutReport({ nowMs: now + SELF_REMINDER_FLOOR_MS + 1_000 });
+      const toWorker = await waitForBodies(written, 1);
+      expect(toWorker.filter((t) => t.includes("without calling the report tool"))).toHaveLength(1);
+      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+
+      b.scanIdleWithoutReport({ nowMs: now + SELF_REMINDER_FLOOR_MS + SELF_REMINDER_ESCALATE_MS + 2_000 });
+      const bodies = await waitForBodies(written, 2);
       expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(1);
     });
 

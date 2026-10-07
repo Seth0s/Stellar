@@ -92,7 +92,12 @@ describe.skipIf(!GIT_AVAILABLE)("prepareGateIsolation — repo git real", () => 
     expect(readFileSync(join(linked, "marker.txt"), "utf8")).toBe("dep\n");
     // The mount re-exposes the symlink TARGET (the repo, under $HOME), which
     // bwrap's `--tmpfs $HOME` would hide.
-    expect(prep.mounts).toEqual([{ src: join(dir, "node_modules"), dest: join(dir, "node_modules"), ro: false }]);
+    // The second mount is the main repository's git directory (read-only), without
+    // which git cannot resolve the worktree inside the sandbox (gate-isolation-git.test.ts).
+    expect(prep.mounts).toEqual([
+      { src: join(dir, "node_modules"), dest: join(dir, "node_modules"), ro: false },
+      { src: join(dir, ".git"), dest: join(dir, ".git"), ro: true },
+    ]);
 
     await teardownGateIsolation(prep);
   });

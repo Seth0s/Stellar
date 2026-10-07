@@ -1805,9 +1805,9 @@ select.resume-input {
  * `.form-row` — cabia (medido: overflow 0), mas lia como corte. O conserto
  * NÃO é uma terceira variante da primitiva: é um bloco com desenho próprio.
  *
- * O ícone é o `StellarMark`, a MESMA arte de `build/icon.svg` (o que o
- * empacotador usa) — o componente que o Titlebar e a Home já usam, para não
- * existir um segundo logo.
+ * O ícone é o `StellarMark`, o logo novo (a MESMA arte de `build/icon.svg`, o
+ * que o empacotador usa) — o componente que o Titlebar e as telas de entrada
+ * usam; o tamanho escolhe a variante (40px aqui = logo completo).
  * ------------------------------------------------------------------------ */
 .about-identity {
   display: flex;

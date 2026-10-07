@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Detalhe da task: rodando</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.tab{height:40px;padding:0 14px;border:0;background:transparent;color:#a3aabb;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tab:hover{color:#e8eaf0}
+.on{color:#e8eaf0;border-bottom-color:#7d8cff}
+.btn{min-height:36px;padding:0 14px;border-radius:9px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.mono{font-family:'JetBrains Mono',monospace}
+</style>
+</helmet>
+<div style="width: 1200px; height: 800px; position: relative; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; overflow: hidden">
+  <div aria-hidden="true" style="position: absolute; inset: 0; padding: 28px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; opacity: .25">
+    <span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span><span style="border-radius: 12px; background: #12151d"></span>
+  </div>
+
+  <section role="dialog" aria-modal="true" aria-labelledby="ttl" style="position: absolute; left: 40px; top: 32px; width: 1120px; height: 736px; box-sizing: border-box; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; display: flex; flex-direction: column; overflow: hidden">
+
+    <header style="padding: 18px 24px 14px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid #1d2230">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span class="mono" style="font-size: 13px; color: #8d94a6">#511abcb2</span>
+        <span style="font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1d2333; color: #c3cbff">corrigir</span>
+        <span style="font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1a2430; color: #9fd3c2">Sprint Ciclo 2</span>
+        <span style="flex: 1"></span>
+        <button class="btn" type="button">Ações</button>
+        <button class="btn" type="button" aria-label="Fechar" style="width: 36px; padding: 0; justify-content: center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9cede" stroke-width="1.6" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+      </div>
+      <h1 id="ttl" style="margin: 0; font-size: 21px; font-weight: 600; line-height: 1.3">Card que termina o turno sem report recebe o lembrete, também nos providers que não declaram turno</h1>
+      <ol aria-label="Fase" style="margin: 0; padding: 0; list-style: none; display: flex; align-items: center; gap: 6px; font-size: 12.5px">
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3fb68b"></span>Pronta</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #3fb68b"></li>
+        <li aria-current="step" style="display: flex; align-items: center; gap: 6px; color: #e8eaf0; font-weight: 600"><span style="width: 10px; height: 10px; border-radius: 50%; background: #7d8cff; box-shadow: 0 0 0 4px #7d8cff33"></span>Rodando · 38 min</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #2a2f3d"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #3a4258"></span>Relatório</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #2a2f3d"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #3a4258"></span>Revisão</li>
+        <li aria-hidden="true" style="width: 28px; height: 1px; background: #2a2f3d"></li>
+        <li style="display: flex; align-items: center; gap: 6px; color: #7f8699"><span style="width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #3a4258"></span>Concluída</li>
+      </ol>
+    </header>
+
+    <div style="margin: 14px 24px 0; padding: 12px 14px; border-radius: 12px; background: #141a2b; border: 1px solid #27305a; display: flex; align-items: center; gap: 14px">
+      <span style="width: 9px; height: 9px; border-radius: 50%; background: #7d8cff; flex: none"></span>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 14.5px; font-weight: 600">IMPL · Claude está trabalhando</span>
+        <span style="font-size: 13px; color: #b3bad0">Última atividade há 40 s · contexto 34% · nenhum report ainda nesta rodada</span>
+      </div>
+      <button class="btn" type="button">Abrir o card</button>
+      <button class="btn" type="button">Pedir status</button>
+    </div>
+
+    <nav aria-label="Seções" style="margin: 8px 24px 0; display: flex; gap: 4px; border-bottom: 1px solid #1d2230">
+      <button type="button" class="{{tabResumo}}" onClick="{{goResumo}}">Resumo</button>
+      <button type="button" class="{{tabContrato}}" onClick="{{goContrato}}">Contrato</button>
+      <button type="button" class="{{tabRel}}" onClick="{{goRel}}">Relatórios <span style="font-size: 11.5px; color: #8d94a6">0</span></button>
+      <button type="button" class="{{tabMud}}" onClick="{{goMud}}">Mudanças <span style="font-size: 11.5px; color: #8d94a6">6</span></button>
+      <button type="button" class="{{tabTrilha}}" onClick="{{goTrilha}}">Trilha <span style="font-size: 11.5px; color: #8d94a6">9</span></button>
+    </nav>
+
+    <div style="flex: 1; min-height: 0; display: flex">
+      <main style="flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px 24px; display: flex; flex-direction: column; gap: 18px">
+
+        <sc-if value="{{showResumo}}" hint-placeholder-val="{{ true }}">
+          <section style="display: flex; flex-direction: column; gap: 8px">
+            <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">O que é</h2>
+            <p style="margin: 0; font-size: 14.5px; line-height: 1.6; color: #d6dae6">Cards ainda esquecem o report. Quando um implementador termina o turno e não reporta em alguns segundos, o próprio card recebe uma mensagem do Stellar pedindo o report; se continuar sem, o orquestrador é avisado uma vez.</p>
+            <a href="#" style="font-size: 13px">Ver o contrato inteiro</a>
+          </section>
+          <section style="display: flex; flex-direction: column; gap: 10px">
+            <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">O que foi medido</h2>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #0c0f15">
+              <span style="font-size: 13.5px; color: #a3aabb">Os gates rodam quando o report chegar: <span class="mono" style="color: #d6dae6">npm run check:types</span> e <span class="mono" style="color: #d6dae6">npx vitest run</span>, numa worktree isolada.</span>
+            </div>
+          </section>
+          <section style="display: flex; flex-direction: column; gap: 10px">
+            <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">O aceite</h2>
+            <ul style="margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: #d6dae6; line-height: 1.5">
+              <li>Testes com amostras reais de tela por provider</li>
+              <li>Lembrete ao card, depois aviso ao orquestrador, uma vez cada</li>
+              <li>Smoke isolado com um card commandcode que termina sem report</li>
+              <li>Suíte sem regressão, check:types limpo, comentários em inglês</li>
+            </ul>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{showContrato}}" hint-placeholder-val="{{ false }}">
+          <section style="display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 10px"><h2 style="margin: 0; font-size: 15px">Briefing</h2><span style="font-size: 12px; color: #8d94a6">original + 1 adendo</span><span style="flex: 1"></span><button class="btn" type="button">Acrescentar</button><button class="btn" type="button">Substituir</button></div>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 14px; background: #0c0f15; font-size: 13.5px; line-height: 1.6; color: #c9cede; white-space: pre-line">FEEDBACK DO DONO: cards ainda esquecem o report…
+FAZER
+1. Fim de turno pela TELA, declarado por provider como dado…
+2. O watchdog usa esse fato como declaredIdle…</div>
+            <div style="border: 1px dashed #2f3650; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #b3bad0"><span style="color: #8d94a6">Adendo · Master · 14:02</span> — comece pelo commandcode; antigravity depois.</div>
+          </section>
+          <section style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #8d94a6">Território</span><span class="mono" style="font-size: 12.5px; color: #d6dae6">src/main/idle-without-report*.ts</span><span class="mono" style="font-size: 12.5px; color: #d6dae6">src/main/providers.ts</span><span class="mono" style="font-size: 12.5px; color: #d6dae6">tests/unit/idle-*.test.ts</span></div>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #8d94a6">Gates</span><span class="mono" style="font-size: 12.5px; color: #d6dae6">npm run check:types</span><span class="mono" style="font-size: 12.5px; color: #d6dae6">npx vitest run</span></div>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #8d94a6">Campos do report</span><span style="font-size: 13px; color: #d6dae6">filesChanged · decisaoTomada · evidenciaMedida · oQueNaoFiz · gatesOutput</span></div>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #8d94a6">Regras</span><span style="font-size: 13px; color: #d6dae6">Sem commit · revisão não exigida · 2 tentativas</span></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{showRel}}" hint-placeholder-val="{{ false }}">
+          <div style="border: 1px dashed #2f3650; border-radius: 12px; padding: 28px; text-align: center; color: #a3aabb; font-size: 14px">Nenhum report nesta task ainda. Quando chegar, cada rodada aparece aqui com os campos do contrato e os gates medidos ao lado.</div>
+        </sc-if>
+
+        <sc-if value="{{showMud}}" hint-placeholder-val="{{ false }}">
+          <section style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 13px; color: #a3aabb">6 arquivos mudaram desde o início da task · capturado pelo app, não digitado pelo agente</span>
+            <div style="border: 1px solid #1d2230; border-radius: 12px; overflow: hidden">
+              <div style="display: flex; gap: 10px; padding: 9px 14px; border-bottom: 1px solid #1d2230; font-size: 13px"><span style="color: #3fb68b">M</span><span class="mono" style="flex: 1">src/main/idle-without-report-decision.ts</span><span style="color: #3fb68b">+84</span><span style="color: #e0846f">−12</span></div>
+              <div style="display: flex; gap: 10px; padding: 9px 14px; border-bottom: 1px solid #1d2230; font-size: 13px"><span style="color: #3fb68b">M</span><span class="mono" style="flex: 1">src/main/providers.ts</span><span style="color: #3fb68b">+31</span><span style="color: #e0846f">−2</span></div>
+              <div style="display: flex; gap: 10px; padding: 9px 14px; border-bottom: 1px solid #1d2230; font-size: 13px"><span style="color: #7d8cff">A</span><span class="mono" style="flex: 1">tests/unit/idle-screen-turn-end.test.ts</span><span style="color: #3fb68b">+142</span><span style="color: #e0846f">−0</span></div>
+              <div style="display: flex; gap: 10px; padding: 9px 14px; font-size: 13px; color: #f0b25c"><span>M</span><span class="mono" style="flex: 1">src/renderer/src/TaskCard.tsx</span><span>fora do território</span></div>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{showTrilha}}" hint-placeholder-val="{{ false }}">
+          <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; font-size: 13.5px">
+            <li style="display: flex; gap: 12px"><span class="mono" style="color: #8d94a6; width: 48px">14:02</span><span>Master acrescentou um adendo ao briefing</span></li>
+            <li style="display: flex; gap: 12px"><span class="mono" style="color: #8d94a6; width: 48px">13:41</span><span>IMPL · Claude assumiu a task (Sonnet 5.5, esforço alto)</span></li>
+            <li style="display: flex; gap: 12px"><span class="mono" style="color: #8d94a6; width: 48px">13:40</span><span>Master despachou para claude</span></li>
+            <li style="display: flex; gap: 12px"><span class="mono" style="color: #8d94a6; width: 48px">13:12</span><span>Master criou a task a partir do sticky do dono</span></li>
+          </ol>
+        </sc-if>
+      </main>
+
+      <aside aria-label="Quem e do que depende" style="width: 300px; flex: none; border-left: 1px solid #1d2230; padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; background: #0c0f15">
+        <section style="display: flex; flex-direction: column; gap: 10px">
+          <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Quem está nela</h2>
+          <div style="display: flex; align-items: center; gap: 10px"><span style="width: 32px; height: 32px; border-radius: 9px; background: #2a1d14; color: #f0a46b; display: grid; place-items: center; font-size: 12px; font-weight: 600">CL</span><div style="display: flex; flex-direction: column"><span style="font-size: 13.5px">IMPL · Claude</span><span style="font-size: 12px; color: #8d94a6">implementa · vivo · ctx 34%</span></div></div>
+          <div style="display: flex; align-items: center; gap: 10px; opacity: .75"><span style="width: 32px; height: 32px; border-radius: 9px; border: 1px dashed #3a4258; display: grid; place-items: center; font-size: 15px; color: #8d94a6">+</span><span style="font-size: 13px; color: #a3aabb">Sem revisor (não exigido)</span></div>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 8px">
+          <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Depende de</h2>
+          <span style="font-size: 13px; color: #a3aabb">Nada</span>
+          <h2 style="margin: 6px 0 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Bloqueia</h2>
+          <a href="#" style="font-size: 13px">#d22d7773 Docs de orquestração</a>
+        </section>
+        <section style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <h2 style="margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Detalhes</h2>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Criada por</span><span>Master · hoje 13:12</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Provider</span><span>claude</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Repo</span><span class="mono" style="font-size: 12px">Stellar</span></div>
+          <div style="display: flex; justify-content: space-between"><span style="color: #8d94a6">Tentativas</span><span>0 de 2</span></div>
+        </section>
+      </aside>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":800}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { tab: 'resumo' }; }
+  renderVals() {
+    const tab = this.state.tab;
+    const cls = (k) => (tab === k ? 'tab on' : 'tab');
+    const go = (k) => () => this.setState({ tab: k });
+    return {
+      tabResumo: cls('resumo'), tabContrato: cls('contrato'), tabRel: cls('rel'), tabMud: cls('mud'), tabTrilha: cls('trilha'),
+      goResumo: go('resumo'), goContrato: go('contrato'), goRel: go('rel'), goMud: go('mud'), goTrilha: go('trilha'),
+      showResumo: tab === 'resumo', showContrato: tab === 'contrato', showRel: tab === 'rel', showMud: tab === 'mud', showTrilha: tab === 'trilha'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -35,6 +35,14 @@ import type { CardDeliveryState } from "./type-and-submit-decision";
  * Sem ele, o piso de atividade responde, porque é o único sinal que sobra, e
  * é o único capaz de ver um card que TRAVA sem nunca encerrar turno.
  *
+ * UPDATE (screen turn state): the hole below is now closed for the providers
+ * that declare `capacity.delivery.screenTurn` (commandcode, antigravity — the
+ * others have no measured pattern and stay as described). The turn state is
+ * read from the screen (spinner absent + end marker present, latched by the PTY
+ * registry), the scan feeds it in as `declaredIdle`, and the bus then reminds
+ * the CARD ITSELF once (`idle-self-reminder-decision.ts`) before this module's
+ * notice reaches the orchestrator.
+ *
  * O QUE ESTE MÓDULO NÃO RESOLVE, dito por inteiro (o "de menos" honesto): um
  * card que nunca declara turno e NUNCA fica quieto (TUI que repinta) não é
  * visto por ninguém — o relógio de bytes não envelhece e não há fato de
