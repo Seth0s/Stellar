@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.nav{display:flex;align-items:center;gap:10px;width:100%;min-height:38px;padding:0 10px;border:0;border-radius:9px;background:transparent;color:#a3aabb;font:inherit;font-size:13.5px;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav:hover{background:#161a24;color:#e8eaf0}
+.navOn{background:#1d2333;color:#e8eaf0}
+.new{font-size:10.5px;padding:1px 6px;border-radius:5px;background:#14302a;color:#8fdcc0;margin-left:auto}
+.sec{border:1px solid #1d2230;border-radius:12px;background:#0f1218;padding:16px;display:flex;flex-direction:column;gap:12px}
+.sh{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8d94a6}
+.row{display:flex;align-items:center;gap:12px;min-height:40px}
+.lbl{flex:1;display:flex;flex-direction:column;gap:2px;font-size:14px}
+.hint{font-size:12.5px;color:#8d94a6}
+.btn{min-height:34px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:#3a4258}
+.primary{background:#4a5fe0;border-color:#4a5fe0;color:#fff;font-weight:600}
+.sw{width:38px;height:22px;border-radius:999px;border:0;position:relative;flex:none;cursor:pointer}
+.field{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:#0c0f15;color:#e8eaf0;font:inherit;font-size:13.5px}
+.pill{font-size:11.5px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.preset{flex:1;border:1px solid #232838;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;background:#0c0f15;cursor:pointer;text-align:left;color:#e8eaf0;font:inherit}
+.preset:hover{border-color:#3b4570}
+.kbd{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:5px;border:1px solid #2f3546;border-bottom-width:2px;background:#12151d;font:500 11px 'JetBrains Mono',monospace;color:#e8eaf0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+  <section role="dialog" aria-modal="true" aria-labelledby="cfg" style="width: 1280px; height: 820px; border-radius: 16px; background: #0b0d12; border: 1px solid #262b3a; display: flex; overflow: hidden">
+
+    <nav aria-label="Seções" style="width: 260px; flex: none; border-right: 1px solid #1d2230; background: #0c0f15; padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto">
+      <h1 id="cfg" style="margin: 0 10px 12px; font-size: 18px; font-weight: 600">Configurações</h1>
+      <label style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; margin: 0 0 10px; border: 1px solid #2a2f3d; border-radius: 8px"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="4.5"></circle><path d="M9.5 9.5L13 13"></path></svg><input aria-label="Buscar configuração" placeholder="Buscar configuração" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #e8eaf0; font: inherit; font-size: 13px; outline: none"></label>
+      <span class="sh" style="padding: 6px 10px">Aplicativo</span>
+      <sc-for list="{{appNav}}" as="n" hint-placeholder-count="8">
+        <button type="button" class="{{n.cls}}" onClick="{{n.pick}}">{{n.label}}<sc-if value="{{n.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">novo</span></sc-if></button>
+      </sc-for>
+      <span class="sh" style="padding: 14px 10px 6px">Este board · 64</span>
+      <sc-for list="{{boardNav}}" as="n" hint-placeholder-count="3">
+        <button type="button" class="{{n.cls}}" onClick="{{n.pick}}">{{n.label}}<sc-if value="{{n.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">novo</span></sc-if></button>
+      </sc-for>
+    </nav>
+
+    <main style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+      <header style="padding: 18px 24px 14px; border-bottom: 1px solid #1d2230; display: flex; align-items: center; gap: 12px">
+        <div style="display: flex; flex-direction: column; gap: 2px"><h2 style="margin: 0; font-size: 18px; font-weight: 600">{{title}}</h2><span class="hint">{{subtitle}}</span></div>
+        <span style="flex: 1"></span>
+        <span class="hint">{{scope}}</span>
+        <button type="button" class="btn" aria-label="Fechar" style="width: 34px; padding: 0; justify-content: center"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+      </header>
+
+      <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px 24px; display: flex; flex-direction: column; gap: 14px">
+
+        <sc-if value="{{pConta}}" hint-placeholder-val="{{ true }}">
+          <section class="sec">
+            <div class="row"><span style="width: 44px; height: 44px; border-radius: 12px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">LS</span><div class="lbl"><span>Lucas Sabino</span><span class="hint">lucas@… · GitHub e e-mail ligados</span></div><button type="button" class="btn">Sair</button></div>
+          </section>
+          <section class="sec">
+            <h3 class="sh">Plano</h3>
+            <div class="row"><div class="lbl"><span style="display: flex; align-items: center; gap: 8px">Pro <span class="pill" style="background: #14302a; color: #8fdcc0">ativo</span></span><span class="hint">sync da casa de trabalho e controle pelo celular · renova em 05/11</span></div><a class="btn" href="#">Ver planos</a></div>
+            <div class="row"><div class="lbl"><span>Time Idy Platform</span><span class="hint">vaga Pro do time · 4 de 6 vagas usadas</span></div><span class="pill" style="background: #1d2333; color: #c3cbff">origem: time</span></div>
+          </section>
+          <section class="sec">
+            <h3 class="sh">Casa de trabalho</h3>
+            <div class="row"><div class="lbl"><span>Perfil ativo: Pessoal</span><span class="hint">skills, regras, agents e config das CLIs · última sincronização há 3 min</span></div><button type="button" class="btn">Sincronizar agora</button><button type="button" class="btn">Abrir a casa</button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pProviders}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><h3 class="sh" style="flex: 1">Nativos do app</h3><span class="hint">cota lida do próprio CLI</span></div>
+            <div class="row"><span style="width: 10px; height: 10px; border-radius: 50%; background: #f0883e"></span><div class="lbl"><span>Claude Code</span><span class="hint">MCP ligado · sobe sem pedir permissão</span></div><span class="pill" style="background: #2a1d10; color: #f0b25c">semana 89%</span><button type="button" class="btn">Padrões</button></div>
+            <div class="row"><span style="width: 10px; height: 10px; border-radius: 50%; background: #5b8cff"></span><div class="lbl"><span>Antigravity</span><span class="hint">MCP ligado · modelo padrão Gemini 3.8 Flash</span></div><span class="pill" style="background: #1d2333; color: #c3cbff">Gemini ok · Claude/GPT sem cota</span><button type="button" class="btn">Padrões</button></div>
+            <div class="row"><span style="width: 10px; height: 10px; border-radius: 50%; background: #e85d9b"></span><div class="lbl"><span>Command Code</span><span class="hint">MCP ligado</span></div><span class="pill" style="background: #3a1c18; color: #f2a093">sem cota até sex</span><button type="button" class="btn">Padrões</button></div>
+            <div class="row"><span style="width: 10px; height: 10px; border-radius: 50%; background: #8d94a6"></span><div class="lbl"><span>Codex</span><span class="hint">MCP ligado</span></div><span class="pill" style="background: #3a1c18; color: #f2a093">sem crédito até 11/10</span><button type="button" class="btn">Padrões</button></div>
+          </section>
+          <section class="sec">
+            <div class="row"><h3 class="sh" style="flex: 1">Genéricos (CLIs que você cadastrou)</h3><button type="button" class="btn primary">+ Adicionar provider</button></div>
+            <div class="row"><span style="width: 10px; height: 10px; border-radius: 2px; background: #3a4258"></span><div class="lbl"><span>Qwen local</span><span class="hint mono">run-qwen-agent.sh · MCP ~/.qwen/settings.json › mcpServers</span></div><button type="button" class="btn">Editar</button></div>
+            <span class="hint">Arquivo: <a href="#" class="mono">~/.config/stellar/providers.json</a> · mudanças no arquivo aparecem aqui sozinhas</span>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pAtalhos}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><div class="lbl"><span>Todos os atalhos, por lugar</span><span class="hint">a mesma tela do <span class="kbd">?</span>, com edição</span></div><a class="btn" href="Atalhos.dc.html">Abrir a lista</a></div>
+            <div class="row"><div class="lbl"><span>Duplicar card</span><span class="hint">Card selecionado</span></div><span style="display: flex; gap: 3px"><span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">D</span></span><button type="button" class="btn">Trocar</button></div>
+            <div class="row"><div class="lbl"><span>Paleta de comandos</span><span class="hint">Em qualquer lugar</span></div><span style="display: flex; gap: 3px"><span class="kbd">Ctrl</span><span class="kbd">K</span></span><button type="button" class="btn">Trocar</button></div>
+            <div class="row" style="color: #f0b25c; font-size: 13px"><span>Ao trocar, a tecla é recusada se já estiver em uso no mesmo lugar, e o conflito aparece aqui.</span></div>
+            <div class="row"><button type="button" class="btn">Voltar todos ao padrão</button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pChaves}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <h3 class="sh">Chaves de API</h3>
+            <span class="hint">Guardadas no chaveiro do sistema, nunca em arquivo. Usadas pelos cards de chat e pelas ações de IA.</span>
+            <div class="row"><div class="lbl"><span>Anthropic</span><span class="hint mono">sk-ant-••••••••3f2a · usada pelo Resumir board</span></div><button type="button" class="btn">Trocar</button><button type="button" class="btn">Remover</button></div>
+            <div class="row"><div class="lbl"><span>OpenAI</span><span class="hint">não configurada</span></div><button type="button" class="btn">Adicionar</button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pDisp}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <h3 class="sh">Esta máquina</h3>
+            <div class="row"><div class="lbl"><span>lucas-fedora</span><span class="hint">Linux · conectada à conta desde 28/09</span></div><span class="pill" style="background: #14302a; color: #8fdcc0">esta</span></div>
+            <div class="row"><div class="lbl"><span>MacBook do trabalho</span><span class="hint">macOS · visto há 2 dias</span></div><button type="button" class="btn">Desconectar</button></div>
+          </section>
+          <section class="sec">
+            <h3 class="sh">Celular</h3>
+            <div class="row"><div class="lbl"><span>Parear um celular</span><span class="hint">acompanhar e responder aos agentes pelo celular · recurso do Pro</span></div><span class="pill" style="background: #1d2333; color: #c3cbff">em breve</span></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pAparencia}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><div class="lbl"><span>Idioma</span><span class="hint">detectado do sistema; a escolha fica salva</span></div><select class="field"><option>Português (Brasil)</option><option>English</option></select></div>
+            <div class="row"><div class="lbl"><span>Tamanho do texto nos terminais</span></div><select class="field"><option>13 px</option><option>14 px</option><option>15 px</option></select></div>
+            <div class="row"><div class="lbl"><span>Reduzir movimento</span><span class="hint">desliga pulsos, barras animadas e transições; segue o sistema por padrão</span></div><button type="button" class="sw" aria-pressed="false" aria-label="Reduzir movimento" style="background: #2a2f3d"><span style="position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #8d94a6"></span></button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pDesempenho}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <h3 class="sh">O que o app faz para economizar</h3>
+            <div class="row"><div class="lbl"><span>Sessão viva em segundo plano</span><span class="hint">ao sair do board, os agentes continuam e a tela para de desenhar</span></div><button type="button" class="sw" aria-pressed="true" aria-label="Sessão em segundo plano" style="background: #4a5fe0"><span style="position: absolute; left: 19px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button></div>
+            <div class="row"><div class="lbl"><span>Navegador sem uso</span><span class="hint">quadros por segundo de um card de navegador sem o mouse em cima</span></div><select class="field"><option>4 fps</option><option>8 fps</option><option>pausar</option></select></div>
+            <div class="row"><div class="lbl"><span>Histórico guardado por terminal</span><span class="hint">o que volta ao reabrir o board</span></div><select class="field"><option>2 MB</option><option>5 MB</option><option>512 KB</option></select></div>
+          </section>
+          <section class="sec">
+            <h3 class="sh">Agora</h3>
+            <div class="row"><div class="lbl"><span>Stellar</span><span class="hint">interface 9% · GPU 4% · principal 6% de um núcleo · 1,1 GB</span></div><button type="button" class="btn">Detalhes por card</button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pSobre}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><svg width="44" height="44" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="cf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient><linearGradient id="cs" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a9d6ff"></stop><stop offset=".5" stop-color="#8fa2ff"></stop><stop offset="1" stop-color="#c39cff"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#cf)" stroke-width="2.4"></rect><path d="M32.5 18c.9 9.1 3.3 11.6 12.5 12.5-9.2.9-11.6 3.4-12.5 12.5-.9-9.1-3.3-11.6-12.5-12.5 9.2-.9 11.6-3.4 12.5-12.5z" fill="url(#cs)"></path></svg><div class="lbl"><span>Stellar 0.8.4</span><span class="hint mono">build c87a7aa · 07/10 · RPM</span></div><button type="button" class="btn primary">Procurar atualização</button></div>
+            <div class="row"><div class="lbl"><span>Relay do MCP</span><span class="hint">binário Rust ativo (sem ele o app usa o shim em Node)</span></div><span class="pill" style="background: #14302a; color: #8fdcc0">ativo</span></div>
+            <div class="row"><a href="#">Notas da versão</a><a href="#">Termos</a><a href="#">Privacidade</a><a href="#">Abrir a pasta de dados</a></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pModo}}" hint-placeholder-val="{{ false }}">
+          <span class="hint">Três jeitos de trabalhar. Escolher um mostra o que muda antes de aplicar.</span>
+          <div style="display: flex; gap: 12px">
+            <button type="button" class="preset"><span style="font-weight: 600">Junto</span><span class="hint">você aprova cada passo; nada dispara sozinho</span></button>
+            <button type="button" class="preset" style="border-color: #5a6be0; background: #121730"><span style="display: flex; align-items: center; gap: 8px; font-weight: 600">Orquestrado <span class="pill" style="background: #27305a; color: #c3cbff">atual</span></span><span class="hint">um card Master despacha e revisa; você decide nas perguntas</span></button>
+            <button type="button" class="preset"><span style="font-weight: 600">Autônomo</span><span class="hint">deps e reservas disparam sozinhas; você vê o resultado</span></button>
+          </div>
+          <section class="sec">
+            <h3 class="sh">Os ajustes deste board</h3>
+            <div class="row"><div class="lbl"><span>Modo autônomo</span><span class="hint">deps e reservas disparam sem pedir</span></div><button type="button" class="sw" aria-pressed="true" aria-label="Modo autônomo" style="background: #4a5fe0"><span style="position: absolute; left: 19px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button></div>
+            <div class="row"><div class="lbl"><span>Agentes ao mesmo tempo</span><span class="hint">a Fila segura o que passar do teto</span></div><input class="field" value="5" aria-label="Agentes ao mesmo tempo" style="width: 70px"></div>
+            <div class="row"><div class="lbl"><span>Revisão por padrão nas tasks novas</span></div><select class="field"><option>não exigir</option><option>exigir revisor</option></select></div>
+            <div class="row"><div class="lbl"><span>Commit por padrão</span></div><select class="field"><option>não permitir</option><option>permitir</option></select></div>
+            <div class="row"><div class="lbl"><span>Campos do relatório por padrão</span></div><span class="hint mono">filesChanged · decisaoTomada · evidenciaMedida · oQueNaoFiz · gatesOutput</span></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pRegras}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><h3 class="sh" style="flex: 1">Regras que todo agente deste board recebe</h3><span class="hint">vão no começo de cada brief</span></div>
+            <textarea aria-label="Regras do board" style="min-height: 150px; padding: 12px; border-radius: 10px; border: 1px solid #2a2f3d; background: #0c0f15; color: #d6dae6; font: 13px/1.6 'JetBrains Mono', monospace; resize: vertical">- Comentários de código em inglês, sem id de task, data ou histórico.
+- Proibido git reset/checkout/restore/stash/clean/switch.
+- Nunca abra ~/.config/stellar/agent-canvas.db.
+- Comando pesado: acbridge gate-lock --</textarea>
+          </section>
+          <section class="sec">
+            <h3 class="sh">Gates</h3>
+            <div class="row"><div class="lbl"><span>Medir os gates numa cópia isolada</span><span class="hint">só os arquivos da task, sem o trabalho em andamento dos outros cards</span></div><button type="button" class="sw" aria-pressed="true" aria-label="Gates isolados" style="background: #4a5fe0"><span style="position: absolute; left: 19px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button></div>
+            <div class="row"><div class="lbl"><span>Ferramentas fora do repo que os gates podem usar</span><span class="hint mono">/home/lucas/Workplace/Projects/ai/scripts</span></div><button type="button" class="btn">+ Pasta</button></div>
+          </section>
+          <section class="sec">
+            <div class="row"><div class="lbl"><span>Orquestrador do board</span><span class="hint">só ele declara gates e escreve status de outros cards</span></div><select class="field"><option>Master</option><option>nenhum</option></select></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pTime}}" hint-placeholder-val="{{ false }}">
+          <section class="sec">
+            <div class="row"><div class="lbl"><span>Ligado ao time Idy Platform</span><span class="hint">tasks deste board aparecem no board do time quando marcadas como "do time"</span></div><button type="button" class="btn">Abrir o painel do time</button></div>
+            <div class="row"><div class="lbl"><span>Casa de trabalho do time</span><span class="hint">regras e skills do time valem neste board, somadas às suas</span></div><button type="button" class="sw" aria-pressed="true" aria-label="Casa do time" style="background: #4a5fe0"><span style="position: absolute; left: 19px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button></div>
+          </section>
+        </sc-if>
+      </div>
+    </main>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { p: 'conta' }; }
+  renderVals() {
+    const p = this.state.p;
+    const A = [['conta','Conta e plano',true,'quem você é, o plano e a casa de trabalho'],['providers','Providers',false,'os CLIs que rodam nos cards, com a cota de cada um'],['atalhos','Atalhos',false,'ver e trocar teclas'],['chaves','Chaves de API',false,'para chat e ações de IA'],['disp','Dispositivos',false,'máquinas da conta e celular'],['aparencia','Aparência',true,'idioma, texto e movimento'],['desempenho','Desempenho',true,'o que o app faz para economizar e o consumo agora'],['sobre','Sobre',false,'versão, atualização e documentos']];
+    const B = [['modo','Modo de trabalho',false,'preset e ajustes padrão das tasks'],['regras','Regras e gates',true,'o que todo agente recebe e como os gates rodam'],['time','Time',true,'ligação deste board com o time']];
+    const mk = (list) => list.map(([id, label, isNew]) => ({ label, isNew, cls: p === id ? 'nav navOn' : 'nav', pick: () => this.setState({ p: id }) }));
+    const cur = A.concat(B).find(x => x[0] === p) || A[0];
+    const isBoard = B.some(x => x[0] === p);
+    const v = {};
+    ['conta','providers','atalhos','chaves','disp','aparencia','desempenho','sobre','modo','regras','time'].forEach(id => { v['p' + id.charAt(0).toUpperCase() + id.slice(1)] = p === id; });
+    return Object.assign(v, { appNav: mk(A), boardNav: mk(B), title: cur[1], subtitle: cur[3], scope: isBoard ? 'vale só para o board 64' : 'vale para o app inteiro' });
+  }
+}
+</script>
+</body>
+</html>

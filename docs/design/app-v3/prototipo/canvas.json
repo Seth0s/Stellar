@@ -1,1 +1,276 @@
-{"v": 3, "createdOnFiles": {"v": 1, "at": "2026-10-07T13:30:00Z"}, "title": "Stellar · Fila, cards, barra lateral e atalhos", "launch": {"view": "canvas"}, "pages": [], "boards": {"Main.dc.html": {"x": 0, "y": 0, "w": 1200, "h": 800, "title": "1 · Rodando (interativo: troque as abas)", "is_interactive": true, "radius": 12}, "Review.dc.html": {"x": 1280, "y": 0, "w": 1200, "h": 800, "title": "2 · Aguardando revisão, gate vermelho", "radius": 12}, "Superseded.dc.html": {"x": 2560, "y": 0, "w": 1200, "h": 800, "title": "3 · Substituída", "radius": 12}, "Fila.dc.html": {"x": 0, "y": 1420, "w": 1440, "h": 860, "title": "4 · Card Fila (interativo: filtros e colunas recolhíveis)", "is_interactive": true, "radius": 14}, "Graficos.dc.html": {"x": 0, "y": 2700, "w": 1440, "h": 860, "title": "5 · Gráficos (interativo: período)", "is_interactive": true, "radius": 14}, "Sprints.dc.html": {"x": 1520, "y": 2700, "w": 1000, "h": 860, "title": "6 · Sprints (interativo: fechar sprint)", "is_interactive": true, "radius": 14}, "CriarTask.dc.html": {"x": 2600, "y": 2700, "w": 1440, "h": 860, "title": "7 · Nova task, formulário completo (interativo)", "is_interactive": true, "radius": 14}, "Cards.dc.html": {"x": 0, "y": 4100, "w": 1440, "h": 900, "title": "8 · Cards no estilo novo (header e rodapé iguais em todos)", "radius": 14}, "Rail.dc.html": {"x": 1520, "y": 4100, "w": 440, "h": 900, "title": "9 · Barra lateral (interativa: clique nos itens)", "is_interactive": true, "radius": 14}, "RailPassos.dc.html": {"x": 2040, "y": 4100, "w": 1880, "h": 1960, "title": "10 · Barra lateral, todos os passos", "radius": 14}, "Atalhos.dc.html": {"x": 0, "y": 5260, "w": 1440, "h": 900, "title": "11 · Atalhos (interativo: filtre por lugar ou busque)", "is_interactive": true, "radius": 14}, "Radial.dc.html": {"x": 1520, "y": 5260, "w": 1440, "h": 900, "title": "12 · Menu radial de criação (interativo)", "is_interactive": true, "radius": 14}, "Codigo.dc.html": {"x": 0, "y": 6420, "w": 1440, "h": 900, "title": "13 · Card de código (IDE), completo (interativo)", "is_interactive": true, "radius": 14}}, "order": ["Main.dc.html", "Review.dc.html", "Superseded.dc.html", "Fila.dc.html", "Graficos.dc.html", "Sprints.dc.html", "CriarTask.dc.html", "Cards.dc.html", "Rail.dc.html", "RailPassos.dc.html", "Atalhos.dc.html", "Radial.dc.html", "Codigo.dc.html"], "notes": {"t1": {"x": 0, "y": -300, "text": "Detalhe da task no card Fila, organizado por pergunta", "kind": "title1", "maxW": 3760}, "n1": {"x": 0, "y": 860, "w": 1200, "size": "m", "fill": "gray", "text": "HOJE: uma coluna longa, por ordem de chegada (meta, avisos, diff, prompt, cards, vereditos, trilha, deps).\nPROPOSTA: o topo responde \"em que pé está e o que faço agora\"; as abas respondem uma pergunta cada; a lateral fixa diz quem está nela e do que depende.\nAbas: Resumo (o que é + o que foi medido) · Contrato (o combinado) · Relatórios (por rodada) · Mudanças (diff capturado) · Trilha (tudo o que aconteceu)."}, "n2": {"x": 1280, "y": 860, "w": 1200, "size": "m", "fill": "gray", "text": "A faixa \"Agora\" muda de cor e de ação com o estado: aqui o gate falhou, mas a fatia mostra que o vermelho vem de arquivos fora do território (trabalho de outro card), então a ação sugerida é medir de novo, não devolver."}, "n3": {"x": 2560, "y": 860, "w": 1200, "size": "m", "fill": "gray", "text": "Substituída é terminal e não é falha: o topo leva direto para a task que a substituiu; o resto fica só leitura."}, "t2": {"x": 0, "y": 1120, "text": "Card Fila: status organizados e vivos", "kind": "title1", "maxW": 3760}, "n4": {"x": 1520, "y": 1420, "w": 760, "size": "m", "fill": "gray", "text": "HOJE: cada tile empilha chips soltos (fase, gate, card, deps, provider) e as colunas seguem o status do banco (a fazer, fazendo, concluídas, falhas, substituídas), que esconde a fase real.\n\nPROPOSTA:\n• Colunas pela FASE que importa para quem orquestra: Esperando (deps ou você) · Pronta · Rodando · Revisão · Concluída. Falhas e Substituídas viram trilhos recolhidos à direita, com contador; clicar abre a coluna. A Fila nunca quebra em duas linhas.\n• Faixa \"Precisa de você\" no topo: perguntas bloqueadas e aprovações, com a ação ali mesmo.\n• Tile com anatomia fixa: linha 1 = #id + tipo (+ tempo/rodada); linha 2 = título; linha 3 = UMA frase de estado com quem está nela. Gates só aparecem quando existem, e dizem de quem é o vermelho.\n• Vivo: ponto pulsando e barra de atividade só nos cards com agente trabalhando; a frase de estado vem do card (\"escrevendo testes\", \"lendo useTerminal.ts\"). Respeita reduzir movimento.\n• Rodapé com o pulso do board: agentes trabalhando, revisão, quanto espera você."}, "t3": {"x": 0, "y": 2400, "text": "Gráficos, sprints e nova task", "kind": "title1", "maxW": 4040}, "n5": {"x": 0, "y": 3620, "w": 1440, "size": "m", "fill": "gray", "text": "Gráficos: os 3 que já existem (vereditos por provider, rodadas até aprovar, tempo de ciclo) ganham período, legenda, números do topo e ligação com a task. Só vereditos atribuíveis entram na conta."}, "n6": {"x": 1520, "y": 3620, "w": 1000, "size": "m", "fill": "gray", "text": "Sprints: a atual em destaque com progresso por fase; fechar mostra o que sobra aberto e para onde vai; renomear e excluir no menu de cada uma."}, "n7": {"x": 2600, "y": 3620, "w": 1440, "size": "m", "fill": "gray", "text": "Nova task: tudo que o create_task aceita, em seções (o que é, o contrato, quem faz, avançado), com a prévia \"O agente recebe\" ao lado e o aviso de território em conflito antes de criar. Mesmo padrão do formulário do time (tela 14), para a Fila local."}, "t4": {"x": 0, "y": 3800, "text": "Cards, barra lateral e atalhos no estilo novo", "kind": "title1", "maxW": 3920}, "n8": {"x": 0, "y": 6220, "w": 1440, "size": "m", "fill": "gray", "text": "Atalhos: organizados por ONDE valem (canvas, card selecionado, terminal, navegador e chat, janela). Teclas que mudam de efeito conforme o foco (Ctrl V, Ctrl D, Ctrl C) aparecem juntas com cada efeito explicado. Os novos estão marcados: Ctrl K paleta, Ctrl F achar card, Ctrl 0 ajustar à tela, Ctrl Shift D duplicar card (libera Ctrl D para o EOF do terminal) e Espaço + arrastar para mover o canvas sobre qualquer card, inclusive o navegador. O mesmo chip de tecla aparece nos tooltips da barra lateral e dos cards."}, "n9": {"x": 1520, "y": 6220, "w": 1440, "size": "m", "fill": "gray", "text": "Radial: anel de dentro = ferramentas (V P C S); anel de fora = o que criar, com número 1–8. Escolher Agente abre um arco com os providers e a cota de cada um; o centro diz o que vai acontecer. Abre com botão direito, segurando 0,5 s no fundo ou com Q; o card nasce onde o menu abriu."}, "n10": {"x": 0, "y": 7380, "w": 1440, "size": "m", "fill": "gray", "text": "Código: hoje o card tem árvore, abas, busca e salvamento automático. Proposta: barra de atividades (arquivos, busca, git, problemas, quem está mexendo), estado git na árvore, breadcrumbs, mudanças do agente marcadas na margem com o card que fez, diff lado a lado, painel de problemas, barra de status (linha:coluna, linguagem, ramo, tokens) e paleta Ctrl P. O que só o Stellar tem: ver qual card e qual task tocam cada arquivo, ao vivo, e mandar um trecho para um agente."}}, "designSystems": []}
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Atalhos.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "11 · Atalhos (interativo: filtre por lugar ou busque)",
+      "w": 1440,
+      "x": 0,
+      "y": 5260
+    },
+    "Cards.dc.html": {
+      "h": 900,
+      "radius": 14,
+      "title": "8 · Cards no estilo novo (header e rodapé iguais em todos)",
+      "w": 1440,
+      "x": 0,
+      "y": 4100
+    },
+    "Codigo.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "13 · Card de código (IDE), completo (interativo)",
+      "w": 1440,
+      "x": 0,
+      "y": 6420
+    },
+    "CriarTask.dc.html": {
+      "h": 860,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "7 · Nova task, formulário completo (interativo)",
+      "w": 1440,
+      "x": 2600,
+      "y": 2700
+    },
+    "Fila.dc.html": {
+      "h": 860,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "4 · Card Fila (interativo: filtros e colunas recolhíveis)",
+      "w": 1440,
+      "x": 0,
+      "y": 1420
+    },
+    "Graficos.dc.html": {
+      "h": 860,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "5 · Gráficos (interativo: período)",
+      "w": 1440,
+      "x": 0,
+      "y": 2700
+    },
+    "Main.dc.html": {
+      "h": 800,
+      "is_interactive": true,
+      "radius": 12,
+      "title": "1 · Rodando (interativo: troque as abas)",
+      "w": 1200,
+      "x": 0,
+      "y": 0
+    },
+    "Radial.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "12 · Menu radial de criação (interativo)",
+      "w": 1440,
+      "x": 1520,
+      "y": 5260
+    },
+    "Rail.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "9 · Barra lateral (interativa: clique nos itens)",
+      "w": 440,
+      "x": 1520,
+      "y": 4100
+    },
+    "RailPassos.dc.html": {
+      "h": 1960,
+      "radius": 14,
+      "title": "10 · Barra lateral, todos os passos",
+      "w": 1880,
+      "x": 3760,
+      "y": 4100
+    },
+    "Review.dc.html": {
+      "h": 800,
+      "radius": 12,
+      "title": "2 · Aguardando revisão, gate vermelho",
+      "w": 1200,
+      "x": 1280,
+      "y": 0
+    },
+    "Sprints.dc.html": {
+      "h": 860,
+      "is_interactive": true,
+      "radius": 14,
+      "title": "6 · Sprints (interativo: fechar sprint)",
+      "w": 1000,
+      "x": 1520,
+      "y": 2700
+    },
+    "Superseded.dc.html": {
+      "h": 800,
+      "radius": 12,
+      "title": "3 · Substituída",
+      "w": 1200,
+      "x": 2560,
+      "y": 0
+    },
+    "Configuracoes.dc.html": {
+      "x": 1520,
+      "y": 6420,
+      "w": 1440,
+      "h": 900,
+      "title": "14 · Configurações (interativo: troque as seções)",
+      "is_interactive": true,
+      "radius": 14
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-07T13:30:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "n1": {
+      "fill": "gray",
+      "size": 24,
+      "text": "HOJE: uma coluna longa, por ordem de chegada (meta, avisos, diff, prompt, cards, vereditos, trilha, deps).\nPROPOSTA: o topo responde \"em que pé está e o que faço agora\"; as abas respondem uma pergunta cada; a lateral fixa diz quem está nela e do que depende.\nAbas: Resumo (o que é + o que foi medido) · Contrato (o combinado) · Relatórios (por rodada) · Mudanças (diff capturado) · Trilha (tudo o que aconteceu).",
+      "w": 1200,
+      "x": 0,
+      "y": 860
+    },
+    "n10": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Código: hoje o card tem árvore, abas, busca e salvamento automático. Proposta: barra de atividades (arquivos, busca, git, problemas, quem está mexendo), estado git na árvore, breadcrumbs, mudanças do agente marcadas na margem com o card que fez, diff lado a lado, painel de problemas, barra de status (linha:coluna, linguagem, ramo, tokens) e paleta Ctrl P. O que só o Stellar tem: ver qual card e qual task tocam cada arquivo, ao vivo, e mandar um trecho para um agente.",
+      "w": 1440,
+      "x": 0,
+      "y": 7380
+    },
+    "n2": {
+      "fill": "gray",
+      "size": 24,
+      "text": "A faixa \"Agora\" muda de cor e de ação com o estado: aqui o gate falhou, mas a fatia mostra que o vermelho vem de arquivos fora do território (trabalho de outro card), então a ação sugerida é medir de novo, não devolver.",
+      "w": 1200,
+      "x": 1280,
+      "y": 860
+    },
+    "n3": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Substituída é terminal e não é falha: o topo leva direto para a task que a substituiu; o resto fica só leitura.",
+      "w": 1200,
+      "x": 2560,
+      "y": 860
+    },
+    "n4": {
+      "fill": "gray",
+      "size": 24,
+      "text": "HOJE: cada tile empilha chips soltos (fase, gate, card, deps, provider) e as colunas seguem o status do banco (a fazer, fazendo, concluídas, falhas, substituídas), que esconde a fase real.\n\nPROPOSTA:\n• Colunas pela FASE que importa para quem orquestra: Esperando (deps ou você) · Pronta · Rodando · Revisão · Concluída. Falhas e Substituídas viram trilhos recolhidos à direita, com contador; clicar abre a coluna. A Fila nunca quebra em duas linhas.\n• Faixa \"Precisa de você\" no topo: perguntas bloqueadas e aprovações, com a ação ali mesmo.\n• Tile com anatomia fixa: linha 1 = #id + tipo (+ tempo/rodada); linha 2 = título; linha 3 = UMA frase de estado com quem está nela. Gates só aparecem quando existem, e dizem de quem é o vermelho.\n• Vivo: ponto pulsando e barra de atividade só nos cards com agente trabalhando; a frase de estado vem do card (\"escrevendo testes\", \"lendo useTerminal.ts\"). Respeita reduzir movimento.\n• Rodapé com o pulso do board: agentes trabalhando, revisão, quanto espera você.",
+      "w": 760,
+      "x": 1520,
+      "y": 1420
+    },
+    "n5": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Gráficos: os 3 que já existem (vereditos por provider, rodadas até aprovar, tempo de ciclo) ganham período, legenda, números do topo e ligação com a task. Só vereditos atribuíveis entram na conta.",
+      "w": 1440,
+      "x": 0,
+      "y": 3620
+    },
+    "n6": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Sprints: a atual em destaque com progresso por fase; fechar mostra o que sobra aberto e para onde vai; renomear e excluir no menu de cada uma.",
+      "w": 1000,
+      "x": 1520,
+      "y": 3620
+    },
+    "n7": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Nova task: tudo que o create_task aceita, em seções (o que é, o contrato, quem faz, avançado), com a prévia \"O agente recebe\" ao lado e o aviso de território em conflito antes de criar. Mesmo padrão do formulário do time (tela 14), para a Fila local.",
+      "w": 1440,
+      "x": 2600,
+      "y": 3620
+    },
+    "n8": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Atalhos: organizados por ONDE valem (canvas, card selecionado, terminal, navegador e chat, janela). Teclas que mudam de efeito conforme o foco (Ctrl V, Ctrl D, Ctrl C) aparecem juntas com cada efeito explicado. Os novos estão marcados: Ctrl K paleta, Ctrl F achar card, Ctrl 0 ajustar à tela, Ctrl Shift D duplicar card (libera Ctrl D para o EOF do terminal) e Espaço + arrastar para mover o canvas sobre qualquer card, inclusive o navegador. O mesmo chip de tecla aparece nos tooltips da barra lateral e dos cards.",
+      "w": 1440,
+      "x": 0,
+      "y": 6220
+    },
+    "n9": {
+      "fill": "gray",
+      "size": 24,
+      "text": "Radial: anel de dentro = ferramentas (V P C S); anel de fora = o que criar, com número 1–8. Escolher Agente abre um arco com os providers e a cota de cada um; o centro diz o que vai acontecer. Abre com botão direito, segurando 0,5 s no fundo ou com Q; o card nasce onde o menu abriu.",
+      "w": 1440,
+      "x": 1520,
+      "y": 6220
+    },
+    "t1": {
+      "kind": "title1",
+      "maxW": 3760,
+      "text": "Detalhe da task no card Fila, organizado por pergunta",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "t2": {
+      "kind": "title1",
+      "maxW": 3760,
+      "text": "Card Fila: status organizados e vivos",
+      "w": 240,
+      "x": 0,
+      "y": 1120
+    },
+    "t3": {
+      "kind": "title1",
+      "maxW": 4040,
+      "text": "Gráficos, sprints e nova task",
+      "w": 240,
+      "x": 0,
+      "y": 2400
+    },
+    "t4": {
+      "kind": "title1",
+      "maxW": 3920,
+      "text": "Cards, barra lateral e atalhos no estilo novo",
+      "w": 240,
+      "x": 0,
+      "y": 3800
+    },
+    "n11": {
+      "x": 1520,
+      "y": 7380,
+      "w": 1440,
+      "size": 24,
+      "fill": "gray",
+      "text": "Configurações: duas partes, como hoje (aplicativo × este board), com busca. Mantém as páginas atuais (Providers, Atalhos, Chaves, Dispositivos, Sobre; Modo de trabalho = Maestro + Agentes) e acrescenta Conta e plano, Aparência, Desempenho, Regras e gates (board-context, gates isolados, gateToolPaths, orquestrador) e Time. Cada página diz se vale para o app ou só para o board."
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Review.dc.html",
+    "Superseded.dc.html",
+    "Fila.dc.html",
+    "Graficos.dc.html",
+    "Sprints.dc.html",
+    "CriarTask.dc.html",
+    "Cards.dc.html",
+    "Rail.dc.html",
+    "RailPassos.dc.html",
+    "Atalhos.dc.html",
+    "Radial.dc.html",
+    "Codigo.dc.html",
+    "Configuracoes.dc.html"
+  ],
+  "pages": [],
+  "title": "Stellar · Fila, cards, barra lateral e atalhos"
+}

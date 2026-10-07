@@ -25,3 +25,8 @@ As notas de cada tela estão em `prototipo/canvas.json` (`notes`).
 | 11 | Atalhos.dc.html | Atalhos por lugar, com os novos |
 | 12 | Radial.dc.html | Menu radial de criação |
 | 13 | Codigo.dc.html | Card de código (IDE) |
+| 14 | Configuracoes.dc.html | Configurações: aplicativo e este board |
+
+**Dados:** de onde vem cada campo das telas, o que falta no processo principal e as
+regras da frase de estado, da faixa "Agora" e de "Precisa de você" estão em
+[`DADOS.md`](DADOS.md). Leia antes de implementar a V2 e a V3.
