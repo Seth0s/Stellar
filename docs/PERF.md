@@ -1157,3 +1157,48 @@ não a página — e a conta antiga era 30 fps (o card mais alto da pilha) + 4×
 - O que sobra em A2 (≈45 pontos) é UM card animado em tela cheia a 30 fps sob o
   ponteiro: é o custo do quadro, e o caminho de textura de GPU que o eliminaria não
   existe nesta máquina (§15).
+
+## 17. Abrir o board vindo do segundo plano: tudo monta no mesmo instante (2026-10-07)
+
+Medido numa instância isolada (cópia descartável de `057e263`): 11 cards (8
+terminais bash com saída densa contínua, 2 navegadores fora da tela com animação, a
+Fila), board em segundo plano (S1) por 5 s, depois reaberto pela Home.
+
+| O que | Medido |
+|---|---|
+| Longtasks no renderer | 9 seguidas, de 64 a 142 ms, **739 ms** somados (TaskDuration +933 ms) |
+| CPU nos 6 s seguintes | 36% de um núcleo (UI 19%, GPU 10%, main 6%) |
+| Contextos WebGL | **16**, o limite do Chromium |
+| Terminais fora da tela | 80×24 |
+| Navegador fora da tela | canvas 300×150 vazio (preto) |
+| SQLite (store.list, connectors) | < 15 ms: não é o gargalo |
+
+Causas, com o código:
+
+1. **Montagem em bloco.** `loadBoard` faz um `setCards(restored)` só
+   (`useBoardStore.ts`), e o `App.tsx` monta todos os cards no mesmo quadro.
+2. **Históricos ao mesmo tempo.** Cada terminal reata o PTY retido e recebe o anel
+   (até 2 MB) no mesmo instante (`useTerminal.ts`, `index.ts`).
+3. **WebGL em massa.** Cada terminal visível compila os shaders do seu contexto
+   (`terminal-webgl.ts`); com muitos cards o renderer chega aos 16 contextos.
+4. **Navegador sem primeiro quadro.** Fora da tela, `shouldBrowserCardPaint` é falso
+   e o card não recebe nenhum quadro; sem esqueleto, fica preto.
+5. **80×24 fora da tela:** a confirmar. Depois da correção do replay (o xterm nasce
+   no tamanho do PTY), um terminal que nunca apareceu tem o próprio PTY em 80×24,
+   porque nunca houve fit. Então a saída já nasce a 80 colunas. A correção certa é o
+   PTY receber o tamanho do card na criação, e não depender do primeiro fit.
+
+Plano (task `63151a58`):
+
+- **Ordem:** o card com foco primeiro; depois os visíveis, do centro para fora;
+  depois os de fora da tela, quando ocioso ou ao chegarem perto da área visível.
+- **Teto de 2 montagens por vez**, intercaladas por quadro: cada fatia fica abaixo de
+  ~70 ms, a interface responde no meio e o pico de contextos WebGL cai.
+- **Esqueleto por card** no tamanho e posição reais desde o primeiro quadro: nada pula
+  de lugar e nenhum navegador aparece preto.
+- **Progresso real** na barra do topo ("N de M cards prontos"), que some ao terminar.
+- **Meta medida:** card com foco usável em < 100 ms; nenhuma longtask acima de 100 ms;
+  5 aberturas seguidas sem nenhum card quebrado.
+- **Fica para depois, com número:** liberar contexto WebGL de terminal fora da tela.
+  Em §11 isso não reduziu RAM, mas aqui o problema é o teto de 16 contextos, não a
+  memória.
