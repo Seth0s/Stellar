@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Detalhe da task v3.1 — sobre o card Fila</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.btn{min-height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#1c2230;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.tab{height:36px;padding:0 12px;border:0;background:transparent;color:#a3aabb;font:inherit;font-size:13.5px;cursor:pointer;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tab:hover{color:#e8eaf0}
+.on{color:#e8eaf0;border-bottom-color:#7d8cff}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.board{position:relative;width:1680px;height:860px;border-radius:16px;background-color:#07080d;background-image:radial-gradient(#1c2230 1px, transparent 1px);background-size:22px 22px;overflow:hidden}
+.frame{position:absolute;box-sizing:border-box;background:#0b0d12;border:1px solid #1d2230;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;color:#e8eaf0}
+.frameHead{height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1d2230;font-size:13px}
+.veil{position:absolute;inset:0;background:rgba(11,13,18,.38);border-radius:14px}
+.veilOpening{background:rgba(11,13,18,.2)}
+.veilExit{background:rgba(11,13,18,.12)}
+.modal{position:absolute;left:50%;top:50%;width:min(920px,92%);height:min(640px,88%);box-sizing:border-box;border-radius:16px;background:#161a24;border:1px solid #2a2f3d;display:flex;flex-direction:column;overflow:hidden;transform:translate(-50%,-50%);opacity:1;box-shadow:0 24px 60px rgba(0,0,0,.35)}
+.modalOpening{opacity:.62;transform:translate(-50%,-50%) scale(.96)}
+.modalExit{opacity:.28;transform:translate(-50%,-50%) scale(.98)}
+.modalEnter{animation:modalIn 200ms cubic-bezier(0.16, 1, 0.3, 1) both}
+.modalLeave{animation:modalOut 140ms cubic-bezier(0.16, 1, 0.3, 1) both}
+@keyframes modalIn{from{opacity:0;transform:translate(-50%,-50%) scale(.96)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+@keyframes modalOut{from{opacity:1;transform:translate(-50%,-50%) scale(1)}to{opacity:0;transform:translate(-50%,-50%) scale(.98)}}
+@media (prefers-reduced-motion: reduce){.modalEnter,.modalLeave{animation:none}}
+</style>
+</helmet>
+
+<div style="width: 1760px; height: 980px; box-sizing: border-box; background: #05060a; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 12px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <button type="button" class="{{scFechado}}" onClick="{{goFechado}}">Fechado</button>
+    <button type="button" class="{{scAbrindo}}" onClick="{{goAbrindo}}">Abrindo · keyframe</button>
+    <button type="button" class="{{scAberto}}" onClick="{{goAberto}}">Aberto</button>
+    <button type="button" class="{{scSaindo}}" onClick="{{goSaindo}}">Saindo · keyframe</button>
+    <button type="button" class="scene" onClick="{{playIn}}">Reproduzir entrada</button>
+    <button type="button" class="scene" onClick="{{playOut}}">Reproduzir saída</button>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
+  </div>
+
+  <div class="board" data-cena="{{phase}}" style="margin: 0 auto">
+    <div class="frame" style="left: 24px; top: 520px; width: 250px; height: 300px">
+      <div class="frameHead"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3fb68b"></span>Terminal · bash</div>
+      <div class="mono" style="padding: 12px; font-size: 12px; color: #8d94a6; line-height: 1.5">lucas@stellar<br>~/Projects/Stellar<br>$</div>
+    </div>
+
+    <div class="frame" style="left: 300px; top: 28px; width: 1040px; height: 800px">
+      <div class="frameHead"><span style="width: 8px; height: 8px; border-radius: 50%; background: #7d8cff"></span>Fila</div>
+      <div style="position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column">
+        <header style="padding: 12px 14px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #1d2230">
+          <h1 style="margin: 0; font-size: 16px; font-weight: 600">Fila</h1>
+          <a href="Sprints.dc.html" style="font-size: 13px; white-space: nowrap">Board 64 · Sprint Ciclo 2 ▾</a>
+          <span style="flex: 1"></span>
+          <span style="font-size: 12px; color: #8d94a6">Buscar por título ou #id</span>
+        </header>
+        <div style="flex: 1; display: flex; gap: 10px; padding: 12px; min-height: 0">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: #a3aabb">Esperando · 3</span>
+            <div style="border: 1px solid #1f2433; border-radius: 12px; background: #11141c; padding: 10px; font-size: 13px">R1 — Relay do celular</div>
+            <div style="border: 1px solid #1f2433; border-radius: 12px; background: #11141c; padding: 10px; font-size: 13px">R2 — Pareamento por QR</div>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: #a3aabb">Pronta · 4</span>
+            <button type="button" onClick="{{playIn}}" style="text-align: left; border: 1px solid #2b3460; border-radius: 12px; background: #11141c; color: inherit; font: inherit; padding: 10px; cursor: pointer">
+              <span style="display: block; font-size: 12px; color: #8d94a6">#511abc</span>
+              <span style="display: block; font-size: 13.5px; margin-top: 4px">Card que termina o turno sem report</span>
+            </button>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: #a3aabb">Rodando · 2</span>
+            <div style="border: 1px solid #2b3460; border-radius: 12px; background: #11141c; padding: 10px; font-size: 13px">IMPL · Claude escrevendo testes</div>
+          </div>
+        </div>
+
+        <sc-if value="{{showVeil}}" hint-placeholder-val="{{ false }}">
+          <div class="{{veilClass}}"></div>
+        </sc-if>
+        <sc-if value="{{showModal}}" hint-placeholder-val="{{ false }}">
+          <section role="dialog" aria-modal="true" aria-labelledby="ttl" class="{{modalClass}}">
+            <header style="padding: 16px 18px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #2a2f3d">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <span class="mono" style="font-size: 12.5px; color: #8d94a6">#511abcb2</span>
+                <span style="font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1d2333; color: #c3cbff">corrigir</span>
+                <span style="flex: 1"></span>
+                <button class="btn" type="button">Ações</button>
+                <button class="btn" type="button" aria-label="Fechar" onClick="{{playOut}}" style="width: 32px; padding: 0; justify-content: center">×</button>
+              </div>
+              <h1 id="ttl" style="margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3">Card que termina o turno sem report recebe o lembrete</h1>
+            </header>
+            <div style="margin: 12px 16px 0; padding: 10px 12px; border-radius: 12px; background: #1c2438; border: 1px solid #27305a; display: flex; align-items: center; gap: 12px">
+              <span style="width: 9px; height: 9px; border-radius: 50%; background: #7d8cff; flex: none"></span>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-size: 14px; font-weight: 600">IMPL · Claude está trabalhando</span>
+                <span style="font-size: 12.5px; color: #b3bad0">Última atividade há 40 s · contexto 34%</span>
+              </div>
+              <button class="btn" type="button">Abrir o card</button>
+            </div>
+            <nav aria-label="Seções" style="margin: 8px 16px 0; display: flex; gap: 4px; border-bottom: 1px solid #2a2f3d">
+              <button type="button" class="tab on">Resumo</button>
+              <button type="button" class="tab">Contrato</button>
+              <button type="button" class="tab">Relatórios <span style="font-size: 11.5px; color: #8d94a6">0</span></button>
+              <button type="button" class="tab">Mudanças <span style="font-size: 11.5px; color: #8d94a6">6</span></button>
+              <button type="button" class="tab">Trilha <span style="font-size: 11.5px; color: #8d94a6">9</span></button>
+            </nav>
+            <div style="flex: 1; min-height: 0; display: flex">
+              <main style="flex: 1; min-width: 0; overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; background: #161a24">
+                <section style="display: flex; flex-direction: column; gap: 6px">
+                  <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">O que é</h2>
+                  <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #d6dae6">Cards ainda esquecem o report. Quando um implementador termina o turno e não reporta, o próprio card recebe o lembrete; se continuar sem, o orquestrador é avisado uma vez.</p>
+                </section>
+                <section style="display: flex; flex-direction: column; gap: 8px">
+                  <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">O que foi medido</h2>
+                  <div style="border: 1px solid #2a2f3d; border-radius: 12px; padding: 12px; background: #11141c; font-size: 13px; color: #c9cede">Os gates rodam quando o report chegar, numa worktree isolada.</div>
+                </section>
+              </main>
+              <aside style="width: 220px; flex: none; border-left: 1px solid #2a2f3d; padding: 14px; background: #141820; display: flex; flex-direction: column; gap: 12px">
+                <h2 style="margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Quem está nela</h2>
+                <span style="font-size: 13px">IMPL · Claude</span>
+                <span style="font-size: 12px; color: #8d94a6">implementa · vivo · ctx 34%</span>
+                <h2 style="margin: 8px 0 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8d94a6">Depende de</h2>
+                <span style="font-size: 13px; color: #a3aabb">Nada</span>
+              </aside>
+            </div>
+          </section>
+        </sc-if>
+      </div>
+    </div>
+
+    <div class="frame" style="left: 1364px; top: 28px; width: 292px; height: 360px">
+      <div class="frameHead"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f0b25c"></span>Código</div>
+      <div class="mono" style="padding: 12px; font-size: 12px; color: #8d94a6; line-height: 1.6">src/main/idle.ts<br>src/renderer/TaskCard.tsx<br>tests/unit/idle.test.ts</div>
+    </div>
+    <div class="frame" style="left: 1364px; top: 408px; width: 292px; height: 220px">
+      <div class="frameHead"><span style="width: 8px; height: 8px; border-radius: 50%; background: #c9cede"></span>Nota</div>
+      <div style="padding: 12px; font-size: 13px; color: #c9cede; line-height: 1.45">O modal cobre a Fila, não o board.</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const fromHash = new URLSearchParams((location.hash || "").replace(/^#/, "")).get("cena");
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "fechado";
+    this.state = { phase: this.phaseOf(cena) };
+    this._timer = 0;
+  }
+
+  // The dialog is centered on the Fila card. The scrim covers that card only.
+  // Enter is 200ms, scale 0.96 to 1. Exit is 140ms, scale 1 to 0.98.
+  phaseOf(cena) {
+    if (cena === "abrindo" || cena === "aberto" || cena === "saindo") return cena;
+    return "fechado";
+  }
+
+  go(phase) {
+    return () => {
+      clearTimeout(this._timer);
+      this.setState({ phase });
+    };
+  }
+
+  renderVals() {
+    const phase = this.state.phase;
+    const sc = (k) => (phase === k ? "scene sceneOn" : "scene");
+    const labels = {
+      fechado: "Sem véu. Os cards ao redor seguem visíveis.",
+      abrindo: "Keyframe: escala 0.96, fade no meio dos 200ms.",
+      aberto: "Centralizado na Fila. Véu leve só nesse card. Painel #161a24.",
+      saindo: "Keyframe de saída: 140ms, escala 0.98, mais curto que a entrada.",
+    };
+    let modalClass = "modal";
+    let veilClass = "veil";
+    if (phase === "abrindo") {
+      modalClass = "modal modalOpening";
+      veilClass = "veil veilOpening";
+    } else if (phase === "saindo") {
+      modalClass = "modal modalExit";
+      veilClass = "veil veilExit";
+    }
+    return {
+      phase,
+      cenaLabel: labels[phase],
+      scFechado: sc("fechado"),
+      scAbrindo: sc("abrindo"),
+      scAberto: sc("aberto"),
+      scSaindo: sc("saindo"),
+      goFechado: this.go("fechado"),
+      goAbrindo: this.go("abrindo"),
+      goAberto: this.go("aberto"),
+      goSaindo: this.go("saindo"),
+      showVeil: phase !== "fechado",
+      showModal: phase !== "fechado",
+      modalClass,
+      veilClass,
+      playIn: () => {
+        clearTimeout(this._timer);
+        this.setState({ phase: "abrindo" });
+        this._timer = setTimeout(() => this.setState({ phase: "aberto" }), 200);
+      },
+      playOut: () => {
+        clearTimeout(this._timer);
+        this.setState({ phase: "saindo" });
+        this._timer = setTimeout(() => this.setState({ phase: "fechado" }), 140);
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>
