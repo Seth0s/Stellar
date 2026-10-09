@@ -1,11 +1,48 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
+import { decideFilesFooter } from "./card-footer-decision";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
-import type { ContentMatch, DirEntry, GitStatus } from "../../preload/index";
+import type { ContentMatch, DirEntry, GitAttribution, GitStatus, TaskBoardItem } from "../../preload/index";
 import { decideOpenFileOnDiskChange, type DiskConflictFlag } from "../../shared/file-reload-decision";
+import { STELLAR_PATHS_MIME, joinProjectPath } from "./terminal-drop-decision";
+import {
+  decideCodeFileBadge,
+  decideGitLetter,
+  gitLetterColor,
+} from "./code-file-icon-decision";
+import { folderColorAtDepth, folderFillAtDepth } from "./code-folder-color-decision";
+import { decideTerritoryEditWarn, pathInTerritory } from "./code-territory-warn-decision";
+import { decideAgentLineMarks, type AgentLineHunk } from "./code-line-attribution-decision";
+import { decideDiffHunkRangesForFile } from "./code-diff-hunk-lines-decision";
+import { decideFuzzyFileHits } from "./code-fuzzy-match-decision";
+import { decideBreadcrumbSymbol } from "./code-breadcrumb-symbol-decision";
+import { decideCodeProblems, type CodeProblem } from "./code-diagnostics-decision";
+import {
+  decideAgentDotByPath,
+  decideTerritoryRoster,
+} from "./code-territory-roster-decision";
+import styles from "./FilesCard.module.css";
+
+const PROVIDER_ACCENT: Record<string, string> = {
+  claude: "#f0883e",
+  anthropic: "#f0883e",
+  codex: "#5b8cff",
+  openai: "#5b8cff",
+  cursor: "#8fdcc0",
+  gemini: "#e89bc4",
+  bash: "#8d94a6",
+};
+
+function accentForProvider(provider: string | null | undefined): string {
+  if (!provider) return "#7d8cff";
+  return PROVIDER_ACCENT[provider.toLowerCase()] ?? "#7d8cff";
+}
+
+type SidePanel = "files" | "search" | "git" | "agents" | "problems";
+type BottomTab = "problems" | "output" | "timeline" | "send";
 
 // DESIGN-BACKLOG.md item 21, ponto 11 — `React.lazy`, not a plain static
 // import: CodeEditor.tsx pulls in CodeMirror's core (state/view/commands/
@@ -42,8 +79,9 @@ const SEARCH_DEBOUNCE_MS = 250;
 // per-viewer app preference, not per-board/per-file, matching "auto-
 // save" (item 48) and every other FilesCard preference so far.
 const TREE_WIDTH_KEY = "ac.filesTreeWidth";
-const TREE_WIDTH_DEFAULT = 220;
-const TREE_WIDTH_MIN = 140;
+/** Codigo-SPEC.md side panel width — narrower defaults truncate filenames. */
+const TREE_WIDTH_DEFAULT = 270;
+const TREE_WIDTH_MIN = 180;
 const TREE_WIDTH_MAX = 480;
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
@@ -200,6 +238,8 @@ type OpenTab = {
 type TreeActions = {
   onToggle: (path: string) => void;
   onSelectFile: (path: string) => void;
+  /** Absolute path for an in-app drag onto a terminal (or elsewhere). */
+  absolutePathFor: (relativePath: string) => string;
   renamingPath: string | null;
   renameDraft: string;
   setRenameDraft: (v: string) => void;
@@ -210,6 +250,10 @@ type TreeActions = {
   onDeleteClick: (path: string) => void;
   onCreateFile: (parentPath: string) => void;
   onCreateFolder: (parentPath: string) => void;
+  /** Relative path → porcelain status letter from `git.status`. */
+  gitByPath: Record<string, string>;
+  /** Relative path → accent color of a live agent touching the file. */
+  agentDotByPath: Record<string, string>;
 };
 
 function TreeNode({
@@ -230,17 +274,50 @@ function TreeNode({
   const isOpen = expanded.has(entry.path);
   const isRenaming = actions.renamingPath === entry.path;
   const isDeleteArmed = actions.deleteArmedPath === entry.path;
+  const badge = entry.isDir ? null : decideCodeFileBadge(entry.name);
+  const gitLetter = entry.isDir ? null : decideGitLetter(actions.gitByPath[entry.path]);
+  const agentDot = entry.isDir ? null : actions.agentDotByPath[entry.path];
+  const folderStroke = folderColorAtDepth(depth);
+  const folderFill = folderFillAtDepth(depth);
   return (
     <>
       <div
-        className={`files-node${selectedPath === entry.path ? " files-node-active" : ""}`}
-        style={{ paddingLeft: 6 + depth * 14 }}
+        className={`${styles.treeRow}${selectedPath === entry.path ? ` ${styles.treeSel}` : ""}`}
+        style={{ paddingLeft: 10 + depth * 14 }}
+        draggable={!entry.isDir && !isRenaming}
+        onDragStart={(e) => {
+          if (entry.isDir) return;
+          const abs = actions.absolutePathFor(entry.path);
+          e.dataTransfer.setData(STELLAR_PATHS_MIME, JSON.stringify([abs]));
+          e.dataTransfer.setData("text/plain", abs);
+          e.dataTransfer.effectAllowed = "copy";
+        }}
+        onClick={() => !isRenaming && (entry.isDir ? actions.onToggle(entry.path) : actions.onSelectFile(entry.path))}
       >
-        <span
-          className="files-node-main"
-          onClick={() => !isRenaming && (entry.isDir ? actions.onToggle(entry.path) : actions.onSelectFile(entry.path))}
-        >
-          <Icon name={fileIconFor(entry.name, entry.isDir, isOpen)} size={14} color={entry.isDir ? undefined : fileColorFor(entry.name)} />
+        {entry.isDir ? (
+          <span className={styles.chev} aria-hidden="true">
+            {isOpen ? "▾" : "▸"}
+          </span>
+        ) : (
+          <span className={styles.chev} aria-hidden="true" />
+        )}
+        {entry.isDir ? (
+          <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">
+            <path
+              d="M1 2.5a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"
+              fill={folderFill}
+              stroke={folderStroke}
+              strokeWidth="1.2"
+            />
+          </svg>
+        ) : (
+          badge && (
+            <span className={styles.langBadge} style={{ background: badge.background, color: badge.color }} aria-hidden="true">
+              {badge.text}
+            </span>
+          )
+        )}
+        <span className="files-node-main" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
           {isRenaming ? (
             <input
               className="files-node-rename-input"
@@ -258,8 +335,14 @@ function TreeNode({
             <span className="files-node-name">{entry.name}</span>
           )}
         </span>
+        {!isRenaming && agentDot && <span className={styles.agentDot} style={{ background: agentDot }} aria-hidden="true" />}
+        {!isRenaming && gitLetter && (
+          <span className={styles.gitLetter} style={{ color: gitLetterColor(gitLetter) }}>
+            {gitLetter}
+          </span>
+        )}
         {!isRenaming && (
-          <span className="files-node-actions">
+          <span className="files-node-actions" onClick={(e) => e.stopPropagation()}>
             {entry.isDir && (
               <>
                 <button
@@ -324,10 +407,15 @@ function TreeNode({
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */
 function FilesCardInner({
+  cardId,
   rect,
   zoom,
   zIndex,
   root,
+  folderCardCount = 0,
+  boardTasks = [],
+  cardProviders = {},
+  onFocusCard,
   interactionMode,
   selected,
   reflowing,
@@ -346,10 +434,17 @@ function FilesCardInner({
   panX,
   panY,
 }: {
+  cardId: string;
   rect: Rect;
   zoom: number;
   zIndex: number;
   root: string;
+  folderCardCount?: number;
+  /** Live Fila tasks for this board — territory / cardAlive only. */
+  boardTasks?: TaskBoardItem[];
+  /** cardId → provider (for accent colors). */
+  cardProviders?: Record<string, string>;
+  onFocusCard?: (cardId: string) => void;
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
@@ -388,7 +483,9 @@ function FilesCardInner({
   const tooLarge = activeTab?.tooLarge ?? false;
   const [error, setError] = useState<string | null>(null);
   // DESIGN-BACKLOG.md item 48.
-  const [autoSave, setAutoSave] = useState(() => localStorage.getItem(AUTOSAVE_KEY) === "1");
+  // Autosave is silent (SPEC status bar shows "salvo"; no chrome checkbox).
+  // Opt-out only via localStorage key set to "0".
+  const [autoSave] = useState(() => localStorage.getItem(AUTOSAVE_KEY) !== "0");
 
   // DESIGN-BACKLOG.md item 13 — quick actions state (rename/delete/create).
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -441,6 +538,46 @@ function FilesCardInner({
   // root) — this card's header shows nothing in either "still loading"
   // or "not a repo" case, only once a branch name is actually known.
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [attribution, setAttribution] = useState<GitAttribution | null>(null);
+  const [sidePanel, setSidePanel] = useState<SidePanel>("files");
+  const [bottomTab, setBottomTab] = useState<BottomTab>("problems");
+  const [diffOn, setDiffOn] = useState(false);
+  const [headText, setHeadText] = useState<string | null>(null);
+  const [goToOpen, setGoToOpen] = useState(false);
+  const [goToQuery, setGoToQuery] = useState("");
+  const [goToHits, setGoToHits] = useState<Array<{ path: string; name: string; score: number }>>([]);
+  const [goToIndex, setGoToIndex] = useState(0);
+  const [territoryWarn, setTerritoryWarn] = useState<null | { path: string; agents: Array<{ cardId: string; label: string | null }> }>(null);
+  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
+  const [problems, setProblems] = useState<CodeProblem[]>([]);
+  /** Empty hint vs "no checker in this project" after an on-save diagnose. */
+  const [problemsHint, setProblemsHint] = useState<"idle" | "no-checker" | "failed">("idle");
+  const [agentHunks, setAgentHunks] = useState<AgentLineHunk[]>([]);
+  const [outputLog, setOutputLog] = useState<string>("");
+
+  const rosterColors = useMemo(
+    () =>
+      Object.entries(cardProviders).map(([cardId, provider]) => ({
+        cardId,
+        color: accentForProvider(provider),
+      })),
+    [cardProviders],
+  );
+
+  const territoryAgents = useMemo(
+    () =>
+      decideTerritoryRoster(
+        boardTasks.map((task) => ({
+          id: task.id,
+          status: task.status,
+          cardAlive: task.cardAlive,
+          territory: task.territory,
+          cards: task.cards,
+        })),
+        rosterColors,
+      ),
+    [boardTasks, rosterColors],
+  );
 
   // DESIGN-BACKLOG.md item 49/51 — filename OR full-text search
   // (`searchMode`). A non-empty `searchQuery` swaps the tree view for a
@@ -452,6 +589,45 @@ function FilesCardInner({
   const [searchResults, setSearchResults] = useState<DirEntry[]>([]);
   const [contentResults, setContentResults] = useState<ContentMatch[]>([]);
   const [searching, setSearching] = useState(false);
+
+  const gitByPath = useMemo(() => {
+    const out: Record<string, string> = {};
+    if (gitStatus?.repo) {
+      for (const e of gitStatus.entries) out[e.path] = e.status;
+    }
+    return out;
+  }, [gitStatus]);
+
+  const agentDotByPath = useMemo(() => {
+    const out: Record<string, string> = {};
+    // Territory of running agents wins (live roster).
+    const fromTerritory = decideAgentDotByPath(
+      territoryAgents,
+      rosterColors,
+      [
+        ...(attribution?.files ?? []).map((f) => f.path),
+        ...(gitStatus?.repo ? gitStatus.entries.map((e) => e.path) : []),
+        ...Object.keys(kids).flatMap((dir) => (kids[dir] ?? []).filter((e) => !e.isDir).map((e) => e.path)),
+      ],
+      pathInTerritory,
+    );
+    Object.assign(out, fromTerritory);
+    // Declared attribution fills gaps with the declaring card's accent.
+    for (const f of attribution?.files ?? []) {
+      if (out[f.path]) continue;
+      if (f.state !== "declared" || f.declared.length === 0) continue;
+      const cardId = f.declared[0]!.cardId;
+      out[f.path] = accentForProvider(cardProviders[cardId]) || "#f0883e";
+    }
+    return out;
+  }, [attribution, territoryAgents, rosterColors, gitStatus, kids, cardProviders]);
+
+  const agentLineMarks = useMemo(() => decideAgentLineMarks(agentHunks), [agentHunks]);
+
+  const breadcrumbSymbol = useMemo(() => {
+    if (!activePath || content == null) return null;
+    return decideBreadcrumbSymbol(content, cursorPos.line);
+  }, [activePath, content, cursorPos.line]);
 
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -488,6 +664,11 @@ function FilesCardInner({
       setGitStatus(git);
     } catch {
       // Ignore git status errors
+    }
+    try {
+      setAttribution(await window.git.attribution(root));
+    } catch {
+      setAttribution(null);
     }
 
     // Open-file policy: never overwrite a dirty buffer. Clean tabs
@@ -705,15 +886,120 @@ function FilesCardInner({
 
   function save() {
     if (!activePath || content === null) return;
-    window.fs.write(root, activePath, content).then(
-      () => updateTab(activePath, { dirty: false, diskConflict: null }),
+    const path = activePath;
+    const body = content;
+    window.fs.write(root, path, body).then(
+      async () => {
+        updateTab(path, { dirty: false, diskConflict: null });
+        try {
+          const result = await window.fs.diagnoseProject(root, path);
+          if (result.status === "no-checker") {
+            setProblems([]);
+            setProblemsHint("no-checker");
+            setOutputLog((prev) => `${prev ? `${prev}\n` : ""}[diagnose] no checker in project`.slice(-4000));
+            return;
+          }
+          if (result.status === "failed") {
+            setProblemsHint("failed");
+            setOutputLog((prev) =>
+              `${prev ? `${prev}\n` : ""}[diagnose] failed: ${result.detail}`.slice(-4000),
+            );
+            return;
+          }
+          const next = decideCodeProblems(result.diagnostics);
+          setProblems(next);
+          setProblemsHint("idle");
+          setOutputLog((prev) =>
+            `${prev ? `${prev}\n` : ""}[diagnose] ${path}: ${next.length} problem(s)`.slice(-4000),
+          );
+        } catch (e) {
+          setProblemsHint("failed");
+          setOutputLog((prev) => `${prev ? `${prev}\n` : ""}[diagnose] ${String(e)}`.slice(-4000));
+        }
+      },
       (e) => setError(String(e)),
     );
   }
 
+  // HEAD text for side-by-side diff + agent line marks from declared
+  // attribution ∩ working-tree diff hunks (no invented authorship).
   useEffect(() => {
-    localStorage.setItem(AUTOSAVE_KEY, autoSave ? "1" : "0");
-  }, [autoSave]);
+    if (!activePath) {
+      setHeadText(null);
+      setAgentHunks([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const head = await window.git.showHead(root, activePath);
+        if (!cancelled) setHeadText(head);
+      } catch {
+        if (!cancelled) setHeadText(null);
+      }
+      try {
+        const patch = await window.git.diffHead(root, activePath);
+        const ranges = decideDiffHunkRangesForFile(patch, activePath);
+        const declared = (attribution?.files ?? []).find((f) => f.path === activePath && f.state === "declared");
+        const owner = declared?.declared[0];
+        const territoryHit = territoryAgents.find(
+          (a) => a.running && a.territory.some((p) => pathInTerritory(activePath, p)),
+        );
+        const cardIdForMark = owner?.cardId ?? territoryHit?.cardId;
+        if (!cardIdForMark || ranges.length === 0) {
+          if (!cancelled) setAgentHunks([]);
+          return;
+        }
+        const color = accentForProvider(cardProviders[cardIdForMark]);
+        const task = boardTasks.find((t) => t.cards.some((c) => c.cardId === cardIdForMark));
+        const hunks: AgentLineHunk[] = ranges.map((r) => ({
+          ...r,
+          cardId: cardIdForMark,
+          color,
+          label: owner?.label ?? territoryHit?.label ?? cardIdForMark,
+          taskId: task?.id ?? null,
+          taskTitle: task?.promptPreview?.slice(0, 40) ?? null,
+          at: owner?.updatedAt ?? task?.updatedAt ?? null,
+        }));
+        if (!cancelled) setAgentHunks(hunks);
+      } catch {
+        if (!cancelled) setAgentHunks([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, root, attribution, territoryAgents, cardProviders, boardTasks]);
+
+  useEffect(() => {
+    const q = goToQuery.trim();
+    if (!goToOpen || !q) {
+      setGoToHits([]);
+      setGoToIndex(0);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void window.fs.searchNames(root, q).then(
+        (entries) => {
+          if (cancelled) return;
+          const hits = decideFuzzyFileHits(
+            q,
+            entries.filter((e) => !e.isDir).map((e) => ({ path: e.path, name: e.name })),
+          );
+          setGoToHits(hits);
+          setGoToIndex(0);
+        },
+        () => {
+          if (!cancelled) setGoToHits([]);
+        },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [goToQuery, goToOpen, root]);
 
   // DESIGN-BACKLOG.md item 48 — debounced, not "save on every keystroke":
   // a save on each of possibly hundreds of keystrokes/sec (fast typing,
@@ -849,9 +1135,19 @@ function FilesCardInner({
     }
   }
 
+  function requestSelectFile(path: string, jumpToLine?: number) {
+    const decision = decideTerritoryEditWarn(path, territoryAgents);
+    if (decision.action === "warn") {
+      setTerritoryWarn({ path, agents: decision.agents });
+      return;
+    }
+    selectFile(path, jumpToLine);
+  }
+
   const treeActions: TreeActions = {
     onToggle: toggle,
-    onSelectFile: selectFile,
+    onSelectFile: requestSelectFile,
+    absolutePathFor: (relativePath) => joinProjectPath(root, relativePath),
     renamingPath,
     renameDraft,
     setRenameDraft,
@@ -862,12 +1158,33 @@ function FilesCardInner({
     onDeleteClick,
     onCreateFile: (parentPath) => startCreate(parentPath, "file"),
     onCreateFolder: (parentPath) => startCreate(parentPath, "folder"),
+    gitByPath,
+    agentDotByPath,
   };
+
+  const sideTitles: Record<SidePanel, string> = {
+    files: t("files.sideFiles"),
+    search: t("files.sideSearch"),
+    git: t("files.sideGit"),
+    agents: t("files.sideAgents"),
+    problems: t("files.sideProblems"),
+  };
+  const changedCount = gitStatus?.repo ? gitStatus.entries.length : 0;
+  const agentCount = territoryAgents.filter((a) => a.running).length;
+  const problemCount = problems.length;
+  const repoStatus = gitStatus?.repo ? gitStatus : null;
+  const filesFooter = decideFilesFooter({
+    repo: repoStatus !== null,
+    branch: repoStatus?.branch ?? "",
+    changedEntries: repoStatus?.entries.length ?? 0,
+    folderCardCount,
+  });
 
   return (
     <CardFrame
       className="files-card"
       kind="files"
+      cardId={cardId}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -888,32 +1205,221 @@ function FilesCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      headerContext={activePath ? parentOf(activePath) || root : root}
       headerContent={
         <>
-          <span className="card-head-label">
-            <Icon name="files" size={14} />
+          <span className={styles.headTools} data-no-drag>
+            <label className={styles.headGoto} onPointerDown={(e) => e.stopPropagation()}>
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <circle cx="6" cy="6" r="4.5" />
+                <path d="M9.5 9.5L13 13" />
+              </svg>
+              <input
+                aria-label={t("files.gotoTitle")}
+                placeholder={t("files.gotoPlaceholder")}
+                value={goToOpen ? goToQuery : ""}
+                readOnly={!goToOpen}
+                onFocus={() => {
+                  setGoToOpen(true);
+                  setGoToQuery("");
+                }}
+                onChange={(e) => {
+                  setGoToOpen(true);
+                  setGoToQuery(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setGoToOpen(false);
+                    setGoToQuery("");
+                    (e.target as HTMLInputElement).blur();
+                  }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setGoToIndex((i) => Math.min(i + 1, Math.max(0, goToHits.length - 1)));
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setGoToIndex((i) => Math.max(0, i - 1));
+                  }
+                  if (e.key === "Enter") {
+                    const hit = goToHits[goToIndex] ?? (goToQuery.trim() ? { path: goToQuery.trim() } : null);
+                    if (hit) {
+                      requestSelectFile(hit.path);
+                      setGoToOpen(false);
+                      setGoToQuery("");
+                    }
+                  }
+                }}
+              />
+            </label>
+            {agentCount > 0 && (
+              <span className={styles.headAgentsPill} title={t("files.agentsWorkingHere", { count: String(agentCount) })}>
+                <span className={styles.headAgentsDot} aria-hidden="true" />
+                {t("files.agentsWorkingHere", { count: String(agentCount) })}
+              </span>
+            )}
           </span>
           <span className="card-head-actions">
-            <button onClick={onClose}>
+            <button type="button" onClick={onClose} aria-label={t("common.close")}>
               <Icon name="close" size={12} />
             </button>
           </span>
         </>
       }
       footerContent={
-        <span className="files-card-foot-row">
-          <span className="files-card-foot-text">{root}</span>
-          {gitStatus?.repo && (
-            <span className="files-card-branch" title={t("files.branchTitle", { branch: gitStatus.branch })}>
-              <Icon name="changes" size={11} />
-              {gitStatus.branch}
+        <span className={`card-foot-row ${styles.footExtras} files-card-foot-row`}>
+          {filesFooter.branch !== null && (
+            <span className="files-card-branch" title={t("files.branchTitle", { branch: filesFooter.branch })}>
+              {filesFooter.branch}
             </span>
+          )}
+          {filesFooter.changedCount !== null && (
+            <span className={styles.footDirty} data-tone="warn">
+              {t("files.changedCount", { count: String(filesFooter.changedCount) })}
+            </span>
+          )}
+          {problemCount > 0 && (
+            <span className={styles.footErr}>
+              ✕ {problems.filter((p) => p.severity === "error").length} ! {problems.filter((p) => p.severity === "warning").length}
+            </span>
+          )}
+          {activePath && mediaKind(activePath) !== "image" && (
+            <span>
+              {t("files.lnCol", { line: String(cursorPos.line), col: String(cursorPos.col) })}
+            </span>
+          )}
+          {activePath && <span>{t("files.indentSpaces")}</span>}
+          {activePath && <span>UTF-8</span>}
+          {activePath && <span>{ext(activePath).replace(".", "").toUpperCase() || t("files.langText")}</span>}
+          {activePath && mediaKind(activePath) !== "image" && content !== null && (
+            <span>{t("files.tokensApprox", { count: formatTokenCount(estimateTokens(content)) })}</span>
+          )}
+          {activePath && (
+            <span className={dirty ? styles.footDirty : styles.footOk}>
+              {dirty ? t("files.unsaved") : t("files.saved")}
+            </span>
+          )}
+          {filesFooter.folderCardCount !== null && (
+            <span>{t("files.folderCards", { count: String(filesFooter.folderCardCount) })}</span>
           )}
         </span>
       }
     >
-      <div className="files-card-body">
-        <div className="files-tree-panel" style={{ width: treeWidth }}>
+      <div className={styles.ide} onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+          e.preventDefault();
+          setGoToOpen(true);
+          setGoToQuery("");
+        }
+      }}>
+        {goToOpen && (
+          <div className={styles.goTo} role="dialog" aria-label={t("files.gotoTitle")}>
+            <input
+              className={styles.searchInput}
+              autoFocus
+              placeholder={t("files.gotoPlaceholder")}
+              value={goToQuery}
+              onChange={(e) => setGoToQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setGoToOpen(false);
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setGoToIndex((i) => Math.min(i + 1, Math.max(0, goToHits.length - 1)));
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setGoToIndex((i) => Math.max(0, i - 1));
+                }
+                if (e.key === "Enter") {
+                  const hit = goToHits[goToIndex] ?? (goToQuery.trim() ? { path: goToQuery.trim() } : null);
+                  if (hit) {
+                    requestSelectFile(hit.path);
+                    setGoToOpen(false);
+                  }
+                }
+              }}
+            />
+            {goToHits.map((hit, i) => (
+              <button
+                key={hit.path}
+                type="button"
+                className={`${styles.goToHit}${i === goToIndex ? ` ${styles.goToHitOn}` : ""}`}
+                onMouseEnter={() => setGoToIndex(i)}
+                onClick={() => {
+                  requestSelectFile(hit.path);
+                  setGoToOpen(false);
+                }}
+              >
+                <span>{hit.name}</span>
+                <span className={styles.goToPath}>{parentOf(hit.path) || "/"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {territoryWarn && (
+          <div className={styles.warnOverlay}>
+            <div className={styles.warnDialog} role="alertdialog">
+              <strong>{t("files.territoryWarnTitle")}</strong>
+              <span>
+                {t("files.territoryWarnBody", {
+                  agents: territoryWarn.agents.map((a) => a.label ?? a.cardId).join(", "),
+                  path: territoryWarn.path,
+                })}
+              </span>
+              <span style={{ display: "flex", gap: 6 }}>
+                <button type="button" className={styles.btn} onClick={() => setTerritoryWarn(null)}>
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className={styles.btn}
+                  onClick={() => {
+                    const p = territoryWarn.path;
+                    setTerritoryWarn(null);
+                    selectFile(p);
+                  }}
+                >
+                  {t("files.territoryWarnEdit")}
+                </button>
+              </span>
+            </div>
+          </div>
+        )}
+        <div className={styles.row}>
+          <nav className={styles.rail} aria-label="Painéis">
+            {(
+              [
+                ["files", t("files.railFiles"), null],
+                ["search", t("files.railSearch"), null],
+                ["git", t("files.railGit"), changedCount || null],
+                ["agents", t("files.railAgents"), agentCount || null],
+                ["problems", t("files.railProblems"), problemCount || null],
+              ] as const
+            ).map(([id, label, count]) => (
+              <button
+                key={id}
+                type="button"
+                className={`${styles.railBtn}${sidePanel === id ? ` ${styles.railOn}` : ""}`}
+                aria-label={label}
+                onClick={() => {
+                  setSidePanel(id);
+                  if (id === "search") setSearchMode("content");
+                }}
+              >
+                <Icon
+                  name={id === "files" ? "files" : id === "search" ? "findCard" : id === "git" ? "changes" : id === "agents" ? "terminal" : "devTools"}
+                  size={18}
+                />
+                {count !== null && count > 0 && (
+                  <span className={`${styles.badge}${id === "problems" ? ` ${styles.badgeDanger}` : ""}`}>{count}</span>
+                )}
+              </button>
+            ))}
+          </nav>
+          <aside className={styles.side} aria-label={sideTitles[sidePanel]} style={{ width: treeWidth }}>
+            <div className={styles.sideTitle}>{sideTitles[sidePanel]}</div>
+            <div className={styles.sideBody}>
+        <div className="files-tree-panel" style={{ width: "100%", border: 0 }}>
           <div className="files-tree-toolbar">
             <button title={t("files.newFileRoot")} onClick={() => startCreate("", "file")}>
               <Icon name="newFile" size={13} />
@@ -1031,7 +1537,8 @@ function FilesCardInner({
             </div>
           ) : (
             <div className="files-tree">
-              {(kids[""] ?? []).map((entry) => (
+              {sidePanel === "files" &&
+                (kids[""] ?? []).map((entry) => (
                 <TreeNode
                   key={entry.path}
                   entry={entry}
@@ -1044,12 +1551,90 @@ function FilesCardInner({
               ))}
             </div>
           )}
+          {sidePanel === "files" && (
+            <div className={styles.legend}>
+              <span>{t("files.legendFolders")}</span>
+              <span>{t("files.legendFiles")}</span>
+            </div>
+          )}
+          {sidePanel === "git" && (
+            <div className="mono" style={{ display: "flex", flexDirection: "column", padding: "0 0 8px" }}>
+              <div style={{ padding: "0 10px 8px", fontSize: 12, color: "#c9cede" }}>
+                {filesFooter.branch ?? "—"} · {changedCount} alterados
+              </div>
+              {(attribution?.files ?? []).map((f) => (
+                <div
+                  key={f.path}
+                  className={styles.treeRow}
+                  onClick={() => requestSelectFile(f.path)}
+                >
+                  <span style={{ flex: 1 }}>{nameOf(f.path)}</span>
+                  <span style={{ color: "#8d94a6", fontSize: 11 }}>{f.state}</span>
+                </div>
+              ))}
+              {gitStatus?.repo &&
+                gitStatus.entries.map((e) => (
+                  <div key={e.path} className={styles.treeRow} onClick={() => requestSelectFile(e.path)}>
+                    <span style={{ flex: 1 }}>{nameOf(e.path)}</span>
+                    <span style={{ color: "#3fb68b" }}>+{e.insertions}</span>
+                    <span style={{ color: "#e0846f" }}>−{e.deletions}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+          {sidePanel === "agents" && (
+            <div style={{ padding: "0 0 10px", display: "flex", flexDirection: "column", gap: 8 }}>
+              {territoryAgents.filter((a) => a.running).length === 0 && (
+                <span style={{ padding: "0 10px", fontSize: 12, color: "#8d94a6" }}>{t("files.agentsEmpty")}</span>
+              )}
+              {territoryAgents
+                .filter((a) => a.running)
+                .map((a) => (
+                  <div key={a.cardId} className={styles.agentCard}>
+                    <span style={{ fontSize: 13 }}>{a.label ?? a.cardId}</span>
+                    <span className="mono" style={{ fontSize: 11.5, color: "#8d94a6" }}>
+                      {t("files.agentsTerritory", {
+                        paths: `${a.territory.slice(0, 4).join(", ")}${a.territory.length > 4 ? "…" : ""}`,
+                      })}
+                    </span>
+                  </div>
+                ))}
+              <span style={{ padding: "0 10px", fontSize: 12, color: "#8d94a6", lineHeight: 1.5 }}>
+                {t("files.agentsNote")}
+              </span>
+            </div>
+          )}
+          {sidePanel === "problems" && (
+            <div className="mono" style={{ display: "flex", flexDirection: "column" }}>
+              {problems.length === 0 && (
+                <span style={{ padding: "6px 10px", fontSize: 12, color: "#8d94a6" }}>
+                  {problemsHint === "no-checker"
+                    ? t("files.problemsNoChecker")
+                    : problemsHint === "failed"
+                      ? t("files.problemsFailed")
+                      : t("files.problemsHint")}
+                </span>
+              )}
+              {problems.map((p, i) => (
+                <div
+                  key={`${p.path}:${p.line}:${i}`}
+                  className={styles.treeRow}
+                  style={{ color: p.severity === "error" ? "#f2a093" : "#f0b25c" }}
+                  onClick={() => requestSelectFile(p.path, p.line)}
+                >
+                  {p.severity === "error" ? "✕" : "!"} {nameOf(p.path)}:{p.line} · {p.message}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+            </div>
+          </aside>
         {/* DESIGN-BACKLOG.md item 53 — drag handle to resize the tree
             panel; `.files-tree-panel`'s width used to be a hardcoded
             220px with no way to widen/narrow it at all. */}
         <div className="files-tree-resize" onPointerDown={startTreeResize} />
-        <div className="files-editor">
+        <div className={`${styles.main} files-editor`}>
           {/* DESIGN-BACKLOG.md item 50 — horizontal tab bar, one pill per
               open file (insertion order). A dirty tab shows a dot instead
               of its close × until closing is explicitly confirmed
@@ -1057,64 +1642,74 @@ function FilesCardInner({
               a tree row) — silently discarding an unsaved edit here would
               be a real regression this feature must not introduce. */}
           {openTabs.length > 0 && (
-            <div className="files-tabs-bar">
-              {openTabs.map((tab) => (
-                <div
-                  key={tab.path}
-                  className={`files-tab${tab.path === activePath ? " files-tab-active" : ""}`}
-                  title={tab.path}
-                  onClick={() => setActivePath(tab.path)}
-                >
-                  <Icon name={fileIconFor(nameOf(tab.path), false, false)} size={12} color={fileColorFor(tab.path)} />
-                  <span className="files-tab-name">{nameOf(tab.path)}</span>
-                  <button
-                    className={`files-tab-close${closeArmedPath === tab.path ? " files-tab-close-armed" : ""}`}
-                    title={
-                      closeArmedPath === tab.path
-                        ? t("files.closeDiscard")
-                        : tab.dirty
-                          ? t("files.closeUnsaved")
-                          : t("files.closeTab")
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeTab(tab.path);
-                    }}
+            <div className={styles.tabs} role="tablist">
+              {openTabs.map((tab) => {
+                const tabBadge = decideCodeFileBadge(tab.path);
+                return (
+                  <span
+                    key={tab.path}
+                    role="tab"
+                    aria-selected={tab.path === activePath}
+                    className={`${styles.tab}${tab.path === activePath ? ` ${styles.tabOn}` : ""}`}
+                    title={tab.path}
+                    onClick={() => setActivePath(tab.path)}
                   >
-                    {tab.dirty && closeArmedPath !== tab.path ? <span className="files-tab-dirty-dot" /> : <Icon name="close" size={10} />}
-                  </button>
-                </div>
-              ))}
+                    <span className={styles.langBadge} style={{ width: 14, height: 14, fontSize: 6.5, background: tabBadge.background, color: tabBadge.color }}>
+                      {tabBadge.text}
+                    </span>
+                    <span className="files-tab-name">{nameOf(tab.path)}</span>
+                    {agentDotByPath[tab.path] && <span className={styles.agentDot} style={{ background: agentDotByPath[tab.path] }} />}
+                    {tab.dirty && !agentDotByPath[tab.path] && <span className={styles.agentDot} style={{ background: "#e8eaf0" }} />}
+                    <button
+                      type="button"
+                      className={`files-tab-close${closeArmedPath === tab.path ? " files-tab-close-armed" : ""}`}
+                      title={
+                        closeArmedPath === tab.path
+                          ? t("files.closeDiscard")
+                          : tab.dirty
+                            ? t("files.closeUnsaved")
+                            : t("files.closeTab")
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(tab.path);
+                      }}
+                    >
+                      {tab.dirty && closeArmedPath !== tab.path ? <span className="files-tab-dirty-dot" /> : <Icon name="close" size={10} />}
+                    </button>
+                  </span>
+                );
+              })}
+              <span className={styles.tabActions}>
+                <button type="button" className={styles.btn} onClick={() => setDiffOn((v) => !v)}>
+                  {diffOn ? t("files.diffClose") : t("files.diffWithHead")}
+                </button>
+                <button type="button" className={styles.btn} disabled title={t("files.splitSoon")}>
+                  {t("files.split")}
+                </button>
+              </span>
             </div>
           )}
           {activePath && (
-            <div className="files-editor-head">
-              <span className="files-editor-head-path">
-                <span className="files-editor-head-path-text">{activePath}</span>
-                {mediaKind(activePath) !== "image" && content !== null && (
-                  <span className="files-editor-token-count" title={t("files.tokenEstimate")}>
-                    {t("files.tokensApprox", { count: formatTokenCount(estimateTokens(content)) })}
-                  </span>
-                )}
-              </span>
-              <div className="files-editor-head-actions">
-                {mediaKind(activePath) === "markdown" && (
-                  <button onClick={() => updateTab(activePath, { view: view === "code" ? "preview" : "code" })}>
-                    {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
-                  </button>
-                )}
-                {mediaKind(activePath) !== "image" && (
-                  <label className="files-editor-autosave-toggle" title={t("files.autosave")}>
-                    <input type="checkbox" checked={autoSave} onChange={(e) => setAutoSave(e.target.checked)} />
-                    {t("files.autoSaveLabel")}
-                  </label>
-                )}
-                {mediaKind(activePath) !== "image" && (
-                  <button disabled={!dirty} onClick={save}>
-                    {autoSave && dirty ? t("common.saving") : t("common.save")}
-                  </button>
-                )}
-              </div>
+            <div className={styles.crumbs}>
+              {activePath.split("/").map((part, i, parts) => (
+                <span key={`${part}-${i}`}>
+                  {i > 0 ? " › " : ""}
+                  {i === parts.length - 1 ? <span className={styles.crumbSym}>{part}</span> : part}
+                </span>
+              ))}
+              {breadcrumbSymbol && (
+                <>
+                  <span> › </span>
+                  <span className={styles.crumbSym}>{breadcrumbSymbol}</span>
+                </>
+              )}
+              <span style={{ flex: 1 }} />
+              {mediaKind(activePath) === "markdown" && (
+                <button type="button" className={styles.btn} onClick={() => updateTab(activePath, { view: view === "code" ? "preview" : "code" })}>
+                  {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
+                </button>
+              )}
             </div>
           )}
           {tooLarge && <div className="files-editor-msg">{t("files.tooLarge")}</div>}
@@ -1139,6 +1734,8 @@ function FilesCardInner({
               />
             )
           )}
+          <div className={styles.editorRow}>
+            <div className={styles.editorPane}>
           {activePath &&
             !tooLarge &&
             mediaKind(activePath) !== "image" &&
@@ -1146,27 +1743,118 @@ function FilesCardInner({
             (content === null ? (
               <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
-              // DESIGN-BACKLOG.md item 21, ponto 11 — real editor
-              // (CodeEditor.tsx, CodeMirror 6) instead of a bare
-              // `<textarea>`: line numbers, syntax highlight per
-              // extension, indentation guides, code folding. Keyed by
-              // `activePath` so switching files/tabs always mounts a
-              // fresh editor instance (see CodeEditor.tsx's own doc
-              // comment on why `value` is read only once, not kept in
-              // sync live — item 50: this is exactly what makes each
-              // tab's CodeMirror state independent of the others).
               <Suspense fallback={<div className="files-editor-msg">{t("files.loadingEditor")}</div>}>
                 <CodeEditor
                   key={`${activePath}:${activeTab?.contentEpoch ?? 0}`}
                   value={content}
                   filename={activePath}
                   jumpToLine={activeTab?.pendingJumpLine}
+                  agentLineMarks={agentLineMarks}
+                  onAgentGutterAction={(action, mark) => {
+                    if (action === "open-card") onFocusCard?.(mark.cardId);
+                    if (action === "diff") setDiffOn(true);
+                  }}
                   onChange={(next) => {
                     if (activePath) updateTab(activePath, { content: next, dirty: true });
                   }}
+                  onCursorChange={(line, col) => setCursorPos({ line, col })}
                 />
               </Suspense>
             ))}
+            </div>
+            {diffOn && (
+              <div className={styles.diffPane} aria-label={t("files.diffHeadLabel")}>
+                <div style={{ marginBottom: 6 }}>{t("files.diffHeadLabel")}</div>
+                {activePath == null ? (
+                  t("files.diffNeedFile")
+                ) : headText == null ? (
+                  t("files.diffNoHead")
+                ) : (
+                  <pre className={styles.diffPre}>{headText}</pre>
+                )}
+              </div>
+            )}
+            <div className={styles.minimap} aria-hidden="true">
+              {(() => {
+                const lines = (content ?? "").split("\n");
+                const maxBars = 80;
+                const step = Math.max(1, Math.ceil(lines.length / maxBars));
+                const bars = [];
+                for (let i = 0; i < lines.length; i += step) {
+                  const lineNo = i + 1;
+                  const mark = agentLineMarks.get(lineNo);
+                  const sample = lines[i] ?? "";
+                  bars.push(
+                    <span
+                      key={lineNo}
+                      className={styles.minimapBar}
+                      style={{
+                        width: `${Math.min(100, 12 + Math.min(88, sample.length))}%`,
+                        background: mark?.color ?? undefined,
+                      }}
+                    />,
+                  );
+                }
+                return bars;
+              })()}
+            </div>
+          </div>
+          <div className={styles.bottom}>
+            <div className={styles.bottomTabs} role="tablist">
+              {(
+                [
+                  ["problems", t("files.bottomProblems", { count: problemCount ? ` ${problemCount}` : "" })],
+                  ["output", t("files.bottomOutput")],
+                  ["timeline", t("files.bottomTimeline")],
+                  ["send", t("files.bottomSend")],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`${styles.pt}${bottomTab === id ? ` ${styles.ptOn}` : ""}`}
+                  onClick={() => setBottomTab(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className={styles.bottomBody}>
+              {bottomTab === "problems" &&
+                (problems.length === 0 ? (
+                  <span style={{ color: "#8d94a6" }}>
+                    {problemsHint === "no-checker"
+                      ? t("files.problemsNoChecker")
+                      : problemsHint === "failed"
+                        ? t("files.problemsFailed")
+                        : t("files.problemsHint")}
+                  </span>
+                ) : (
+                  problems.map((p, i) => (
+                    <span key={`${p.path}-${i}`} style={{ color: p.severity === "error" ? "#f2a093" : "#f0b25c" }}>
+                      {p.severity === "error" ? "✕" : "!"} {nameOf(p.path)}:{p.line} · {p.message}
+                    </span>
+                  ))
+                ))}
+              {bottomTab === "output" && (
+                <span style={{ color: "#8d94a6", whiteSpace: "pre-wrap" }}>
+                  {outputLog || t("files.outputEmpty")}
+                </span>
+              )}
+              {bottomTab === "timeline" && (
+                <span style={{ color: "#8d94a6" }}>
+                  {(attribution?.files ?? [])
+                    .filter((f) => f.path === activePath)
+                    .flatMap((f) => f.declared.map((d) => `${d.label ?? d.cardId} · ${new Date(d.updatedAt).toLocaleString()}`))
+                    .join("\n") || t("files.timelineEmpty")}
+                </span>
+              )}
+              {bottomTab === "send" && (
+                <span style={{ color: "#8d94a6" }}>{t("files.sendHint")}</span>
+              )}
+            </div>
+          </div>
+        </div>
         </div>
       </div>
     </CardFrame>

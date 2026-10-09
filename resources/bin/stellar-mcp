@@ -1,292 +1,44 @@
 #!/bin/sh
-":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; case "${AGENT_CANVAS_NODE-}" in '${'*) AGENT_CANVAS_NODE=;; esac; __u=${AGENT_CANVAS_MCP_URL-}; case "$__u" in http://127.0.0.1:*/*) __u=${__u#http://127.0.0.1:}; __u=${__u%%/*}; __s="${TMPDIR:-/tmp}/stellar-mcp-relay-${__u}.sock"; __d=${0%/*}; [ "$__d" = "$0" ] && __d=.; if [ -S "$__s" ] && [ -x "$__d/stellar-mcp-relay" ]; then exec "$__d/stellar-mcp-relay"; fi;; esac; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
-// Polyglot sh/node deliberado, não um acidente (2026-09-08), e a ORDEM
-// das duas linhas acima é obrigatória. O shebang `#!/usr/bin/env node`
-// que estava aqui exigia `node` no PATH do processo que lança este
-// arquivo — e num `.app` aberto pelo Finder no macOS esse PATH é o que o
-// `path_helper` monta, sem nenhum diretório de usuário. Resultado: este
-// shim morria com "env: node: No such file or directory" antes de
-// responder ao handshake, e quem o lança é a CLI do usuário
-// (cursor/agy/opencode), cujo ambiente o Stellar não controla na hora do
-// lançamento.
-//
-// Como funciona: para o `sh`, a linha 2 é `:` (no-op) seguido de um
-// `exec`, então ele re-executa este mesmo arquivo com o interpretador
-// certo e nunca chega na linha 3. Para o node, a linha 2 é a string ":"
-// seguida de um comentário. Todo comentário explicativo precisa ficar
-// DEPOIS do exec e em `//`: o node só descarta a primeira linha quando
-// ela é um shebang, então um bloco `#` aqui em cima é erro de sintaxe
-// (quebrado e corrigido ao vivo escrevendo isto).
-//
-// `AGENT_CANVAS_NODE` é o binário do próprio Electron, injetado por
-// pty-registry.ts em todo processo spawnado; `node` do PATH é o fallback
-// para quando o shim roda fora do Stellar, onde o PATH é rico.
-// `ELECTRON_RUN_AS_NODE` é setado aqui mesmo para não depender de quem
-// lançou; o node normal ignora.
-//
-// O `case` na linha 2 descarta um `AGENT_CANVAS_NODE` que ainda seja o
-// literal `${env:AGENT_CANVAS_NODE}` — ver "COMO O AMBIENTE CHEGA" abaixo:
-// é o que o cursor entrega quando a variável não existe no processo dele
-// (fora de um card). Sem a guarda o `exec` falha com "not found" e a CLI
-// do usuário mostra uma linha vermelha em toda sessão fora do Stellar
-// (medido 2026-09-13).
-//
-// COMO O AMBIENTE CHEGA (medido em /proc em 2026-09-13, e é o motivo de
-// nenhum card cursor jamais ter tido as tools): o cursor NÃO herda o
-// ambiente ao processo MCP — é whitelist. O processo `agent` tem ~70
-// variáveis (com todas as AGENT_CANVAS_*); o shim filho recebe 10
-// (`SHELL PWD LOGNAME HOME TERM USER SHLVL PATH` + as duas que a própria
-// linha 2 cria). Nem `AGENT_CANVAS_MCP_URL`, nem `CARD_ID`, nem `NODE`
-// passavam — o shim caía em `respondOffline` dentro de um card vivo, e o
-// conserto do PATH do Finder acima era derrotado pela mesma whitelist.
-//
-// O que atravessa a whitelist é o `env` da própria entrada em
-// `~/.cursor/mcp.json`, e o cursor interpola `${env:VAR}` ali a partir do
-// ambiente de CADA processo `agent` — então um config global e único dá
-// identidade por card. É isso que `mcp-registration.ts` escreve
-// (`cursorServerEntry`). Quando a variável NÃO existe no processo do
-// cursor, o literal `${env:VAR}` chega sem expandir (medido) — por isso
-// tanto a linha 2 quanto `fromEnv` abaixo tratam esse literal como
-// ausente, o que devolve exatamente o comportamento offline de antes.
-// Sem aprovação envolvida: o cursor só exige aprovação (por hash da
-// config já resolvida, guardada em `~/.cursor/projects/<cwd>/
-// mcp-approvals.json`) para o `.cursor/mcp.json` de PROJETO; para o
-// global ele nem instala o middleware de aprovação (lido no bundle da
-// CLI 2026.09.10). Um probe de projeto, portanto, subestima o que o
-// registro global consegue.
-//
-// agy e opencode: NÃO medido se repassam o ambiente ao shim (não havia
-// card vivo desses em 2026-09-13). Se também filtrarem, o sintoma é o
-// mesmo — `serverInfo: "stellar (offline)"` dentro de um card — e a
-// leitura de `/proc/<pid do shim>/environ` responde em um comando.
-// Servidor MCP em stdio — um proxy puro pro servidor MCP HTTP que a app já
-// roda (src/main/mcp-server.ts). Não define ferramenta nenhuma: repassa
-// `tools/list`, `tools/call` e tudo mais tal e qual, então a lista de
-// ferramentas nunca pode divergir da de lá.
-//
-// Por que ele existe (achado ao vivo 2026-09-01, pedido do usuário pra
-// registrar `cursor` e `antigravity` como providers com MCP):
-//
-//   claude  → `--mcp-config '{...}'`      flag efêmera, por invocação
-//   codex   → `-c mcp_servers.stellar...` idem
-//   cursor  → SÓ `.cursor/mcp.json` (projeto) ou `~/.cursor/mcp.json`
-//   agy     → SÓ `agy mcp add` (persistente, `~/.gemini/config/`)
-//
-// Confirmado lendo o `--help` real dos dois binários instalados, não
-// adivinhado: nenhum dos dois aceita registro efêmero. Sobra config
-// persistente — e é aí que está o problema que este arquivo resolve: a
-// URL do servidor HTTP tem uma PORTA EFÊMERA (`port: 0`, escolhida pelo SO
-// a cada launch) e, desde o mesmo achado, um `?card=<id>` diferente por
-// card. Nenhum dos dois cabe num arquivo escrito uma vez.
-//
-// O comando, sim, é estável. Registrado uma vez como `stellar-mcp`, este
-// script descobre a cada execução, pelo ambiente que o processo do card já
-// tem, tanto a porta viva quanto QUEM ele é:
-//
-//   AGENT_CANVAS_MCP_URL   a URL do servidor HTTP desta execução da app
-//   AGENT_CANVAS_CARD_ID   o card em cujo terminal a CLI está rodando
-//
-// `pty-registry.ts` injeta os dois no spawn; a CLI do agente sobe este
-// script como processo filho. Se a CLI herda o ambiente, os dois chegam
-// sozinhos; se ela filtra (o cursor filtra — ver "COMO O AMBIENTE CHEGA"
-// no topo), chegam pelo `env` interpolado da entrada de registro. Nos
-// dois casos a identidade entra pelo mesmo caminho que ela já entra pro
-// claude/codex (o `?card=` carimbado na URL), sem depender do modelo
-// lembrar de preencher nada.
-//
-// ESM e sem dependência nenhuma, mesma restrição do `acbridge` ao lado: é
-// um arquivo solto em `resources/bin`, empacotado como extraResource, sem
-// node_modules por perto. `resources/bin` está no PATH de todo card
-// (`binDir`), então `"command": "stellar-mcp"` resolve sozinho.
-//
-// stdout é EXCLUSIVO do protocolo — uma linha JSON-RPC por mensagem.
-// Qualquer diagnóstico vai pra stderr, senão corrompe o transporte.
-//
-// A sentinela `AGENT_CANVAS_SHIM_REEXEC` fecha um loop infinito real
-// (achado em review, confirmado medindo: exit 124 a 100% de CPU). Se
-// `AGENT_CANVAS_NODE` apontar para um shell em vez de um node — e a
-// variável é herdada por todo processo spawnado, então qualquer agente
-// pode setá-la —, o `exec` re-executa este mesmo arquivo, que re-executa,
-// para sempre. Com a sentinela a segunda passada falha na hora, com
-// mensagem que nomeia a variável culpada. O lado JS a remove do ambiente
-// logo abaixo, para que um processo neto que legitimamente chame um shim
-// não herde a guarda e seja recusado à toa.
+":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: invalid AGENT_CANVAS_NODE interpreter" >&2; exit 127; fi; case "${AGENT_CANVAS_NODE-}" in '${'*) AGENT_CANVAS_NODE=;; esac; __u=${AGENT_CANVAS_MCP_URL-}; case "$__u" in http://127.0.0.1:*/*|http://localhost:*/*) __r=${__u#http://}; __r=${__r#localhost:}; __r=${__r#127.0.0.1:}; __p=${__r%%/*}; __s="${TMPDIR:-/tmp}/stellar-mcp-relay-${__p}.sock"; __d=${0%/*}; [ "$__d" = "$0" ] && __d=.; if [ -S "$__s" ] && [ -x "$__d/stellar-mcp-relay" ]; then exec "$__d/stellar-mcp-relay"; fi;; esac; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
 
+import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { URL } from "node:url";
 
-// Ver a nota da sentinela no topo: fora daqui ela não tem função, e
-// deixá-la no ambiente faria um neto que chame um shim ser recusado.
-// BRIDGE MCP COMPARTILHADO (task f7a2ac84) — a linha 2 ganhou um ramo ANTES do
-// exec do node. Motivo medido (2026-10-01, board vivo): este shim é um node
-// inteiro por card — 7 vivos = 512 MB, ~73 MB cada, contra 52 MB de um node
-// ocioso e 4,0 MB de um relay `socat`. O runtime é o custo.
-//
-// Quando o APP sobe com `AGENT_CANVAS_MCP_RELAY=1`, `mcp-server.ts` abre um
-// Unix socket (caminho DERIVADO da porta que já vem em `AGENT_CANVAS_MCP_URL`;
-// ver `src/main/mcp-relay.ts`). O ramo da linha 2, ao encontrar esse socket,
-// NÃO executa o node: `exec`uta o binário `stellar-mcp-relay` AO LADO deste
-// arquivo (mesmo diretório, empacotado junto), que manda a identidade do card
-// como primeira linha NDJSON e faz `stdio ↔ socket`. É um binário RUST
-// (`resources/relay`, ~319 KB stripped), compilado POR ALVO no empacotamento —
-// SEM `socat` e SEM qualquer ferramenta do host (a rodada que usava `socat`,
-// inexistente em macOS/Windows stock, foi reprovada; o protótipo C foi só a
-// medição). O main faz o resto (o POST
-// HTTP de sempre, mesma rota, mesma identidade `?card=`), então a paridade
-// MCP ↔ acbridge não muda.
-//
-// Sem a flag, sem o socket, ou sem o binário (build local que ainda não o
-// tem), cai no `exec` do node logo abaixo — exatamente o comportamento de
-// antes. Nenhuma fonte de verdade nova: a identidade continua sendo
-// `AGENT_CANVAS_CARD_ID`, só que carimbada pelo stub na primeira linha.
 delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
-/** Um `${env:VAR}` que o cursor não conseguiu interpolar (variável ausente
- * no processo dele) chega como literal, não como vazio — medido
- * 2026-09-13. Tratá-lo como ausente é o que mantém `respondOffline` fora
- * de um card; sem isto o shim tentaria um `fetch("${env:...}")`. */
-function fromEnv(name) {
-  const value = process.env[name];
-  if (!value || value.startsWith("${")) return "";
-  return value;
+function log(message) {
+  process.stderr.write(`stellar-mcp: ${message}\n`);
 }
 
-const mcpUrl = fromEnv("AGENT_CANVAS_MCP_URL");
-const cardId = fromEnv("AGENT_CANVAS_CARD_ID");
-
-// NOME DO PROCESSO por agente (task 817daa3e) — ver docs/PROCESS_NAMING.md.
-// Sem isto o shim aparece no monitor como `node`, indistinguível entre cards.
-// `process.title` mexe no `comm` (TASK_COMM_LEN = 15 chars, truncado pelo SO)
-// E reaproveita o argv0, então o `cmdline` também passa a dizer o provider.
-// A regra vem PRONTA do app (`AGENT_CANVAS_PROC_NAME`, calculada em
-// process-name-decision.ts) e aqui só é APLICADA — uma regra, não duas. Sem a
-// variável (shim rodando fora de um card), NÃO renomeia: um nome genérico é
-// melhor que um inventado.
-const procName = fromEnv("AGENT_CANVAS_PROC_NAME");
-if (procName) {
+const rawUrl = process.env.AGENT_CANVAS_MCP_URL;
+if (!rawUrl || rawUrl.startsWith("${")) {
+  log("AGENT_CANVAS_MCP_URL is unavailable; no Stellar tools are exposed outside a card.");
+  process.exitCode = 2;
+} else {
+  let socketPath;
   try {
-    process.title = procName;
-  } catch {
-    // plataforma sem `process.title`: segue com o nome do runtime.
-  }
-}
-
-function log(msg) {
-  process.stderr.write(`stellar-mcp: ${msg}\n`);
-}
-
-/** A URL desta sessão, já carimbada com a identidade do card. Sem
- * `AGENT_CANVAS_MCP_URL` não há app pra falar — ver `respondOffline`. */
-const target = mcpUrl ? `${mcpUrl}${mcpUrl.includes("?") ? "&" : "?"}card=${encodeURIComponent(cardId)}` : null;
-
-if (!target) {
-  log("AGENT_CANVAS_MCP_URL não está definida — rodando fora de um card do Stellar; nenhuma ferramenta será exposta.");
-}
-
-/** O servidor HTTP responde ou JSON puro ou um frame SSE, dependendo do
- * `accept` negociado — mesma tolerância que os smoke tests já têm: procura
- * a linha `data:` por conteúdo, nunca assume que ela é a primeira (uma
- * chamada que espera na fila de spawn segura a conexão aberta tempo
- * suficiente pro transporte intercalar um `: keepalive` antes). */
-function parseBody(text) {
-  const dataLine = text.split("\n").find((l) => l.startsWith("data:"));
-  return JSON.parse(dataLine ? dataLine.slice(5).trim() : text);
-}
-
-function errorResponse(id, code, message) {
-  return { jsonrpc: "2.0", id, error: { code, message } };
-}
-
-/** Sem app do outro lado, um cliente MCP ainda merece um handshake válido e
- * uma lista vazia — melhor que um servidor que morre no boot e vira uma
- * linha vermelha sem explicação na CLI do agente. */
-function respondOffline(msg) {
-  if (msg.method === "initialize") {
-    return {
-      jsonrpc: "2.0",
-      id: msg.id,
-      result: {
-        protocolVersion: msg.params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {} },
-        serverInfo: { name: "stellar (offline)", version: "1.0.0" },
-      },
-    };
-  }
-  if (msg.method === "tools/list") return { jsonrpc: "2.0", id: msg.id, result: { tools: [] } };
-  if (msg.method === "ping") return { jsonrpc: "2.0", id: msg.id, result: {} };
-  return errorResponse(msg.id, -32603, "Stellar não está acessível a partir deste processo (AGENT_CANVAS_MCP_URL ausente)");
-}
-
-function send(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
-}
-
-async function forward(msg) {
-  const res = await fetch(target, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: JSON.stringify(msg),
-  });
-  const text = await res.text();
-  // Uma notificação (sem `id`) não tem resposta pra devolver, e o servidor
-  // pode legitimamente responder 202 com corpo vazio.
-  if (msg.id === undefined || msg.id === null) return null;
-  if (!text.trim()) return errorResponse(msg.id, -32603, `resposta vazia do Stellar (HTTP ${res.status})`);
-  return parseBody(text);
-}
-
-async function handle(msg) {
-  if (!target) {
-    if (msg.id === undefined || msg.id === null) return;
-    send(respondOffline(msg));
-    return;
-  }
-  try {
-    const reply = await forward(msg);
-    if (reply) send(reply);
-  } catch (err) {
-    log(`falha repassando ${msg.method}: ${err}`);
-    if (msg.id !== undefined && msg.id !== null) {
-      send(errorResponse(msg.id, -32603, `falha falando com o Stellar: ${String(err)}`));
+    const url = new URL(rawUrl);
+    if ((url.hostname !== "127.0.0.1" && url.hostname !== "localhost") || !url.port || url.protocol !== "http:") {
+      throw new Error("the app MCP URL is not local");
     }
+    socketPath = join(process.env.TMPDIR || tmpdir(), `stellar-mcp-relay-${url.port}.sock`);
+  } catch (error) {
+    log(`invalid app MCP URL: ${String(error)}`);
+    process.exitCode = 2;
+  }
+
+  if (socketPath) {
+    const socket = net.createConnection({ path: socketPath });
+    socket.on("connect", () => process.stdin.pipe(socket));
+    socket.pipe(process.stdout);
+    socket.on("error", (error) => {
+      log(`could not connect to the authenticated app relay: ${error.message}`);
+      process.exitCode = 5;
+      process.stdin.unpipe(socket);
+    });
+    socket.on("end", () => process.exit(0));
+    process.stdin.on("end", () => socket.end());
   }
 }
-
-// Enfileira em SÉRIE de propósito. O servidor HTTP é stateless (um
-// `McpServer` novo por POST), então requisições paralelas seriam corretas —
-// mas uma chamada que bloqueia (um `spawn_agent` esperando consentimento
-// humano, ou parado na fila de concorrência) pode segurar minutos, e
-// deixar as outras passarem na frente reordenaria as respostas em relação
-// aos pedidos. Um cliente MCP tolera isso pelo `id`, porém a ordem estável
-// é mais fácil de depurar e o custo aqui é nulo: um agente faz uma chamada
-// por vez de qualquer jeito.
-let queue = Promise.resolve();
-function enqueue(msg) {
-  queue = queue.then(() => handle(msg)).catch((err) => log(`erro na fila: ${err}`));
-}
-
-let buffer = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  // Framing por linha (o transporte stdio do MCP é NDJSON). A última parte
-  // pode ser uma mensagem cortada no meio — fica no buffer pro próximo
-  // chunk, exatamente como o framing do socket do acbridge faz.
-  const lines = buffer.split("\n");
-  buffer = lines.pop() ?? "";
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let msg;
-    try {
-      msg = JSON.parse(trimmed);
-    } catch {
-      log(`linha ignorada, não é JSON: ${trimmed.slice(0, 120)}`);
-      continue;
-    }
-    enqueue(msg);
-  }
-});
-
-process.stdin.on("end", () => {
-  // Deixa a fila drenar antes de sair, senão a última resposta se perde.
-  queue.finally(() => process.exit(0));
-});

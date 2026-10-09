@@ -35,7 +35,7 @@ describe("spawn queue notice", () => {
     expect(text).toContain("antigravity");
     expect(text).toContain("444s");
     expect(text).toMatch(/do not spawn another/);
-    expect(text).toMatch(/close the duplicate/);
+    expect(text).toMatch(/close any duplicate/);
   });
 
   it("sem label a frase continua legível (não inventa nome)", () => {

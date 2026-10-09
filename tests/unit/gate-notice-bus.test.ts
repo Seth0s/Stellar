@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type ReportRow, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { resetGateRunCachesForTests } from "../../src/main/gate-runner";
 
 /**
  * The report NOTICE and the gate CONTRADICTION through the REAL path: a real
@@ -14,8 +15,7 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
  *     result and carries "gates N/M" on the SAME line;
  *   - the standalone "gates measured by the app" message no longer exists;
  *   - the contradiction (report ok:true + red gate) becomes the ONLY
- *     self-standing message, with the task short id, the command, the mode and
- *     the trailing output.
+ *     self-standing one-line message and points to get_task for full output.
  */
 
 const GATES_GREEN = [
@@ -38,6 +38,7 @@ function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: `card-${id}`,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -128,9 +129,13 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     if (dir) rmSync(dir, { recursive: true, force: true });
     if (workDir) rmSync(workDir, { recursive: true, force: true });
     workDir = null;
+    // Report seq counters reseed per store; the module-level seq cache must
+    // not leak a green run from the previous case into the next.
+    resetGateRunCachesForTests();
   });
 
   function setup(written: Written) {
+    resetGateRunCachesForTests();
     dir = mkdtempSync(join(tmpdir(), "stellar-gate-notice-"));
     workDir = mkdtempSync(join(tmpdir(), "stellar-gate-notice-work-"));
     store = openStore(dir);
@@ -168,7 +173,7 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     expect(written.some(([, text]) => text.includes("gates measured by the app"))).toBe(false);
   }, 40_000);
 
-  it("CONTRADIÇÃO: report ok:true + gate vermelho → mensagem própria com id, comando, modo e saída final", async () => {
+  it("CONTRADIÇÃO: report ok:true + gate vermelho → uma linha que aponta para get_task", async () => {
     const written: Written = [];
     const s = setup(written);
     const id = "d00a03fa-aaaa-bbbb-cccc-dddddddddddd";
@@ -180,16 +185,20 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
       report: { ok: true, taskId: id },
     } as BusRequest);
 
-    const body = await waitForBody(written, "gate contradiction");
+    // Wait past other tests' repo-lock queue: the notice itself waits up to
+    // GATE_NOTICE_WAIT_MS for the measured run before typing the line.
+    const body = await waitForBody(written, "gate_inconclusive", 35_000);
     expect(body).not.toBeNull();
     expect(body!).toContain("d00a03fa");
-    expect(body!).toContain("SUCCESS (ok:true)");
-    expect(body!).toContain("failed:");
-    expect(body!).toContain("shared tree");
-    expect(body!).toContain("BOOM-LINE");
-    // The contradiction REPLACES the report notice: no "report available".
+    expect(body!).toContain("get_task");
+    // No path parseable from "BOOM-LINE" alone → inconclusive, never accusation.
+    expect(body!).not.toContain("contradiction");
+    expect(body!).not.toContain("task_failed");
+    expect(body!).not.toContain("BOOM-LINE");
+    expect(body!).not.toMatch(/[\r\n]/);
+    // The named class REPLACES the report notice: no "report available".
     expect(written.some(([, text]) => text.includes("report available"))).toBe(false);
-  }, 40_000);
+  }, 60_000);
 
   it("report SEM gates: o aviso sai como sempre (sem sufixo de gate)", async () => {
     const written: Written = [];

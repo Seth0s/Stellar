@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
+import { decideMediaFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import styles from "./MediaCard.module.css";
+import { STELLAR_PATHS_MIME } from "./terminal-drop-decision";
 
 // Mesmo padrão de FilesCard.tsx's CodeEditor — pdf.js só carrega quando
 // um card de mídia tipo PDF realmente monta.
@@ -20,6 +22,7 @@ const VIEW_COMMIT_IDLE_MS = 400;
 export type MediaView = { zoom: number; panX: number; panY: number };
 
 export function MediaCard({
+  cardId,
   rect,
   zoom,
   zIndex,
@@ -49,6 +52,7 @@ export function MediaCard({
   panX,
   panY,
 }: {
+  cardId: string;
   rect: Rect;
   zoom: number;
   zIndex: number;
@@ -93,6 +97,7 @@ export function MediaCard({
   // protocol.handle).
   const assetUrl = `stellar-asset://asset/${encodeURIComponent(boardId)}/${encodeURIComponent(filename)}`;
   const [pdfPage, setPdfPage] = useState(1);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [pdfNumPages, setPdfNumPages] = useState(1);
   const commitTimer = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -184,6 +189,13 @@ export function MediaCard({
     onViewChange(nextView);
     scheduleViewCommit(nextView);
   }
+  const mediaFooter = decideMediaFooter({
+    kind: mediaType,
+    imageSize,
+    zoom: view.zoom,
+    page: pdfPage,
+    pageCount: pdfNumPages,
+  });
 
   return (
     // `display: contents` — puramente pra ter um nó DOM estável (`rootRef`)
@@ -195,6 +207,7 @@ export function MediaCard({
       <CardFrame
         className=""
         kind="media"
+        cardId={cardId}
         rect={rect}
         zoom={zoom}
         zIndex={zIndex}
@@ -214,6 +227,11 @@ export function MediaCard({
         screenProjected={screenProjected}
         panX={panX}
         panY={panY}
+        dragBody={mediaType === "image" && view.zoom <= 1}
+        accent="var(--accent-chat)"
+        headerIcon={<Icon name={mediaType === "pdf" ? "fileGeneric" : "fileImage"} size={13} />}
+        headerContext={mediaType === "pdf" ? `PDF${pdfNumPages > 0 ? ` · ${pdfNumPages} páginas` : ""}` : `imagem${imageSize ? ` · ${imageSize.width} × ${imageSize.height}` : ""}`}
+        onHeaderClick={() => setChromeOpen((v) => !v)}
         // Resize proporcional (item 57.9) — `rect.w/rect.h` NA HORA do
         // resize é sempre a razão real da mídia (só o próprio resize
         // proporcional deste prop pode mudar w/h de um card de mídia,
@@ -223,18 +241,8 @@ export function MediaCard({
         // "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" (2026-09-01) — só para
         // imagem. Um PDF mantém o frame inteiro: a navegação de páginas
         // vive no rodapé e não tem outro lugar razoável pra morar.
-        chromeless={mediaType === "image"}
-        // Pedido ao vivo (2026-09-02) — chromeless deixa de ser "aparece no
-        // hover" e passa a ser "aparece só com um click de verdade na
-        // imagem" (ver `chromeOpen`, `onHeaderClick`/`onBodyPointerDown`
-        // acima e o doc de `chromeActive` em CardFrame.tsx).
-        chromeActive={chromeOpen}
-        onHeaderClick={() => setChromeOpen((v) => !v)}
         headerContent={
           <>
-            <span className="card-head-label">
-              <Icon name="fileImage" size={14} />
-            </span>
             {/* Para imagem, girar deixa de morar na faixa do header — vira
                 ferramenta solta ao redor da própria imagem
                 (`.media-toolbar` abaixo), estilo canvas (Miro etc.). Um PDF
@@ -250,10 +258,6 @@ export function MediaCard({
             </button>
           </>
         }
-        // Só o PDF tem rodapé. Para imagem ele mostrava o nome do arquivo,
-        // que já é exatamente o rótulo padrão do CardTag no header — linha
-        // duplicada, e agora sem lugar nenhum (CardFrame ignora o rodapé em
-        // modo chromeless de todo jeito).
         footerContent={
           mediaType === "pdf" ? (
             <span className={styles.mediaPdfNav} data-role="media-pdf-nav">
@@ -261,9 +265,7 @@ export function MediaCard({
               <button disabled={pdfPage <= 1} onClick={() => setPdfPage((p) => Math.max(1, p - 1))}>
                 <Icon name="chevronLeft" size={12} />
               </button>
-              <span className={styles.mediaPdfPage}>
-                {pdfPage}/{pdfNumPages}
-              </span>
+              {mediaFooter.pageLabel !== null && <span className={styles.mediaPdfPage}>{mediaFooter.pageLabel}</span>}
               <button
                 disabled={pdfPage >= pdfNumPages}
                 onClick={() => setPdfPage((p) => Math.min(pdfNumPages, p + 1))}
@@ -271,7 +273,12 @@ export function MediaCard({
                 <Icon name="chevronRight" size={12} />
               </button>
             </span>
-          ) : undefined
+          ) : (
+            <span className="card-foot-row">
+              {mediaFooter.imageDimensions && <span>{mediaFooter.imageDimensions}</span>}
+              <span>zoom {mediaFooter.zoomPercent}%</span>
+            </span>
+          )
         }
       >
         <div
@@ -288,7 +295,21 @@ export function MediaCard({
             }}
           >
             {mediaType === "image" ? (
-              <img src={assetUrl} draggable={false} alt={filename} />
+              <img
+                src={assetUrl}
+                draggable={Boolean(assetPath)}
+                alt={filename}
+                onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+                onDragStart={(e) => {
+                  if (!assetPath) {
+                    e.preventDefault();
+                    return;
+                  }
+                  e.dataTransfer.setData(STELLAR_PATHS_MIME, JSON.stringify([assetPath]));
+                  e.dataTransfer.setData("text/plain", assetPath);
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+              />
             ) : (
               <Suspense fallback={<div className={styles.mediaPdfLoading}>{t("media.loadingPdf")}</div>}>
                 <PdfViewer url={assetUrl} page={pdfPage} onDocInfo={setPdfNumPages} />

@@ -25,12 +25,28 @@ describe("decidePageTextRequest — escopo e teto (lacuna 1)", () => {
 
   it("seletor vira ESCOPO; vazio/só-espaço é ausente (não um seletor inválido)", () => {
     expect(decidePageTextRequest({ selector: "  #lista  " })).toEqual({
-      scope: { scope: "selector", selector: "#lista" },
+      scope: { scope: "selector", selector: "#lista", source: "selector" },
       cap: DEFAULT_MAX_PAGE_TEXT_CHARS,
       requestedCap: null,
       clamped: null,
     });
     expect(decidePageTextRequest({ selector: "   " }).scope).toEqual({ scope: "body" });
+  });
+
+  it("open dialog becomes the default scope when no selector/ref/scope is given", () => {
+    expect(decidePageTextRequest({ dialogPresent: true }).scope).toMatchObject({
+      scope: "selector",
+      source: "dialog",
+    });
+  });
+
+  it("ref wins over selector and becomes a data-stellar-ref selector", () => {
+    const res = decidePageTextRequest({ ref: "e3", selector: "#other" });
+    expect(res.scope).toEqual({
+      scope: "selector",
+      selector: '[data-stellar-ref="e3"]',
+      source: "ref",
+    });
   });
 
   it("maxChars no meio da faixa é obedecido; abaixo do piso e acima do teto são CLAMPADOS e o clamp é DITO", () => {

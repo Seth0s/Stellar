@@ -19,8 +19,10 @@ import {
 import { TURN_END_BUFFER_MAX, feedTurnEndChunk, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { decideTerminalFit } from "./terminal-fit-decision";
+import { formatPathsForTerminalInput } from "./terminal-drop-decision";
 import { replayGeometry } from "./terminal-replay";
 import { attachWebglRenderer } from "./terminal-webgl";
+import type { PtyGeometry } from "./pty-geometry-from-rect";
 import {
   UNFOCUSED_FLUSH_MS,
   appendPendingDraw,
@@ -29,6 +31,7 @@ import {
   flushPendingDraw,
   type PendingDraw,
 } from "./terminal-render";
+import { readTerminalFontSize } from "./settings-appearance-prefs";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -43,8 +46,9 @@ const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 // spawn até o fechamento do card; a única coisa que ainda recalcula
 // cols/rows de verdade é um RESIZE real (arrastar a borda do card,
 // `fitNow()`/`onResizeSettled`, TerminalCard.tsx) — o board zoom nunca
-// mais toca fontSize, fit() ou o PTY.
-const BASE_FONT_SIZE = 15;
+// mais toca fontSize, fit() ou o PTY. Settings → Aparência can override
+// the default via localStorage before the card mounts.
+const BASE_FONT_SIZE = readTerminalFontSize();
 
 /** Turn-end regex / hook split: `terminal-turn-signal.ts`. */
 
@@ -256,9 +260,19 @@ export function useTerminal(
    * listener de keydown se registra uma vez; lê `.current` a cada tecla
    * (mesmo padrão de `zoomRef` / `shortcutOverridesRef` em App.tsx). */
   shortcutOverridesRef: MutableRefObject<ShortcutOverrides>,
+  /**
+   * Spawn geometry from the card rect (docs/PERF.md §17 cause 5). Used for
+   * a fresh PTY so an off-screen card is not stuck at 80×24 forever. A
+   * reattach still sizes the xterm from the ring's own geometry.
+   */
+  spawnGeometry?: PtyGeometry,
+  /** Fires once after Effect 2 has created the xterm and flushed any ring. */
+  onReplaySettled?: () => void,
 ) {
   const [ptyId, setPtyId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const exitCodeRef = useRef<number | null>(null);
+  exitCodeRef.current = exitCode;
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
   /** DESIGN-BACKLOG.md, achado 2 (2026-09-11) — `resumeId` restaurado que
@@ -401,6 +415,13 @@ export function useTerminal(
   // the comment on Effect 1's dependency array for why.
   const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput, brief, taskId });
   spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief, taskId };
+  // Spawn-time only: the card rect at mount. Captured once so a later drag
+  // does not resize the running PTY through this path (fit/onResizeSettled
+  // still own live resizes).
+  const spawnGeometryRef = useRef(spawnGeometry);
+  if (spawnGeometryRef.current === undefined && spawnGeometry) spawnGeometryRef.current = spawnGeometry;
+  const onReplaySettledRef = useRef(onReplaySettled);
+  onReplaySettledRef.current = onReplaySettled;
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
@@ -607,7 +628,8 @@ export function useTerminal(
     // dedicated resume-invalid notification synchronously while it validates
     // the restored id, so registering after spawn leaves a real one-shot IPC
     // event with no renderer consumer.
-    window.pty.spawn(id, providerId, cwd, DEFAULT_COLS, DEFAULT_ROWS, spawnOpts).then((result) => {
+    const geometry = spawnGeometryRef.current ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
+    window.pty.spawn(id, providerId, cwd, geometry.cols, geometry.rows, spawnOpts).then((result) => {
       if (disposed) return;
       if ("error" in result) {
         setSpawnError(
@@ -618,6 +640,8 @@ export function useTerminal(
               })
             : t("terminal.spawnFail", { provider: providerId }),
         );
+        // Mount queue still advances: a failed spawn is a settled card.
+        onReplaySettledRef.current?.();
         return;
       }
       ptyIdRef.current = result.id;
@@ -731,6 +755,9 @@ export function useTerminal(
       for (const queued of replay.queued) term.write(queued);
       if (replay.scrollback || replay.queued.length > 0) setHasReceivedOutput(true);
     }
+    // Board mount queue: this card's expensive replay work is done; the next
+    // slot may open. Live bytes that arrive later are not part of the open cost.
+    onReplaySettledRef.current?.();
     // xterm's public split, not a payload heuristic: `onKey` is a
     // keystroke (DOM event); `onData` is that PLUS automatic replies
     // (CPR / DSR / DA / mouse SGR / focus — InputHandler `triggerDataEvent`
@@ -1159,5 +1186,33 @@ export function useTerminal(
     applyActivityRef.current("interrupt");
   }
 
-  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, homeNotice, hasReceivedOutput, isActive, fitNow, interrupt };
+  /** Absolute paths from a file/media drop: typed into the live PTY with
+   * single-quoted shell quoting, no Enter. Skips paths with control
+   * characters. Returns display-escaped names that were refused. No-op
+   * write when the process has exited or never spawned. */
+  function writeDroppedPaths(paths: string[]): string[] {
+    const { typed, refused } = formatPathsForTerminalInput(paths);
+    if (typed && ptyIdRef.current && exitCodeRef.current === null) {
+      if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
+      void window.pty.write(ptyIdRef.current, typed, "human");
+    }
+    return refused;
+  }
+
+  const dropLive = Boolean(ptyId) && exitCode === null;
+
+  return {
+    ptyId,
+    exitCode,
+    spawnError,
+    discoveredResumeId,
+    resumeInvalidNotice,
+    homeNotice,
+    hasReceivedOutput,
+    isActive,
+    fitNow,
+    interrupt,
+    dropLive,
+    writeDroppedPaths,
+  };
 }

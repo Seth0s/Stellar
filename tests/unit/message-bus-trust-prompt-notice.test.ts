@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus } from "../../src/main/message-bus";
+import { APP_NOTICE } from "../../src/main/agent-facing-notices";
 
 /**
  * The trust-prompt notice goes to the board orchestrator through the delivery
@@ -47,7 +48,10 @@ describe("message-bus: trust-prompt notice respects the human input gate", () =>
       new Proxy(base, { get: (t: Record<string, unknown>, p: string) => (p in t ? t[p] : () => undefined) }) as Parameters<typeof createMessageBus>[1],
     );
 
-    bus.notifyTrustPromptUnconfirmed("worker-1", "[de: stellar] trust prompt outside the board root — NOT confirmed");
+    bus.notifyTrustPromptUnconfirmed(
+      "worker-1",
+      APP_NOTICE.trustPrompt({ cardId: "worker-1", provider: "claude", cwd: "/elsewhere", root: "/board" }),
+    );
 
     // The human is mid-line: nothing may be written yet.
     await new Promise((r) => setTimeout(r, 600));
@@ -59,7 +63,7 @@ describe("message-bus: trust-prompt notice respects the human input gate", () =>
     while (written.length === 0 && Date.now() - start < 3_000) {
       await new Promise((r) => setTimeout(r, 40));
     }
-    const notice = written.filter(([id, d]) => id === "orch-1" && d.includes("NOT confirmed"));
+    const notice = written.filter(([id, d]) => id === "orch-1" && d.includes("unconfirmed") && d.includes("read_card"));
     expect(notice.length).toBeGreaterThan(0);
   });
 

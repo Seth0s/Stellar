@@ -7,6 +7,7 @@ import { openStore, type TaskRow } from "../../src/main/store";
 import { createTaskWriteFunnel, reachedDone } from "../../src/main/task-write-funnel";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
 import { deriveTaskStatus } from "../../src/task-status-derive";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * Task e83d2c10 (2026-09-13) — `onTaskDone` was called from ONE place only
@@ -33,6 +34,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -300,9 +302,9 @@ describe("create_task with deps already done dispatches at birth", () => {
     rig = buildRig(dir, { autonomous: true });
     rig.store.upsertTask(baseTask({ id: "parent", prompt: "investigar", status: "pending", card_id: "card-p", actor: "agent" }));
 
-    const res = (await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "corrigir", deps: ["parent"] } as BusRequest)) as {
+    const res = readBus<{
       taskId: string;
-    };
+    }>(await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "corrigir", deps: ["parent"] } as BusRequest));
     rig.funnel.persistTask({ ...rig.store.getTask("parent")!, status: "done", updated_at: Date.now(), actor: "human" });
     await flushDispatch();
 
@@ -330,10 +332,10 @@ describe("create_task with deps already done dispatches at birth", () => {
     rig = buildRig(dir, { autonomous: false });
     rig.store.upsertTask(baseTask({ id: "parent", status: "done", actor: "human" }));
 
-    const res = (await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "x", deps: ["parent"] } as BusRequest)) as {
+    const res = readBus<{
       taskId: string;
       dispatched: boolean;
-    };
+    }>(await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "x", deps: ["parent"] } as BusRequest));
 
     expect(res.dispatched).toBe(false);
     expect(rig.store.getTask(res.taskId)!.status).toBe("pending");

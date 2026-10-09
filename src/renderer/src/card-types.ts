@@ -133,8 +133,19 @@ export type StickyCardData = BaseCard & {
   color: string;
   mode: "edit" | "preview";
   fontSize: number;
+  /** Last persisted card edit time from cards.updated_at. */
+  updatedAt?: number;
 };
-export type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
+export type BrowserCardData = BaseCard & {
+  kind: "browser";
+  url: string;
+  ownerCardId: string | null;
+  /**
+   * persist: partition (Push API / durable cookies). Stored in the unused
+   * `model` column as "persistent" — never the app defaultSession.
+   */
+  persistent?: boolean;
+};
 /** No meaningful state to persist — which window/screen it shows comes
  * from a live OS picker at open time (DESIGN-BACKLOG.md item 3, phase 1),
  * never restored across reloads. Mirrors files/changes' minimal treatment. */

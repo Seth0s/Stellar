@@ -10,6 +10,7 @@ function task(partial: Partial<ListedTask> & Pick<ListedTask, "id" | "status">):
   return {
     prompt: "long prompt ".repeat(20),
     provider: "claude",
+    cardAlive: false,
     cardId: null,
     boardId: "64",
     cwd: null,
@@ -32,6 +33,11 @@ function task(partial: Partial<ListedTask> & Pick<ListedTask, "id" | "status">):
     requestedBy: null,
     requestedAt: null,
     sprintId: null,
+    territory: null,
+    gates: null,
+    allowCommit: null,
+    reportSchema: null,
+    supersededBy: null,
     ...partial,
   };
 }

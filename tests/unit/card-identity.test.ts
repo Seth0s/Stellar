@@ -42,11 +42,10 @@ describe("deriveCardDisplayName", () => {
     // Simula o caller filtrando por board ANTES de chamar (o contrato real
     // — a função em si não sabe de board nenhum, só do que recebe).
     const thisBoard = card({ id: "1", provider: "codex" });
-    const otherBoardCodex = card({ id: "2", provider: "codex" }); // seria um 2º card codex, mas mora em outro board
-    // Se o caller corretamente excluir `otherBoardCodex` da lista (porque é
-    // de outro board), o resultado tem que continuar "1°" — nunca "2°" por
-    // causa de alguém que nem deveria estar na conta.
-    const sameBoardOnly = [thisBoard]; // otherBoardCodex já filtrado fora pelo caller
+    // A 2ª Codex de outro board (id "2") fica de fora: o caller filtra por
+    // board antes de chamar. O ordinal tem que continuar "1°" — nunca "2°"
+    // por causa de alguém que nem deveria estar na conta.
+    const sameBoardOnly = [thisBoard];
     expect(deriveCardDisplayName(thisBoard, sameBoardOnly)).toBe("Codex 1°");
   });
 

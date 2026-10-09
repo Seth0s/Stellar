@@ -10,6 +10,7 @@ import {
   describeReviewWantedJudgmentRefusal,
 } from "../../src/main/judgment-write-decision";
 import { deriveCompletionProposal, describeReviewWantedNotice } from "../../src/renderer/src/task-board-model";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * CAMADA 1 — `tasks.review = "wanted"` wired into CAMADA 4's gate.
@@ -28,6 +29,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -103,7 +105,7 @@ describe("CAMADA 1: review=wanted (store real)", () => {
       review: "wanted",
     } as BusRequest);
     expect(wanted.ok).toBe(true);
-    const id = (wanted as { taskId: string }).taskId;
+    const id = (readBus<{ taskId: string }>(wanted)).taskId;
     expect(rig.store.getTask(id)!.review).toBe("wanted");
 
     const bare = await rig.bus.handleRequest({
@@ -113,11 +115,11 @@ describe("CAMADA 1: review=wanted (store real)", () => {
       boardId: "b1",
     } as BusRequest);
     expect(bare.ok).toBe(true);
-    expect(rig.store.getTask((bare as { taskId: string }).taskId)!.review).toBeNull();
+    expect(rig.store.getTask((readBus<{ taskId: string }>(bare)).taskId)!.review).toBeNull();
 
-    const got = (await rig.bus.handleRequest({ cmd: "get_task", taskId: id } as BusRequest)) as {
+    const got = readBus<{
       task: { review: unknown };
-    };
+    }>(await rig.bus.handleRequest({ cmd: "get_task", taskId: id } as BusRequest));
     expect(got.task.review).toBe("wanted");
   });
 
@@ -144,7 +146,7 @@ describe("CAMADA 1: review=wanted (store real)", () => {
       provider: "claude",
       boardId: "b1",
     } as BusRequest);
-    const id = (created as { taskId: string }).taskId;
+    const id = (readBus<{ taskId: string }>(created)).taskId;
     expect(rig.store.getTask(id)!.review).toBeNull();
 
     const set = await rig.bus.handleRequest({

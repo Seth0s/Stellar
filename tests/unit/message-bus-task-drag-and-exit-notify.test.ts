@@ -69,12 +69,15 @@ describe("message-bus: notifyHumanMovedTask (status-ask Allow/Deny resume — st
       getCardLastActivityAt: () => Date.now(),
     });
 
-    b.notifyHumanMovedTask("impl-1", '[de: stellar] humano aceitou o pedido de status "done".');
+    b.notifyHumanMovedTask("impl-1", "done", true);
     await flushDelivery();
 
     const bodies = written.filter(([, data]) => data !== "\r");
     const enters = written.filter(([, data]) => data === "\r");
-    expect(bodies[0]).toEqual(["impl-1", '[de: stellar] humano aceitou o pedido de status "done".']);
+    expect(bodies[0]).toEqual([
+      "impl-1",
+      "[de: stellar] human accepted the status request done; inspect read_card with cardId impl-1 for the saved state.",
+    ]);
     expect(enters.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -86,7 +89,7 @@ describe("message-bus: notifyHumanMovedTask (status-ask Allow/Deny resume — st
       writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    expect(() => b.notifyHumanMovedTask("impl-2", "irrelevante")).not.toThrow();
+    expect(() => b.notifyHumanMovedTask("impl-2", "done", true)).not.toThrow();
     await flushDelivery();
     expect(written).toHaveLength(0);
   });
@@ -99,7 +102,7 @@ describe("message-bus: notifyHumanMovedTask (status-ask Allow/Deny resume — st
       writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    b.notifyHumanMovedTask("impl-3", "irrelevante");
+    b.notifyHumanMovedTask("impl-3", "done", true);
     await flushDelivery();
     expect(written).toHaveLength(0);
   });
@@ -112,7 +115,7 @@ describe("message-bus: notifyHumanMovedTask (status-ask Allow/Deny resume — st
       writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    b.notifyHumanMovedTask("bash-1", "irrelevante");
+    b.notifyHumanMovedTask("bash-1", "done", true);
     await flushDelivery();
     expect(written).toHaveLength(0);
   });

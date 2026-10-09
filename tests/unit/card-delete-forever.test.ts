@@ -156,6 +156,7 @@ describe("apagar de verdade: o conjunto é um só (task d3c005dc)", () => {
       card_id: "c1",
       board_id: "b1",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

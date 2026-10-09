@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type ReportRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { readBus } from "../helpers/bus-response";
 
 // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — achado ao vivo
 // nesta sessão: um card de review chamou `report`, saiu `ok:true`, o
@@ -336,7 +337,7 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
     // Duas rodadas antes do restart — seq real fica > 1 (não é o caso
     // trivial "só existia 1 relatório").
     await bus1.handleRequest({ cmd: "report", requesterId: "reviewer-2", report: { round: 1 } } as BusRequest);
-    const r2 = (await bus1.handleRequest({ cmd: "report", requesterId: "reviewer-2", report: { round: 2 } } as BusRequest)) as { seq: number };
+    const r2 = readBus<{ seq: number }>(await bus1.handleRequest({ cmd: "report", requesterId: "reviewer-2", report: { round: 2 } } as BusRequest));
     bus1.close();
     store1.close();
 
@@ -364,7 +365,7 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
 
     const store1 = openStore(dir);
     const bus1 = createMessageBus(join(dir, "a.sock"), callbacksBackedByStore(store1));
-    const r1 = (await bus1.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 1 } } as BusRequest)) as { seq: number };
+    const r1 = readBus<{ seq: number }>(await bus1.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 1 } } as BusRequest));
     bus1.close();
     store1.close();
 
@@ -382,7 +383,7 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
       // Um relatório novo DEPOIS do restart passa a satisfazer o mesmo
       // afterSeq — a seq persistida (não reiniciada) é o que faz isso
       // funcionar.
-      const r2 = (await bus2.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 2 } } as BusRequest)) as { seq: number };
+      const r2 = readBus<{ seq: number }>(await bus2.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 2 } } as BusRequest));
       const fresh = (await bus2.handleRequest({ cmd: "get_report", target: "reviewer-3", afterSeq: r1.seq } as BusRequest)) as {
         ok: boolean;
         report: unknown;

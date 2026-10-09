@@ -112,10 +112,14 @@ describe("provider dinâmico: o MCP é registrado, dirigido pela declaração", 
       // MAIS forte: a entrada é escrita na forma que o provider declara, e uma
       // forma de URL não carrega `command` nenhum (zero-processo).
       const shape = s.capacity.mcp.serverShape;
-      const entry = readConfig(file)[s.capacity.mcp.configKey].stellar as Record<string, unknown>;
+      const cfg = readConfig(file) as unknown as Record<string, { stellar?: Record<string, unknown> }>;
+      const entry = cfg[s.capacity.mcp.configKey]!.stellar!;
       if (shape === "remote-url" || shape === "http-url") {
         expect(entry.type, s.id).toBe(shape === "remote-url" ? "remote" : "http");
         expect(entry.command, s.id).toBeUndefined();
+      } else if (shape === "local-array") {
+        expect(entry.type, s.id).toBe("local");
+        expect(entry.command, s.id).toEqual([SHIM]);
       } else {
         expect(entry.command, s.id).toBe(SHIM);
       }

@@ -20,6 +20,7 @@ function baseTaskRow(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -62,13 +63,18 @@ describe("4fee76d5 — ambiguidade de vínculo no report (caracterização)", ()
   let server: ReturnType<typeof createMcpServer>;
   let client: Client;
   let tasks: TaskShape[];
-  let reports: BusRequest[];
+  type ReportReq = Extract<BusRequest, { cmd: "report" }>;
+  let reports: ReportReq[];
 
   const CARD = "c1";
+  const MCP_INTERNAL = "unit-ambiguity-internal-token";
 
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      internalToken: MCP_INTERNAL,
+      requireIdentity: false,
+      resolveRelayIdentity: (cardId) => ({ cardId, boardId: "default" }),
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         if (req.cmd === "list_tasks") return { ok: true, tasks };
         if (req.cmd === "get_task") {
@@ -86,11 +92,18 @@ describe("4fee76d5 — ambiguidade de vínculo no report (caracterização)", ()
       const tick = () => (server.url.endsWith(":0/mcp") ? setTimeout(tick, 5) : resolve());
       tick();
     });
-    // `caller()` só confia no carimbo da URL (`caller-identity.ts`): o
-    // `callerCardId` do corpo NÃO estabelece identidade. Sem `?card=` o
-    // requesterId seria undefined e nada disto seria exercitado.
+    // Identity is Bearer + x-stellar-caller-card; callerCardId in the body cannot establish it.
     client = new Client({ name: "ambiguity", version: "0.0.0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}?card=${CARD}`)));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: {
+          headers: {
+            authorization: `Bearer ${MCP_INTERNAL}`,
+            "x-stellar-caller-card": CARD,
+          },
+        },
+      }),
+    );
   });
 
   afterAll(async () => {

@@ -81,6 +81,7 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
     beforeAll(async () => {
       server = createMcpServer({
         port: 0,
+      requireIdentity: false,
         handleRequest: async (req: BusRequest): Promise<BusResponse> => {
           seen.push(req);
           if (req.cmd === "get_task") return { ok: true, task: REPORT_SCHEMA_TASK };
@@ -116,7 +117,8 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
         // schema não, isto quebra aqui.
         expect(schema!.required ?? [], `${name}: required publicado`).toEqual(spec.required);
         expect(Object.keys(schema!.properties ?? {}).sort(), `${name}: campos publicados`).toEqual(
-          name === "report" ? ["callerCardId", "report", "verdict"] : ["target"],
+          // authToken is injected by the identity choke point on every tool.
+          name === "report" ? ["authToken", "callerCardId", "report", "verdict"] : ["authToken", "target"],
         );
         expect(schema!.additionalProperties, `${name}: estrito`).toBe(false);
       }
@@ -155,7 +157,7 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
       expect(res.isError).toBeFalsy();
       expect(seen).toHaveLength(1);
       expect(seen[0].cmd).toBe("card_status");
-      expect(seen[0].target).toBe("c1");
+      expect(seen[0]).toMatchObject({ target: "c1" });
     });
   });
 
@@ -167,6 +169,7 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
     beforeAll(async () => {
       server = createMcpServer({
         port: 0,
+      requireIdentity: false,
         handleRequest: async (req: BusRequest): Promise<BusResponse> => {
           seen.push(req);
           if (req.cmd === "get_task") return { ok: true, task: REPORT_SCHEMA_TASK };

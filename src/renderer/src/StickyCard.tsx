@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { t, type MessageKey } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
+import { decideStickyFooter } from "./card-footer-decision";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
@@ -84,6 +85,7 @@ function StickyCardInner({
   color,
   mode,
   fontSize,
+  updatedAt,
   interactionMode,
   selected,
   reflowing,
@@ -124,6 +126,7 @@ function StickyCardInner({
   /** Per-card body size in px. Discrete 2px steps, persisted like
    * `color`/`mode` (App.tsx's `commitStickyFontSize` → `system_prompt`). */
   fontSize: number;
+  updatedAt?: number;
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
@@ -258,11 +261,13 @@ function StickyCardInner({
   }
 
   const kind = STICKY_KIND[color] ?? STICKY_KIND.yellow;
+  const stickyFooter = decideStickyFooter(updatedAt, Date.now());
 
   return (
     <CardFrame
       className={styles.stickyCard}
       kind="sticky"
+      cardId={cardId}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -283,10 +288,12 @@ function StickyCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      headerIcon={<Icon name={kind.icon} size={13} />}
+      headerContext={t(kind.labelKey)}
+      headerStatus={<span>{mode === "edit" ? "editando" : "prévia"}</span>}
       headerContent={
         <>
           <span className="card-head-label">
-            <Icon name={kind.icon} size={14} />
             <span className="swatches">
               {STICKY_COLORS.map((c) => (
                 <button
@@ -360,6 +367,7 @@ function StickyCardInner({
           </span>
         </>
       }
+      footerContent={stickyFooter ?? undefined}
     >
       <div
         ref={bodyRef}

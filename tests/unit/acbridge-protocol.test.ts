@@ -47,15 +47,15 @@ describe("decideAcbridgeProtocol — política assimétrica", () => {
     expect(decideAcbridgeProtocol({ kind: "match", theirs: 1 }, 1)).toEqual({ accept: true });
   });
 
-  it("acbridge mais velho / no protocol stamp: aceita (subconjunto) e AVISA — card velho vivo não cai", () => {
+  it("acbridge mais velho é recusado; protocolo sem carimbo fica só para endpoints públicos", () => {
     const unstamped = decideAcbridgeProtocol({ kind: "unstamped" }, 2);
     expect(unstamped.accept).toBe(true);
-    expect(unstamped.accept && unstamped.warning).toMatch(/no protocol stamp/);
-    expect(unstamped.accept && unstamped.warning).toMatch(/protocol 2/);
+    expect(unstamped.accept && unstamped.warning).toBeUndefined();
 
     const older = decideAcbridgeProtocol({ kind: "acbridge-older", theirs: 1 }, 2);
-    expect(older.accept).toBe(true);
-    expect(older.accept && older.warning).toMatch(/protocol 1, bus on protocol 2/);
+    expect(older.accept).toBe(false);
+    expect(!older.accept && older.error).toMatch(/protocol 1, bus on protocol 2/);
+    expect(!older.accept && older.error).toMatch(/Reinstall\/rebuild Stellar/);
   });
 
   it("acbridge mais novo: RECUSA — este bus deixaria cair campos sem saber quais", () => {
@@ -73,8 +73,8 @@ describe("decideAcbridgeProtocol — política assimétrica", () => {
 });
 
 describe("stripProtocolStamp", () => {
-  it("remove só a chave de protocol, sem tocar no resto", () => {
-    expect(stripProtocolStamp({ cmd: "report", report: { ok: true }, protocol: 1 })).toEqual({ cmd: "report", report: { ok: true } });
+  it("removes protocol and transport identity fields before dispatch", () => {
+    expect(stripProtocolStamp({ cmd: "report", report: { ok: true }, protocol: 1, clientCardId: "c1", clientBoardId: "b1", authToken: "secret" })).toEqual({ cmd: "report", report: { ok: true } });
     expect(stripProtocolStamp({ cmd: "list" })).toEqual({ cmd: "list" });
     expect(stripProtocolStamp(null)).toBeNull();
   });
@@ -90,7 +90,7 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
   });
 
   it("o script carimba o request num ponto só, antes de conectar", () => {
-    expect(source).toMatch(/request = \{ \.\.\.request, protocol: ACBRIDGE_PROTOCOL \};/);
+    expect(source).toMatch(/request = \{\s+\.\.\.request,\s+protocol: ACBRIDGE_PROTOCOL,/);
     expect(source.indexOf("protocol: ACBRIDGE_PROTOCOL")).toBeLessThan(source.indexOf("net.connect("));
   });
 
@@ -141,6 +141,18 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       // Protocol 10 — `gate-lock` entrou na CLI (task ff24b36d): comando pesado
       // sob o lock do gate-runner. cmd novo é mudança de superfície.
       10: "7d52fcd2f5882401",
+      // Protocol 11 — identity fields were removed from client requests.
+      11: "d9e37a3ecdd0a4fd",
+      // Protocol 12 — socket peer ancestry is the only card identity; forged
+      // clientCardId/clientBoardId/authToken envelope fields are stripped and
+      // refused at the bus. AGENT_CANVAS_CARD_ID is no longer identity.
+      12: "8e5f7c2aa207404a",
+      // Protocol 13 — spawn-card gained --reason and --persistent (Push/profile).
+      13: "509940374a4c2164",
+      // Protocol 14 — peer-authenticated card identity (design 277cb882). Keeps
+      // spawn-card --reason/--persistent from 13; identity is socket ancestry,
+      // not AGENT_CANVAS_CARD_ID / clientCardId.
+      14: "509940374a4c2164",
     };
     expect(
       hash,
@@ -160,7 +172,7 @@ describe("bus: o socket confere o carimbo antes do dispatcher", () => {
     dir = null;
   });
 
-  function makeBus() {
+  function makeBus(withPeerIdentity = true) {
     dir = mkdtempSync(join(tmpdir(), "stellar-acbridge-protocol-"));
     const sockPath = join(dir, "agent-canvas.sock");
     const callbacks = new Proxy(
@@ -168,12 +180,15 @@ describe("bus: o socket confere o carimbo antes do dispatcher", () => {
       {
         get: (_t, prop: string) => {
           if (prop === "listCards") return () => [];
+          if (prop === "getCardBoardId") return () => "board-a";
           if (prop === "nextReportSeqSeed") return () => 0;
           return () => undefined;
         },
       },
     ) as Parameters<typeof createMessageBus>[1];
-    bus = createMessageBus(sockPath, callbacks);
+    bus = createMessageBus(sockPath, callbacks, {
+      ...(withPeerIdentity ? { getPeerPid: () => 4321, resolvePeerIdentity: () => ({ cardId: "card-a", boardId: "board-a" }) } : {}),
+    });
     return sockPath;
   }
 
@@ -209,27 +224,38 @@ describe("bus: o socket confere o carimbo antes do dispatcher", () => {
     expect(res).toEqual({ ok: true, protocol: ACBRIDGE_PROTOCOL });
   });
 
-  it("acbridge mais novo é recusado ANTES de qualquer efeito; a chave `protocol` nunca chega ao dispatcher", async () => {
+  it("protocolo incompatível é recusado ANTES do dispatcher; clientes antigos recebem instrução", async () => {
     const sock = makeBus();
     await ready(sock);
-    const [refused, accepted] = await roundtrip(sock, [
+    const [newer, older] = await roundtrip(sock, [
       { cmd: "list", protocol: ACBRIDGE_PROTOCOL + 1 },
-      { cmd: "list", protocol: ACBRIDGE_PROTOCOL },
+      { cmd: "list", protocol: ACBRIDGE_PROTOCOL - 1 },
     ]);
-    expect(refused.ok).toBe(false);
-    expect(String(refused.error)).toMatch(/^protocol mismatch/);
-    expect(accepted.ok).toBe(true);
-    expect(Array.isArray(accepted.cards)).toBe(true);
-    expect(accepted).not.toHaveProperty("warning");
+    expect(newer.ok).toBe(false);
+    expect(String(newer.error)).toMatch(/^protocol mismatch/);
+    expect(older.ok).toBe(false);
+    expect(String(older.error)).toMatch(/Reinstall\/rebuild Stellar/);
   });
 
-  it("request no protocol stamp (acbridge instalado antigo, smoke cru): aceito, com `warning` na resposta", async () => {
+  it("a identidade vem do peer, e os campos de identidade forjados são recusados", async () => {
     const sock = makeBus();
     await ready(sock);
+    const [accepted, forged] = await roundtrip(sock, [
+      { cmd: "list", protocol: ACBRIDGE_PROTOCOL },
+      { cmd: "list", protocol: ACBRIDGE_PROTOCOL, clientCardId: "card-b" },
+    ]);
+    expect(accepted.ok).toBe(true);
+    expect(Array.isArray(accepted.cards)).toBe(true);
+    expect(forged.ok).toBe(false);
+    expect(String(forged.error)).toMatch(/clientCardId\/clientBoardId are not accepted/);
+  });
+
+  it("cliente cru sem identidade não passa de hello/build_identity", async () => {
+    const sock = makeBus(false);
+    await ready(sock);
     const [res] = await roundtrip(sock, [{ cmd: "list" }]);
-    expect(res.ok).toBe(true);
-    expect(Array.isArray(res.cards)).toBe(true);
-    expect(String(res.warning)).toMatch(/no protocol stamp/);
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/caller identity required/);
   });
 
   it("carimbo invalid é recusado", async () => {

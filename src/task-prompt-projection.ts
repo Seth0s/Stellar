@@ -2,8 +2,8 @@ import { parseTaskPrompt } from "./task-prompt-decision";
 
 /**
  * PROJEÇÃO DO PROMPT PARA A FILA — a peça pura da fatia 3c (task ab83ba5f),
- * escrita ANTES da decisão de produto, no mesmo molde do coalescer da 3b:
- * arquivo novo, INERTE (ninguém o importa), contrato em teste.
+ * aplicada pelo produtor do payload da Fila: o push leva o preview, e o
+ * modal carrega o briefing completo sob demanda.
  *
  * POR QUE ELA EXISTE, medido (seq 509 e a medição de composição):
  *   - o push `task:changed` carrega o prompt INTEIRO de cada task e custa
@@ -18,11 +18,8 @@ import { parseTaskPrompt } from "./task-prompt-decision";
  *   - com um teto de 400 chars por task o payload do prompt cairia de
  *     368,9KB para 54,4KB (-85,3%); com 200, para 29,8KB (-91,9%).
  *
- * O QUE ESTA PEÇA **NÃO** É: não decide nada de produto. Cortar o prompt do
- * payload exige que a LINHA aceite um preview e que o MODAL (que mostra as
- * adições e edita o texto inteiro) busque o prompt sob demanda — isso é a
- * fiação, e é decisão do dono do repo. Aqui só existe a CONTA: dado um
- * prompt, qual é o texto que a linha precisaria receber.
+ * A LINHA recebe apenas o preview. O MODAL (que mostra adições e edita o
+ * texto inteiro) lê o prompt completo sob demanda.
  *
  * O RISCO QUE ELA MATA POR CONSTRUÇÃO: projetar a string CRUA e cortar os
  * primeiros N caracteres mostraria o separador `---`/`[stellar:added …]` de

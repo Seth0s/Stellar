@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, providerById, providerTrustPrompt, shouldImposeSessionId, type SpawnOpts } from "./providers";
 import { feedTurnEndChunk } from "../shared/turn-end-signal";
+import { APP_NOTICE } from "./agent-facing-notices";
 import { foldScreenTurn, type ScreenTurnState } from "./screen-turn-state";
 import type { ScreenTurnDecl } from "./providers";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
@@ -20,6 +21,8 @@ import { decideBashCardDiscovery } from "./bash-discovery-decision";
 import { decideCardIdentityEnv } from "./card-spawn-env-decision";
 import { isIdentityEnvKey } from "./pty-env";
 import { agentProcessName } from "./process-name-decision";
+import { readProcessInfo } from "./peer-credentials";
+import { StreamingSecretRedactor } from "./secret-redaction";
 import {
   appendScrollback,
   createScrollback,
@@ -251,11 +254,8 @@ export function detectQuotaExhaustion(providerId: string, text: string): { label
 }
 
 /** Linha única, greppável, do falecimento por cota — distinta de crash. */
-export function describeQuotaDeath(evidence: QuotaDeathEvidence): string {
-  return (
-    `[stellar] provider quota exhausted (${evidence.providerId}) — card died by quota, ` +
-    `not by a crash. Evidence: "${evidence.excerpt}". It may resume when the quota resets.`
-  );
+export function describeQuotaDeath(evidence: QuotaDeathEvidence, cardId = "unknown"): string {
+  return APP_NOTICE.quotaDeath({ provider: evidence.providerId, cardId });
 }
 
 /**
@@ -418,6 +418,7 @@ type Entry = {
    * runs long after, in a different closure. */
   providerId: string;
   cwd: string;
+  secretRedactor: StreamingSecretRedactor;
   /** Acumula bytes de INPUT humano (não output) até a próxima quebra de
    * linha. Além de checar resume, o porteiro usa a não-vazio como sinal de
    * que o usuário começou uma linha. Escritas de `typeAndSubmit` são
@@ -786,6 +787,9 @@ export function createPtyRegistry(registryOpts: {
    * (mcp-server.ts), threaded into `SpawnOpts.mcpUrl` for every spawn so
    * `providers.ts::buildArgs` can register it per-provider. */
   mcpUrl: string;
+  registerProcessIdentity?: (cardId: string, pid: number, startTime: bigint | null, authToken: string) => void;
+  removeProcessIdentity?: (cardId: string) => void;
+  issueAuthToken?: () => string;
   /** Cap, in BYTES, of the per-card raw-output ring (`Entry.scrollback`).
    * Absent means `resolveScrollbackMaxBytes` (declared 2 MB default, env
    * override). */
@@ -861,6 +865,7 @@ export function createPtyRegistry(registryOpts: {
     if (!entries.has(id)) return false;
     stashTrace(id);
     entries.delete(id);
+    registryOpts.removeProcessIdentity?.(id);
     registryOpts.onLivenessChanged?.(id, false);
     return true;
   }
@@ -939,7 +944,7 @@ export function createPtyRegistry(registryOpts: {
           registryOpts.onTrustPromptUnconfirmed?.(
             id,
             e.providerId,
-            describeTrustPromptOutsideRootWarning({ providerId: e.providerId, cwd: e.cwd, root }),
+            describeTrustPromptOutsideRootWarning({ cardId: id, providerId: e.providerId, cwd: e.cwd, root }),
           );
         }
       } else if (!hit && e.trustPromptPending) {
@@ -1061,7 +1066,20 @@ export function createPtyRegistry(registryOpts: {
         }
       }
     }
-    const effectiveSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
+    const authToken = registryOpts.issueAuthToken?.() ?? randomBytes(32).toString("base64url");
+    const baseSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
+    const effectiveSpawnOpts: SpawnOpts =
+      providerId === "cline"
+        ? {
+            ...baseSpawnOpts,
+            systemPrompt: [
+              baseSpawnOpts.systemPrompt,
+              `Use this per-card Stellar MCP authToken in tool arguments when requested: ${authToken}`,
+            ]
+              .filter((part) => typeof part === "string" && part.trim())
+              .join("\n\n"),
+          }
+        : baseSpawnOpts;
     // Measured 2026-09-13: claude/cursor accept a caller-chosen UUID.
     // Generate it HERE (not inside buildArgs) so we can persist
     // `resume_id` on the same spawn tick — the watcher does not run for
@@ -1070,7 +1088,6 @@ export function createPtyRegistry(registryOpts: {
       ? randomUUID()
       : undefined;
 
-    const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
     // DESIGN-BACKLOG.md §0 — capacity-derived report discovery. Refuse
     // before resolveSpawn when the provider has no path to teach report
     // (spawnBlock). Scrollback tip is applied after a successful spawn.
@@ -1079,7 +1096,7 @@ export function createPtyRegistry(registryOpts: {
       return { error: "spawn_failed", providerId };
     }
 
-    const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: cardMcpUrl, imposedSessionId });
+    const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: registryOpts.mcpUrl, imposedSessionId });
     if (!resolved) {
       return {
         error: "binary_not_found",
@@ -1118,14 +1135,12 @@ export function createPtyRegistry(registryOpts: {
       // ambiente do main (é o ponto de "as pastas são do perfil").
       ...(homePlan?.env ?? {}),
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
-      AGENT_CANVAS_CARD_ID: id,
       // NOME DO PROCESSO por agente (task 817daa3e). O shim/stub é NOSSO mas
       // herda nome genérico (`node`/`stellar-mcp-rel`) e some numa pilha de
       // `stellar`/`node-22`/`agy`. `agentProcessName` (regra única, testada em
       // tests/unit/process-name-decision.test.ts) devolve `st:<provider>` —
       // o relay Rust aplica via `prctl(PR_SET_NAME)` (mexe no `comm`) e o shim
       // node via `process.title` (mexe em `comm` E no `cmdline`). Chega aos
-      // dois pela mesma herança que já entrega AGENT_CANVAS_CARD_ID. Ver
       // docs/PROCESS_NAMING.md para o esquema, o teto de 15 chars e o que NÃO
       // dá para fazer no CLI de terceiro.
       AGENT_CANVAS_PROC_NAME: agentProcessName(providerId),
@@ -1137,15 +1152,14 @@ export function createPtyRegistry(registryOpts: {
       // out via acbridge/MCP if IT spawns another agent.
       AGENT_CANVAS_SPAWN_DEPTH: String(spawnOpts.spawnDepth ?? 0),
       // Achado ao vivo (2026-09-01) — o shim `stellar-mcp` (resources/bin)
-      // lê isto pra saber a porta VIVA do servidor MCP desta execução da
-      // app, já que a porta é efêmera e o registro nas CLIs que não têm
-      // flag por invocação (cursor, antigravity) é um arquivo escrito uma
-      // vez só. Junto com AGENT_CANVAS_CARD_ID acima, é o par que dá ao
-      // shim endereço e identidade sem nada disso estar no arquivo.
-      // Sem `?card=` aqui: quem carimba a identidade é o shim, e o
-      // `cardMcpUrl` logo acima (que já vai carimbado) é outra coisa — a
-      // flag efêmera do claude/codex.
+      // The shim uses the app URL only to find its local relay socket. Card
+      // identity comes from the accepted socket peer, never from this URL.
       AGENT_CANVAS_MCP_URL: registryOpts.mcpUrl,
+      // Convenience label for CLIs (acbridge still reads it for requesterId
+      // hints). Not identity — the bus binds the Unix peer to this card's
+      // registered PTY root and refuses a forged value.
+      AGENT_CANVAS_CARD_ID: id,
+      ...(providerId === "cline" ? { CLINE_SESSION_BACKEND_MODE: "local" } : {}),
       // Interpretador para os shims de `resources/bin` (`stellar-mcp`,
       // `acbridge`) rodarem (2026-09-08). Preferência (2026-09-09):
       // `realNodePath()` — um `node` real e JÁ VALIDADO (achado no PATH
@@ -1194,6 +1208,15 @@ export function createPtyRegistry(registryOpts: {
     } catch {
       return { error: "spawn_failed", providerId };
     }
+    // Read (pid,starttime) with a short retry: registering with startTime
+    // null makes resolvePeer skip the card, so a legitimate stellar-mcp
+    // peer is refused. Measured path is sync right after node-pty spawn;
+    // the retry is belt-and-suspenders for a /proc or Darwin-addon miss.
+    let processInfo = readProcessInfo(proc.pid);
+    for (let attempt = 0; attempt < 4 && !processInfo; attempt += 1) {
+      processInfo = readProcessInfo(proc.pid);
+    }
+    registryOpts.registerProcessIdentity?.(id, proc.pid, processInfo?.startTime ?? null, authToken);
 
     // A3c (P5): avisa que este card NÃO separa por perfil (canal separado da
     // saída — sobrevive a redraw de TUI).
@@ -1234,6 +1257,7 @@ export function createPtyRegistry(registryOpts: {
       hasReceivedData: false,
       providerId,
       cwd,
+      secretRedactor: new StreamingSecretRedactor(authToken),
       inputLineBuffer: "",
       inputLineLastAtMs: null,
       // O spawn já é uma concessão de trabalho quando o card nasce com brief
@@ -1363,7 +1387,7 @@ export function createPtyRegistry(registryOpts: {
         // Card já morto: a limpeza do exit cuidou da claim, não há o que
         // conferir (e armar watcher de card morto vazaria poller).
         if (!entries.has(id)) return;
-        let storeRead: ReturnType<typeof getResumeTargetEvidence> = null;
+        let storeRead: ReturnType<typeof getResumeTargetEvidence>;
         try {
           storeRead = getResumeTargetEvidence(providerId, cwd, checkedId);
         } catch {
@@ -1399,7 +1423,8 @@ export function createPtyRegistry(registryOpts: {
       claimSessionId(effectiveSpawnOpts.resumeId);
     }
 
-    proc.onData((data) => {
+    const acceptPtyData = (data: string) => {
+      if (!data) return;
       entry.lastActivityAt = Date.now();
       // Task 86613ff9 — `first_output` é a PRIMEIRA vez que o processo fala,
       // não cada chunk: a virada, e só ela, vira evento.
@@ -1423,9 +1448,12 @@ export function createPtyRegistry(registryOpts: {
       if (!entry.flushTimer) {
         entry.flushTimer = setTimeout(() => flush(id), COALESCE_MS);
       }
-    });
+    };
+    proc.onData((rawData) => acceptPtyData(entry.secretRedactor.push(rawData)));
 
     proc.onExit(({ exitCode }) => {
+      const redactedTail = entry.secretRedactor.flush();
+      if (redactedTail) acceptPtyData(redactedTail);
       flush(id);
       entry.stopWatch?.();
       if (entry.killTimer) clearTimeout(entry.killTimer);
@@ -1492,7 +1520,7 @@ export function createPtyRegistry(registryOpts: {
       // VISÍVEL de crash. A cauda preservada vai no diagnóstico tipado.
       if (entry.quotaSignal && !entry.killRequested) {
         const quotaDeath: QuotaDeathEvidence = { ...entry.quotaSignal, tail: entry.outputTail };
-        registryOpts.onData(id, `\r\n${describeQuotaDeath(quotaDeath)}\r\n`);
+        registryOpts.onData(id, `\r\n${describeQuotaDeath(quotaDeath, id)}\r\n`);
         registryOpts.onExit(id, exitCode, quotaDeath);
       } else {
         registryOpts.onExit(id, exitCode);

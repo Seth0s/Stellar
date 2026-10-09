@@ -131,8 +131,10 @@ function shared(reason: string, disputed: GateIsolationDispute[] = []): GateIsol
 export function decideGateIsolation(input: {
   /** The implementer card OF THIS task (who declares what it changed). */
   cardId: string | null;
-  /** `filesChanged` of each card, raw (the module normalizes). It includes the
-   * OTHER cards, so a dispute is detectable. */
+  /** `filesChanged` of each ACTIVE card, raw (the module normalizes). Include
+   * OTHER live writers so a real dispute is detectable; omit archived,
+   * missing, released, and terminal-task cards (see active-declaration-decision)
+   * — ghost ids in this list were the measured false shared-mode trigger. */
   declared: readonly DeclaredFiles[] | null | undefined;
   /** Git root of the task's cwd, or `null` outside a repository. */
   gitRoot: string | null;
@@ -140,12 +142,23 @@ export function decideGateIsolation(input: {
    * — the caller already filtered by the territory matcher. They enter the
    * isolated set when no card declared them. Absent = nothing to add. */
   territoryDirty?: readonly string[] | null;
+  /** Nested repositories intersecting this task's declared paths. An outer
+   * repository worktree cannot contain their HEAD or dirty files, so this
+   * forces a measured shared-tree run instead of a false isolated result. */
+  nestedRepositories?: readonly string[] | null;
 }): GateIsolationDecision {
   if (!input.gitRoot) {
     return shared("o cwd desta task não é um repositório git — não há HEAD de onde isolar.");
   }
   if (!input.cardId) {
     return shared("a task não tem card implementer — não há como atribuir quais arquivos são dela.");
+  }
+  const nestedRepositories = [...new Set(input.nestedRepositories ?? [])];
+  if (nestedRepositories.length > 0) {
+    return shared(
+      `the declared territory or changed files intersect nested git repositories (${nestedRepositories.join(", ")}); ` +
+        "an outer-repository worktree cannot include them, so the gates will run in the shared tree",
+    );
   }
   // Normalizes EVERY declaration (including the other cards': the dispute is
   // between declarations, and a neighbour's unsafe path does not contaminate

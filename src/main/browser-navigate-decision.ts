@@ -96,10 +96,17 @@ export type NavigatePrecheckInput = {
   /** Erro do `querySelector` do `expectSelector`, se houve — chega da mesma
    * amostra, então a recusa acontece sem ter mexido na página. */
   expectSelectorError: string | null;
+  /**
+   * When true (caller owns this browser card), a different origin is
+   * allowed as a full document load on the SAME card — not pushState.
+   * Foreign cards still refuse cross-origin (use open_url / your own card).
+   */
+  allowDocumentNav?: boolean;
 };
 
 export type NavigatePrecheck =
   | { action: "navigate"; href: string; route: string }
+  | { action: "document-load"; href: string; route: string }
   | { action: "already-there"; href: string; route: string }
   | {
       action: "refuse";
@@ -124,7 +131,7 @@ export function decideNavigatePrecheck(input: NavigatePrecheckInput): NavigatePr
     };
   }
 
-  let doc: URL | null = null;
+  let doc: URL | null;
   try {
     doc = new URL(input.documentHref);
   } catch {
@@ -166,15 +173,24 @@ export function decideNavigatePrecheck(input: NavigatePrecheckInput): NavigatePr
   }
 
   if (resolved.origin !== doc.origin) {
+    if (input.allowDocumentNav === true) {
+      // Same card, caller owns it: full document navigation (loadURL), not
+      // pushState — SPA session will remount, which is expected when the
+      // origin changes.
+      return {
+        action: "document-load",
+        href: resolved.href,
+        route: normalizeRoute(resolved.href),
+      };
+    }
     return {
       action: "refuse",
       code: "cross-origin",
       error:
         `browser_navigate refused: ${resolved.origin} is a DIFFERENT site from the page already loaded ` +
-        `(${doc.origin}). A document load is the right thing when changing sites — use open_url. browser_navigate ` +
-        `is only for routes INSIDE the site already open, where the SPA's in-memory session has to survive ` +
-        `(that is the whole point: swapping location remounts the SPA and its route guard rejects the route). ` +
-        `Nothing was navigated.`,
+        `(${doc.origin}). On a browser card YOU own, pass the same target and browser_navigate will ` +
+        `document-load the new origin on that card; otherwise use open_url. Cross-origin on someone ` +
+        `else's card is still refused. Nothing was navigated.`,
     };
   }
 
@@ -397,6 +413,64 @@ export function viewFingerprintSource(expectSelector: string | null, markerToken
  * O marcador é posto ANTES do `pushState`: se ele não estiver lá na amostra
  * seguinte, o documento foi trocado e a decisão sabe disso.
  */
+/**
+ * SPA soft-404 detection after an in-app route change.
+ *
+ * Heuristic (documented, ordered):
+ *  1. document HTTP status is 404 (when the main-frame load reported it);
+ *  2. caller-supplied `notFoundMarker` — CSS selector that matches, or a
+ *     literal substring found in title/visible text;
+ *  3. title matches a common 404 pattern;
+ *  4. visible text (first ~800 chars) matches a common 404 pattern.
+ *
+ * A matched route URL alone is NEVER proof the view rendered — that was the
+ * measured miss (`route:"/configuracoes"` on a SPA 404 page).
+ */
+const SPA_NOT_FOUND_TITLE_RE = /\b404\b|not\s*found|página\s+não\s+encontrad|pagina\s+nao\s+encontrad|page\s+not\s+found/i;
+const SPA_NOT_FOUND_TEXT_RE =
+  /\b404\b|not\s*found|página\s+não\s+encontrad|pagina\s+nao\s+encontrad|page\s+not\s+found|não\s+encontramos|nao\s+encontramos/i;
+
+export type SpaNotFoundDecision = {
+  notFound: boolean;
+  reason: string | null;
+};
+
+export function decideSpaNotFound(input: {
+  title: string;
+  visibleText: string;
+  /** Main-document HTTP status when known; null if unknown (pushState never loads). */
+  documentStatus: number | null;
+  /** Optional: CSS selector (starts with `.`/`#`/`[`/`letter`) or plain text needle. */
+  notFoundMarker?: string | null;
+  /** True when notFoundMarker was a selector and matched in the page. */
+  markerSelectorMatched?: boolean | null;
+}): SpaNotFoundDecision {
+  if (input.documentStatus === 404) {
+    return { notFound: true, reason: "document HTTP status is 404" };
+  }
+  const marker = typeof input.notFoundMarker === "string" ? input.notFoundMarker.trim() : "";
+  if (marker) {
+    if (input.markerSelectorMatched === true) {
+      return { notFound: true, reason: `notFoundMarker selector matched: ${marker}` };
+    }
+    // When the marker was not a failed selector probe, also treat it as a text needle.
+    if (input.markerSelectorMatched !== false) {
+      const m = marker.toLowerCase();
+      if (input.title.toLowerCase().includes(m) || input.visibleText.toLowerCase().includes(m)) {
+        return { notFound: true, reason: `notFoundMarker text found: ${marker}` };
+      }
+    }
+  }
+  if (SPA_NOT_FOUND_TITLE_RE.test(input.title)) {
+    return { notFound: true, reason: `document title looks like a 404 (${JSON.stringify(input.title.slice(0, 80))})` };
+  }
+  const head = input.visibleText.slice(0, 800);
+  if (SPA_NOT_FOUND_TEXT_RE.test(head)) {
+    return { notFound: true, reason: "visible text looks like a 404 page" };
+  }
+  return { notFound: false, reason: null };
+}
+
 export function navigateInAppSource(href: string, token: string): string {
   const marker = JSON.stringify(INAPP_NAV_MARKER);
   const tokenJson = JSON.stringify(token);

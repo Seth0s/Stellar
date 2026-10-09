@@ -21,12 +21,12 @@
  *     reportou este bug foi a declaração — e é justamente ela que o bus
  *     ignorava: os agentes já escrevem `taskId` no corpo por convenção do
  *     board, e era o único campo que dizia, sem ambiguidade, de qual task
- *     era o relatório. Declarado que NÃO corresponde a vínculo vivo é
- *     RECUSA, não fallback silencioso — cair para outro vínculo seria
- *     responder sobre uma task que o agente não pediu.
- *   - sem declaração: UM vínculo é inequívoco; DOIS ou mais é AMBÍGUO, e
+ *     era o relatório. Declarado que NÃO corresponde a um vínculo que o
+ *     card tem OU TEVE (`historyLinkTaskIds`) é RECUSA, não fallback
+ *     silencioso — cair para o vínculo vivo seria carimbar a task errada.
+ *   - sem declaração: UM vínculo VIVO é inequívoco; DOIS ou mais é AMBÍGUO, e
  *     ambíguo RECUSA nomeando as candidatas. Nunca desempata, nunca
- *     degrada para outsider.
+ *     degrada para outsider. Histórico NÃO entra neste ramo.
  *   - NENHUM vínculo continua sendo `unknown` → outsider, que é a política
  *     que já existe (`decideReportVerdictWrite`): mudar isso seria inventar
  *     política nova, não consertar um buraco.
@@ -66,10 +66,20 @@ export function normalizeDeclaredTaskId(raw: unknown): string | undefined {
 }
 
 /** O `taskId` que o agente escreveu no corpo do report, se houver. Aceita o
- * objeto cru; um report que não é objeto não declara nada. */
+ * objeto cru; um report que não é objeto não declara nada.
+ *
+ * Board convention is `taskId`. Agents also write `task`. When both are
+ * present and differ, `task` wins: `fillReportTaskId` only stamps `taskId`,
+ * so a conflict is the agent field vs a (possibly wrong) server stamp —
+ * preferring `task` recovers the historical mis-stamp without rewriting
+ * the row. */
 export function declaredTaskIdFromReportBody(report: unknown): string | undefined {
   if (report === null || typeof report !== "object" || Array.isArray(report)) return undefined;
-  return normalizeDeclaredTaskId((report as Record<string, unknown>).taskId);
+  const body = report as Record<string, unknown>;
+  const fromTaskId = normalizeDeclaredTaskId(body.taskId);
+  const fromTask = normalizeDeclaredTaskId(body.task);
+  if (fromTask && fromTaskId && fromTask !== fromTaskId) return fromTask;
+  return fromTaskId ?? fromTask;
 }
 
 export function decideReportTaskLink(input: {
@@ -79,17 +89,24 @@ export function decideReportTaskLink(input: {
   principalTaskIds: readonly (string | null | undefined)[];
   /** Ids das tasks com vínculo vivo em `task_cards` para este card. */
   linkTaskIds: readonly (string | null | undefined)[];
+  /** Past participations (`listTaskCardsForCardHistory`). Used ONLY when a
+   * task is declared — "has or had a link". Undeclared reports stay live-only. */
+  historyLinkTaskIds?: readonly (string | null | undefined)[];
 }): ReportTaskLink {
   const principals = uniqueNonEmpty(input.principalTaskIds);
   const links = uniqueNonEmpty(input.linkTaskIds);
   // O conjunto de vínculos VIVOS deste card, sem repetir (uma task pode ser
   // principal E ter linha em `task_cards` — é o caso normal).
   const live = uniqueNonEmpty([...principals, ...links]);
+  const history = uniqueNonEmpty(input.historyLinkTaskIds ?? []);
+  // Declared matching: live ∪ history ("has or had"). Candidates named in a
+  // refusal are the same set so the agent sees what it can declare.
+  const participated = uniqueNonEmpty([...live, ...history]);
 
   const declared = typeof input.declaredTaskId === "string" ? input.declaredTaskId.trim() : "";
   if (declared) {
-    if (live.includes(declared)) return { action: "resolve", taskId: declared, source: "declared" };
-    return { action: "declared-not-linked", declared, candidates: live };
+    if (participated.includes(declared)) return { action: "resolve", taskId: declared, source: "declared" };
+    return { action: "declared-not-linked", declared, candidates: participated };
   }
 
   if (principals.length === 1) return { action: "resolve", taskId: principals[0]!, source: "principal" };
@@ -113,13 +130,16 @@ export function describeAmbiguousTaskRefusal(candidates: readonly string[]): str
   );
 }
 
-/** AGENT-FACING — ENGLISH ONLY, not i18n'd. Declared but not a live link:
- * refuse instead of falling back to another link, which would answer about
- * another task. */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. Declared but not a link this card
+ * has or had: refuse instead of falling back to the live link, which would
+ * stamp the wrong task. */
 export function describeDeclaredTaskNotLinkedRefusal(declared: string, candidates: readonly string[]): string {
-  const list = candidates.length > 0 ? `This card's active links are: ${candidates.join(", ")}.` : "This card has no active link at all.";
+  const list =
+    candidates.length > 0
+      ? `This card's links (live or past) are: ${candidates.join(", ")}.`
+      : "This card has no link to any task (live or past).";
   return (
-    `[de: stellar] report refused: the report declares taskId "${declared}", which is NOT an active link of this card. ` +
+    `[de: stellar] report refused: the report declares taskId "${declared}", which is NOT a link of this card (live or past). ` +
     `${list} Fix the taskId and call again in the same turn. Nothing was written.`
   );
 }

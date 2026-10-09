@@ -44,6 +44,8 @@ import { TerminalCard } from "@renderer/TerminalCard";
 beforeEach(() => {
   setLocale("pt-BR");
   h.notices.clear();
+  const w = window as unknown as { pty?: Record<string, unknown> };
+  w.pty = { ...(w.pty ?? {}), health: async () => null };
   (window as unknown as { store: Record<string, unknown> }).store = {
     ...((window as unknown as { store?: Record<string, unknown> }).store ?? {}),
     cardAgentRoles: vi.fn(async () => []),

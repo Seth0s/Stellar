@@ -11,6 +11,7 @@ import {
   gateEvidenceFromResultJson,
   lockKeyFor,
   resolveGitRoot,
+  resetGateRunCachesForTests,
   runTaskGates,
   stampGateEvidenceJson,
   stripAgentGateEvidence,
@@ -97,6 +98,61 @@ describe("gate-runner: exit-code e streams REAIS", () => {
       timeoutMs: 30_000,
     });
     expect(oneBad.ok).toBe(false);
+  });
+
+  it("1º gate falha → o 2º ainda roda (nunca para no primeiro)", async () => {
+    const marker = join(dir, `second-ran-${Date.now()}.txt`);
+    const evidence = await confinedGates({
+      taskId: "t-run-all",
+      cwd: dir,
+      gates: [
+        nodeEval("process.exit(1)"),
+        nodeEval(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'ok'); process.exit(0)`),
+      ],
+      timeoutMs: 30_000,
+    });
+    expect(evidence.commands).toHaveLength(2);
+    expect(evidence.commands[0].exitCode).toBe(1);
+    expect(evidence.commands[1].exitCode).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it("mesmo reportSeq duas vezes → um disparo só (2ª chamada devolve o cache)", async () => {
+    resetGateRunCachesForTests();
+    const counter = join(dir, `seq-count-${Date.now()}.txt`);
+    writeFileSync(counter, "0");
+    const gate = nodeEval(
+      `const fs=require('fs'); const p=${JSON.stringify(counter)}; fs.writeFileSync(p, String(Number(fs.readFileSync(p,'utf8'))+1)); process.exit(0)`,
+    );
+    const first = await confinedGates({
+      taskId: "t-seq-once",
+      cwd: dir,
+      gates: [gate],
+      reportSeq: 4242,
+      timeoutMs: 30_000,
+    });
+    const second = await confinedGates({
+      taskId: "t-seq-once",
+      cwd: dir,
+      gates: [gate],
+      reportSeq: 4242,
+      timeoutMs: 30_000,
+    });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(readFileSync(counter, "utf8")).toBe("1");
+  });
+
+  it("mesmo reportSeq em OUTRA task → re-executa (cache é taskId:seq, não seq sozinho)", async () => {
+    resetGateRunCachesForTests();
+    const counter = join(dir, `seq-task-${Date.now()}.txt`);
+    writeFileSync(counter, "0");
+    const gate = nodeEval(
+      `const fs=require('fs'); const p=${JSON.stringify(counter)}; fs.writeFileSync(p, String(Number(fs.readFileSync(p,'utf8'))+1)); process.exit(0)`,
+    );
+    await confinedGates({ taskId: "t-seq-a", cwd: dir, gates: [gate], reportSeq: 7, timeoutMs: 30_000 });
+    await confinedGates({ taskId: "t-seq-b", cwd: dir, gates: [gate], reportSeq: 7, timeoutMs: 30_000 });
+    expect(readFileSync(counter, "utf8")).toBe("2");
   });
 
   it("timeout mata o GRUPO de processos: neto do `npx`/shell não sobrevive órfão", async () => {
@@ -341,6 +397,9 @@ describe("gate-runner: evidência — stamp, leitura, strip e carry", () => {
       commands: [
         {
           command: "npx vitest run",
+          normalizedCommand: null,
+          failureKind: "ok",
+          missingExecutable: null,
           exitCode: ok ? 0 : 1,
           signal: null,
           timedOut: false,

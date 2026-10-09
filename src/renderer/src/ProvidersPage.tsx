@@ -8,6 +8,66 @@ import { ProviderIcon } from "./provider-icons";
 import type { ProvidersPageRow, ProvidersPageView } from "../../preload/index";
 import { ProviderUsageBadge } from "./ProviderUsageBadge";
 import type { ProviderUsageStats } from "../../main/provider-usage";
+import { decideProviderUsage } from "./provider-usage-decision";
+import settingsStyles from "./SettingsModal.module.css";
+
+/** Spec dots — Configuracoes.dc.html / SPEC-Configuracoes-V7.md §6. */
+const NATIVE_DOT: Record<string, string> = {
+  claude: "#f0883e",
+  antigravity: "#5b8cff",
+  commandcode: "#e85d9b",
+  codex: "#8d94a6",
+};
+
+/** User-facing path for the providers.json footer (full path stays in `title`). */
+function displayProvidersPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.endsWith("/providers.json") || normalized.endsWith("providers.json")) {
+    return "~/.config/stellar/providers.json";
+  }
+  const home = typeof window !== "undefined" ? window.system?.homeDir : undefined;
+  if (typeof home === "string" && home.length > 0 && path.startsWith(home)) {
+    return `~${path.slice(home.length).replace(/\\/g, "/")}`;
+  }
+  return path.length > 52 ? `…${path.slice(-48)}` : path;
+}
+
+function QuotaPill({
+  providerId,
+  stats,
+  loading,
+  nowMs,
+}: {
+  providerId: string;
+  stats?: ProviderUsageStats;
+  loading?: boolean;
+  nowMs: number;
+}) {
+  if (loading) {
+    return <span className={settingsStyles.pillInfo}>{t("usage.loading")}</span>;
+  }
+  const view = decideProviderUsage({ stats, nowMs });
+  if (view.kind === "measured" && view.bars.length > 0) {
+    const bar = view.bars[0]!;
+    const text = `${t(bar.labelKey)} ${bar.percent}%`;
+    const cls =
+      bar.percent >= 90
+        ? settingsStyles.pillDanger
+        : bar.percent >= 70
+          ? settingsStyles.pillWarn
+          : settingsStyles.pillOk;
+    return (
+      <span className={cls} data-role="provider-usage" data-provider-id={providerId}>
+        {text}
+      </span>
+    );
+  }
+  return (
+    <span className={settingsStyles.pillDanger} data-role="provider-usage" data-provider-id={providerId}>
+      {t("settings.providers.quotaUnavailable")}
+    </span>
+  );
+}
 
 /**
  * Settings → Providers: os providers GENÉRICOS (task cebaf3c8) e — desde o
@@ -70,7 +130,7 @@ function slugFromLabel(label: string): string {
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-export function ProvidersPage() {
+export function ProvidersPage({ layout = "legacy" }: { layout?: "legacy" | "v7" } = {}) {
   const [view, setView] = useState<ProvidersPageView | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -333,6 +393,276 @@ export function ProvidersPage() {
 
   if (loading) return <div className="providers-settings-page">{t("settings.providers.loading")}</div>;
 
+  if (layout === "v7") {
+    const formBlock = showForm ? (
+      <form className="providers-form" data-role="providers-form" onSubmit={submit}>
+        <strong>{editingId ? t("settings.providers.editTitle", { id: editingId }) : t("settings.providers.addTitle")}</strong>
+        <div className="providers-form-grid">
+          <label className="providers-field">
+            {t("settings.providers.label")}
+            <input
+              autoFocus
+              data-role="providers-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t("settings.providers.labelPlaceholder")}
+            />
+          </label>
+          <label className="providers-field">
+            {t("settings.providers.binary")}
+            <input
+              data-role="providers-binary"
+              value={binary}
+              onChange={(e) => setBinary(e.target.value)}
+              placeholder={t("settings.providers.binaryPlaceholder")}
+            />
+          </label>
+        </div>
+        {editingId ? (
+          <div className="providers-path">
+            {t("settings.providers.idPreview", { id: editingId })} · {t("settings.providers.idLocked")} ·{" "}
+            {t("settings.providers.editPreserved")}
+          </div>
+        ) : (
+          label.trim() !== "" && (
+            <div className="providers-path">
+              {ID_RE.test(slug)
+                ? t("settings.providers.idPreview", { id: slug })
+                : t("settings.providers.idInvalid", { label: label.trim() })}
+              {slugRow ? ` · ${t("settings.providers.idExists")}` : ""}
+            </div>
+          )
+        )}
+        <label className="providers-check">
+          <input
+            type="checkbox"
+            data-role="providers-mcp-toggle"
+            checked={enableMcp}
+            onChange={(e) => setEnableMcp(e.target.checked)}
+          />
+          {t("settings.providers.enableMcp")}
+        </label>
+        {enableMcp && (
+          <div className="providers-form-grid">
+            <label className="providers-field">
+              {t("settings.providers.configPath")}
+              <input
+                data-role="providers-config-path"
+                value={configPath}
+                onChange={(e) => setConfigPath(e.target.value)}
+                placeholder={t("settings.providers.configPathPlaceholder")}
+              />
+            </label>
+            <label className="providers-field">
+              {t("settings.providers.configKey")}
+              <input
+                data-role="providers-config-key"
+                value={configKey}
+                onChange={(e) => setConfigKey(e.target.value)}
+                placeholder={t("settings.providers.configKeyPlaceholder")}
+              />
+            </label>
+          </div>
+        )}
+        <div className="providers-page-subtitle">{t("settings.providers.advancedNote")}</div>
+        <div className="providers-form-actions">
+          <button type="submit" className="primary" data-role="providers-submit" disabled={busy || !canSubmit}>
+            {t("settings.providers.save")}
+          </button>
+          <button type="button" className="ghost" onClick={resetForm} disabled={busy}>
+            {t("common.cancel")}
+          </button>
+        </div>
+      </form>
+    ) : null;
+
+    // V7 must not wrap in `.providers-settings-page`: that global rule
+    // (`.providers-settings-page button`) overrides the module `.primary`
+    // blue fill with a dark bordered surface.
+    return (
+      <div data-settings-providers-v3="" data-providers-layout="v7">
+        {view?.error && <div className="providers-warn">{t("settings.providers.fileError", { error: view.error })}</div>}
+        {reloadNotice && (
+          <div
+            className={reloadNotice.attention ? "providers-warn" : settingsStyles.hint}
+            data-role="providers-reload-notice"
+          >
+            {reloadNotice.line}
+          </div>
+        )}
+        {view && view.rejected.length > 0 && (
+          <div className="providers-warn" data-role="providers-rejected">
+            {t("settings.providers.rejectedTitle", { count: String(view.rejected.length) })}
+            <ul>
+              {view.rejected.map((entry, index) => (
+                <li key={`${entry.index}-${index}`}>
+                  {entry.id ? `${entry.id}: ` : ""}
+                  {entry.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {classification.ready && natives.length > 0 && (
+          <section className={settingsStyles.sec} data-role="providers-natives">
+            <div className={settingsStyles.row}>
+              <h3 className={settingsStyles.sh} style={{ flex: 1 }}>
+                {t("settings.providers.nativeSection")}
+              </h3>
+              <span className={settingsStyles.hint}>{t("settings.providers.nativeQuotaHint")}</span>
+            </div>
+            {natives.map((option) => (
+              <div
+                className={settingsStyles.row}
+                key={option.id}
+                data-role="providers-native-row"
+                data-provider-id={option.id}
+              >
+                <span
+                  className={settingsStyles.dot}
+                  style={{ background: NATIVE_DOT[option.id] ?? "#8d94a6" }}
+                  aria-hidden="true"
+                />
+                <div className={settingsStyles.lbl}>
+                  <span>{option.label}</span>
+                  <span className={settingsStyles.hint}>
+                    {option.shadowed
+                      ? t("settings.providers.nativeShadowed", { id: option.id })
+                      : t("settings.providers.mcpOn")}
+                  </span>
+                </div>
+                <QuotaPill
+                  providerId={option.id}
+                  stats={usage[option.id]}
+                  loading={usageLoading[option.id] === true}
+                  nowMs={usageNow}
+                />
+                <button type="button" className={settingsStyles.btn} data-role="providers-defaults">
+                  {t("settings.providers.defaults")}
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section className={settingsStyles.sec} data-role="providers-generics">
+          <div className={settingsStyles.row}>
+            <h3 className={settingsStyles.sh} style={{ flex: 1 }}>
+              {t("settings.providers.genericSection")}
+            </h3>
+            {!showForm && (
+              <button
+                type="button"
+                className={settingsStyles.primary}
+                data-role="providers-add"
+                onClick={() => {
+                  resetForm();
+                  setShowForm(true);
+                }}
+              >
+                {t("settings.providers.addPlus")}
+              </button>
+            )}
+          </div>
+          {!view || view.rows.length === 0 ? (
+            <span className={settingsStyles.hint}>{t("settings.providers.empty")}</span>
+          ) : (
+            view.rows.map((row) => (
+              <div className={settingsStyles.row} key={row.id} data-role="providers-row" data-provider-id={row.id}>
+                <span className={settingsStyles.dotSquare} aria-hidden="true" />
+                <div className={settingsStyles.lbl}>
+                  <span>{row.label}</span>
+                  <span className={`${settingsStyles.hint} ${settingsStyles.mono}`}>
+                    {row.binaryNames[0] ?? row.id}
+                    {row.mcpEnabled && row.mcpConfigPath
+                      ? ` · MCP ${row.mcpConfigPath}${row.mcpConfigKey ? ` › ${row.mcpConfigKey}` : ""}`
+                      : ""}
+                  </span>
+                </div>
+                {!row.skipped && (
+                  <button
+                    type="button"
+                    className={settingsStyles.btn}
+                    data-role="providers-edit"
+                    onClick={() => startEdit(row)}
+                    disabled={busy}
+                  >
+                    {t("settings.providers.edit")}
+                  </button>
+                )}
+                {(row.source === "file" || row.appOverride !== "none") && (
+                  <button
+                    type="button"
+                    className={settingsStyles.btn}
+                    data-role="providers-reset"
+                    onClick={() => setConfirmReset(row.id)}
+                    disabled={busy}
+                  >
+                    {t(
+                      row.appOverride !== "none"
+                        ? "settings.providers.reset"
+                        : "settings.providers.remove",
+                    )}
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+          {confirmReset && view && (
+            <div className={settingsStyles.row}>
+              <span className={settingsStyles.hint}>
+                {(() => {
+                  const row = view.rows.find((r) => r.id === confirmReset);
+                  if (!row) return null;
+                  return t(
+                    row.appOverride !== "none"
+                      ? "settings.providers.resetOverrideHint"
+                      : "settings.providers.resetHint",
+                    { id: row.id },
+                  );
+                })()}
+              </span>
+              <button
+                type="button"
+                className={settingsStyles.btn}
+                onClick={() => {
+                  const row = view.rows.find((r) => r.id === confirmReset);
+                  if (row) void reset(row);
+                }}
+                disabled={busy}
+              >
+                {t("settings.providers.resetConfirm")}
+              </button>
+              <button type="button" className={settingsStyles.btn} onClick={() => setConfirmReset(null)}>
+                {t("common.cancel")}
+              </button>
+            </div>
+          )}
+          {formBlock}
+          {view && (
+            <span className={settingsStyles.hint} data-role="providers-path-footer">
+              Arquivo:{" "}
+              <a
+                className={`${settingsStyles.link} ${settingsStyles.mono}`}
+                href="#providers-json"
+                data-role="providers-open-raw"
+                title={view.path}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void openRaw();
+                }}
+              >
+                {displayProvidersPath(view.path)}
+              </a>{" "}
+              · mudanças no arquivo aparecem aqui sozinhas
+            </span>
+          )}
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="providers-settings-page">
       <div className="providers-page-head">
@@ -465,8 +795,20 @@ export function ProvidersPage() {
                         <span className="muted">{t("settings.providers.flagsHint")}</span>
                       </>
                     )}
-                    <span className={`providers-badge${row.mcpEnabled ? " is-on" : ""}`}>
-                      {row.mcpEnabled ? t("settings.providers.mcpOn") : t("settings.providers.mcpOff")}
+                    <span
+                      className={`providers-badge${row.mcpEnabled ? " is-on" : ""}${row.mcpUnsupportedByApp ? " is-warn" : ""}`}
+                      title={
+                        row.mcpUnsupportedByApp && row.mcpUnsupportedReason
+                          ? t("settings.providers.mcpUnsupportedTitle", { reason: row.mcpUnsupportedReason })
+                          : undefined
+                      }
+                      data-role={row.mcpUnsupportedByApp ? "providers-mcp-unsupported" : "providers-mcp"}
+                    >
+                      {row.mcpEnabled
+                        ? t("settings.providers.mcpOn")
+                        : row.mcpUnsupportedByApp
+                          ? t("settings.providers.mcpUnsupported")
+                          : t("settings.providers.mcpOff")}
                     </span>
                     {/* A ORIGEM e a SOBRESCRITA (task edf3b047). "do app" era
                         verdade só sobre a origem: uma entrada do app que o

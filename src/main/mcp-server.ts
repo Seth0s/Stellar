@@ -1,4 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRelayServer, relayEnabled, relaySocketPath } from "./mcp-relay";
@@ -7,7 +9,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
 import { PROVIDERS, providerById } from "./providers";
-import { resolveCallerCardId } from "./caller-identity";
+import type { ProcessIdentity } from "./process-identity";
+import { redactSecretValues } from "./secret-redaction";
 import { presetUrl } from "./prototype-presets";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
@@ -26,9 +29,16 @@ import {
   describeAmbiguousTaskRefusal,
   describeDeclaredTaskNotLinkedRefusal,
 } from "./report-task-link-decision";
+import { REPORT_ESTADO_AGENT_HINT } from "./report-estado-decision";
 import { promoteReportVerdict } from "./report-verdict-decision";
 import { decideReportVerdictWrite, emptyReportSchemaFields } from "./judgment-write-decision";
 import { TASK_CARD_IMPLEMENTER_ROLE, TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES, isReviewWanted } from "../task-purpose";
+import {
+  BROWSER_RUN_DEFAULT_TIMEOUT_MS,
+  BROWSER_RUN_MAX_STEPS,
+  BROWSER_RUN_MAX_TIMEOUT_MS,
+  BROWSER_RUN_MIN_TIMEOUT_MS,
+} from "./browser-run-decision";
 
 /**
  * CAMADA 4, segunda porta — fatos que `decideReportVerdictWrite` precisa e
@@ -92,17 +102,24 @@ async function resolveReportVerdictContext(input: {
   // ambiguidade manda fazer — recebia `declared-not-linked` com a frase falsa
   // "Este card não tem vínculo ativo nenhum", e o report nunca chegava ao bus.
   let links: { taskId: string; role: string }[] = [];
+  let historyLinks: { taskId: string; role: string }[] = [];
   if (input.requesterId) {
-    const [tasksRes, linksRes] = await Promise.all([
+    const [tasksRes, linksRes, historyRes] = await Promise.all([
       input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" }),
       input.handleRequest({ cmd: "list_task_cards", cardId: input.requesterId }),
+      // Past participations for declared matching ("has or had").
+      input.handleRequest({ cmd: "list_task_cards", cardId: input.requesterId, history: true }),
     ]);
     const tasks = tasksRes.ok && Array.isArray(tasksRes.tasks) ? (tasksRes.tasks as Record<string, unknown>[]) : [];
     principals = tasks.filter((t) => t.cardId === input.requesterId);
-    const linkRows = linksRes.ok && Array.isArray(linksRes.links) ? (linksRes.links as { taskId?: unknown; role?: unknown }[]) : [];
-    links = linkRows
-      .filter((l): l is { taskId: string; role: string } => typeof l.taskId === "string" && l.taskId.length > 0 && typeof l.role === "string")
-      .map((l) => ({ taskId: l.taskId, role: l.role }));
+    const parseLinks = (res: BusResponse): { taskId: string; role: string }[] => {
+      const linkRows = res.ok && Array.isArray(res.links) ? (res.links as { taskId?: unknown; role?: unknown }[]) : [];
+      return linkRows
+        .filter((l): l is { taskId: string; role: string } => typeof l.taskId === "string" && l.taskId.length > 0 && typeof l.role === "string")
+        .map((l) => ({ taskId: l.taskId, role: l.role }));
+    };
+    links = parseLinks(linksRes);
+    historyLinks = parseLinks(historyRes);
   }
 
   // A MESMA decisão pura que o bus usa (`report-task-link-decision.ts`):
@@ -112,6 +129,7 @@ async function resolveReportVerdictContext(input: {
     declaredTaskId: input.declaredTaskId,
     principalTaskIds: principals.map((t) => (typeof t.id === "string" ? t.id : "")),
     linkTaskIds: links.map((l) => l.taskId),
+    historyLinkTaskIds: historyLinks.map((l) => l.taskId),
   });
   if (link.action === "ambiguous") {
     return { ...context, refusal: describeAmbiguousTaskRefusal(link.candidates) };
@@ -345,29 +363,80 @@ function rawShapeOf(schema: unknown): Record<string, z.ZodType> | undefined {
   return shape && typeof shape === "object" && !Array.isArray(shape) ? (shape as Record<string, z.ZodType>) : undefined;
 }
 
-/** O `inputSchema` que este servidor publica: ESTRITO, com a mensagem única. */
-function strictInputSchema(schema: unknown): unknown {
-  const shape = rawShapeOf(schema);
-  if (!shape) return schema;
-  const accepted = Object.keys(shape);
-  return z.object(shape, { error: (issue) => unknownKeyMessage(issue, accepted) }).strict();
-}
-
 /**
  * Instala o choke point no servidor: todo `registerTool` deste arquivo passa
  * por aqui, então nenhum call site precisa lembrar de `.strict()` — e um tool
  * novo escrito no formato antigo (shape cru) já nasce estrito. Zera a
  * distância entre os 2 tools migrados e os 49 declarados à mão.
+ * Also injects optional `authToken` for shared-daemon providers (cline) and
+ * refuses unauthenticated tools other than build_identity.
  */
-function installStrictInputShapes(server: McpServer): void {
+type McpIdentityRuntime = {
+  required: boolean;
+  applicationAuthorized: boolean;
+  transportIdentity: ProcessIdentity | null;
+  resolveAuthToken?: (token: string) => ProcessIdentity | null;
+  context: AsyncLocalStorage<ProcessIdentity | null>;
+  redactSecrets?: () => string[];
+};
+
+function installStrictInputShapes(server: McpServer, identity: McpIdentityRuntime): void {
   const register = server.registerTool.bind(server);
   server.registerTool = ((...call: unknown[]) => {
-    const [name, config] = call;
-    if (config !== null && typeof config === "object" && "inputSchema" in config) {
-      const patched = { ...(config as Record<string, unknown>), inputSchema: strictInputSchema((config as { inputSchema?: unknown }).inputSchema) };
-      return (register as (...args: unknown[]) => unknown)(name, patched, call[2]);
+    const [rawName, rawConfig, rawHandler] = call;
+    const name = String(rawName);
+    if (rawConfig === null || typeof rawConfig !== "object" || typeof rawHandler !== "function") {
+      return (register as (...args: unknown[]) => unknown)(...call);
     }
-    return (register as (...args: unknown[]) => unknown)(...call);
+    const config = rawConfig as Record<string, unknown>;
+    const shape = rawShapeOf(config.inputSchema) ?? {};
+    const accepted = [...Object.keys(shape), "authToken"];
+    const authTokenSchema = z
+      .string()
+      .optional()
+      .describe("Per-card Stellar MCP credential. Cline must pass the token from its private brief. It is removed before the tool handler and is never a caller identity by itself on direct TCP MCP.");
+    const inputSchema = z.object(
+      { ...shape, authToken: authTokenSchema },
+      { error: (issue) => unknownKeyMessage(issue, accepted) },
+    ).strict();
+    const wrappedHandler = async (rawArgs: unknown, ...rest: unknown[]) => {
+      const handler = rawHandler as (toolArgs: Record<string, unknown>, ...extra: unknown[]) => Promise<unknown> | unknown;
+      const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? (rawArgs as Record<string, unknown>) : {};
+
+      const suppliedToken = args.authToken;
+      let authenticated = identity.transportIdentity;
+      if (suppliedToken !== undefined) {
+        if (typeof suppliedToken !== "string" || suppliedToken.length === 0) {
+          return refusalResult("authToken must be a non-empty per-card token");
+        }
+        if (!identity.applicationAuthorized) {
+          return refusalResult("authToken: direct TCP MCP calls require the app's authenticated Unix relay");
+        }
+        const tokenIdentity = identity.resolveAuthToken?.(suppliedToken) ?? null;
+        if (!tokenIdentity) return refusalResult("authToken is missing, invalid, or belongs to an inactive card");
+        if (authenticated && authenticated.cardId !== tokenIdentity.cardId) {
+          return refusalResult("authToken does not match the authenticated socket peer");
+        }
+        authenticated = tokenIdentity;
+      }
+      // `required:false` is for unit harnesses that skip the refusal — it does
+      // not mean "ignore a transport identity that already arrived".
+      if (identity.required && name !== "build_identity" && !authenticated) {
+        return refusalResult("authToken: authenticated card identity is required; anonymous MCP calls may only use build_identity");
+      }
+      const suppliedCaller = args.callerCardId;
+      if (suppliedCaller !== undefined && (typeof suppliedCaller !== "string" || !authenticated || suppliedCaller !== authenticated.cardId)) {
+        return refusalResult("callerCardId does not match the authenticated card identity");
+      }
+      const safeArgs = { ...args };
+      delete safeArgs.authToken;
+      const secrets = identity.redactSecrets?.() ?? [];
+      const sanitizedArgs = redactSecretValues(safeArgs, secrets) as Record<string, unknown>;
+      const result = await identity.context.run(authenticated, () => handler(sanitizedArgs, ...rest));
+      return redactSecretValues(result, secrets);
+    };
+    const patched = { ...config, inputSchema };
+    return (register as (...args: unknown[]) => unknown)(rawName, patched, wrappedHandler);
   }) as typeof server.registerTool;
 }
 
@@ -391,9 +460,9 @@ const REPORT_CONTRACT: ToolContractDecl = {
       schema: z
         .string()
         .describe(
-          "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
+          "Optional assertion of your own card id. The authenticated Unix peer or per-card authToken establishes identity; this body field cannot establish identity and a different value is refused.",
         ),
-      accepted: "your own card id (see AGENT_CANVAS_CARD_ID)",
+      accepted: "your own authenticated card id",
     },
     {
       name: "report",
@@ -402,7 +471,9 @@ const REPORT_CONTRACT: ToolContractDecl = {
       schema: z
         .unknown()
         .describe(
-          "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded. Do not put a field OF THIS CALL inside the payload — a `verdict` (or `callerCardId`) written here instead of as its own argument is REFUSED by name, because the tool reads those from the call and would otherwise store your verdict as null.",
+          "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. " +
+            REPORT_ESTADO_AGENT_HINT +
+            " Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded. Do not put a field OF THIS CALL inside the payload — a `verdict` (or `callerCardId`) written here instead of as its own argument is REFUSED by name, because the tool reads those from the call and would otherwise store your verdict as null.",
         ),
       accepted: "the report as a JSON object (an object encoded as a string is also accepted)",
     },
@@ -466,7 +537,16 @@ async function reportPreflight(
   });
 }
 
-export function createMcpServer(opts: { port: number; handleRequest: (req: BusRequest) => Promise<BusResponse> }) {
+export function createMcpServer(options: {
+  port: number;
+  internalToken?: string;
+  resolvePeerIdentity?: (peerPid: number) => ProcessIdentity | null;
+  resolveAuthToken?: (token: string) => ProcessIdentity | null;
+  resolveRelayIdentity?: (cardId: string) => ProcessIdentity | null;
+  redactSecrets?: () => string[];
+  requireIdentity?: boolean;
+  handleRequest: (req: BusRequest, identity?: { callerCardId?: string; callerBoardId?: string; scopeEnforced: true }) => Promise<BusResponse>;
+}) {
   /**
    * Achado ao vivo (2026-09-01): "o modo automático não funciona de fato".
    * A causa não estava no modo autônomo — estava aqui. Este servidor é UM
@@ -481,15 +561,10 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
    * autônomo ligado. O mesmo buraco silenciava o rótulo de remetente do
    * `send_to_card` (item 61) e zerava a profundidade de spawn (audit S4).
    *
-   * `pty-registry.ts` já sabe o id do card no momento do spawn e já injeta
-   * `AGENT_CANVAS_CARD_ID` no ambiente — passa a carimbar o mesmo id na URL
-   * do MCP que registra pra aquele processo (`/mcp?card=<id>`), então a
-   * identidade chega por transporte, não por boa vontade do modelo.
-   * `callerCardId` continua aceito no schema por compatibilidade, mas ver
-   * `caller-identity.ts`: só o carimbo da URL estabelece identidade. Uma
-   * URL sem `?card=` — smoke test que disca a porta direto ou cliente MCP
-   * externo — fica anônima; o corpo não pode escolher um card autônomo e
-   * pular consentimento.
+   * Card identity is established from kernel socket credentials and the
+   * registered PTY ancestry. The TCP endpoint rejects URL identity stamps;
+   * only the app's internal relay credential or public identity lookup is
+   * accepted there. A callerCardId body field is only a checked assertion.
    */
   /** Pedido ao vivo (2026-09-02): "toda nova sessão eu preciso dizer o
    * agente está na infraestrutura do stellar... acho que além de dizer no
@@ -513,11 +588,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     "label from there. Reading a card is free and needs no approval; spawning a new " +
     "card or opening a URL asks the human first (unless the board is in autonomous " +
     "mode). Any tool that modifies an EXISTING card you don't own (write_sticky, " +
-    "send_to_card, set_sticky_color/set_sticky_mode, browser_click/type/scroll/eval, " +
+    "send_to_card, set_sticky_color/set_sticky_mode, browser_click/type/scroll/eval/run, " +
     "spawn_agent/spawn_card, open_url) automatically draws a connector between your " +
     "own card and that one — your influence on the board stays visible without you " +
     "drawing it yourself. If another card spawned you to do a task, call report with " +
-    "a structured result when you finish it, even if you keep running afterward.";
+    "a structured result when you finish it, even if you keep running afterward. " +
+    "Every tool is limited to the board of the authenticated caller card; omitting boardId means that board, and a different board or resource is refused naming its field. " +
+    "Every tool call requires an authenticated card identity. The Unix relay binds it to the kernel peer process and its PTY ancestry; Cline must supply its private per-card authToken when the relay cannot derive ancestry. Direct TCP MCP calls are anonymous and may only use build_identity. Never copy authToken into a report or another card's brief. Cross-board reads require the separate request_cross_board_read tool, a human decision, and an audit record.";
 
   /** Repetido em toda tool que precisa de identidade pra auto-conector
    * (2026-09-02) sem também precisar de consentimento — as que já tinham
@@ -528,7 +605,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     .string()
     .optional()
     .describe(
-      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process. A callerCardId supplied in the request body is never trusted to establish identity when that URL stamp is absent, so a raw external client remains anonymous and cannot inherit an autonomous board's consent.",
+      "Optional assertion of your own card id. The server derives identity from the authenticated Unix peer or per-card authToken and refuses a different value; this field cannot establish identity.",
     );
 
   /** UM gate declarado (task ff24b36d): a string de sempre, OU
@@ -539,27 +616,70 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     z.object({ cmd: z.string(), exclusive: z.literal("machine") }),
   ]);
 
-  function buildServer(urlCardId?: string): McpServer {
-    // Ver `caller-identity.ts` (achado crítico de escalada de privilégio,
-    // card 337, 2026-09-11) pro modelo completo e o porquê da
-    // precedência: só o carimbo da URL estabelece identidade — fora do
-    // alcance do modelo que chama a tool. Sem carimbo, uma conexão externa
-    // permanece anônima; o explícito não pode escolher um board autônomo.
-    const caller = (explicit?: string) => resolveCallerCardId({ urlCardId, explicitCallerCardId: explicit });
+  function buildServer(input: { applicationAuthorized: boolean; transportIdentity: ProcessIdentity | null }): McpServer {
+    const serverOptions = options;
+    const identityContext = new AsyncLocalStorage<ProcessIdentity | null>();
+    const opts = {
+      ...serverOptions,
+      handleRequest: (req: BusRequest) => {
+        const identity = identityContext.getStore();
+        return serverOptions.handleRequest(
+          req,
+          identity ? { callerCardId: identity.cardId, callerBoardId: identity.boardId ?? undefined, scopeEnforced: true } : undefined,
+        );
+      },
+    };
+    const caller = (explicit?: string) => {
+      const authenticated = identityContext.getStore();
+      return explicit && explicit !== authenticated?.cardId ? undefined : authenticated?.cardId;
+    };
     const server = new McpServer({ name: "stellar", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
     // Antes do primeiro `registerTool` deste arquivo: ver o bloco do choke
     // point acima (todo shape publicado por este servidor sai estrito dali).
-    installStrictInputShapes(server);
+    installStrictInputShapes(server, {
+      required: options.requireIdentity !== false,
+      applicationAuthorized: input.applicationAuthorized,
+      transportIdentity: input.transportIdentity,
+      resolveAuthToken: options.resolveAuthToken,
+      context: identityContext,
+      redactSecrets: options.redactSecrets,
+    });
 
     server.registerTool(
       "list_cards",
       {
         description:
-          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window, task). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Terminal/chat entries ALSO carry `context` ({usedTokens, source, at}) and `quota` ({text, percent?, at}) — how full the provider says this card is (context tokens in use; plan/quota line) — both null when the provider does not expose them, or for non-terminal cards. A null is 'unknown', never zero. Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
+          "List every open card on your authenticated caller board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window, task). This read uses the caller board even if the UI has another board active. Each entry has id, kind, label, provider, cwd, and browser url where applicable. Terminal/chat entries also carry context and quota when available. Every target tool is confined to this same board; foreign ids are refused naming `target`.",
         inputSchema: {},
       },
       async () => {
         const res = await opts.handleRequest({ cmd: "list" });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "request_cross_board_read",
+      {
+        description:
+          "Request one read of a resource on another board. This is a separate, audited action: the app always asks a human in a modal, including when the board is autonomous. The resource is returned only after approval; refusal is recorded too. Normal tools never accept a cross-board override.",
+        inputSchema: {
+          targetBoardId: z.string().describe("The other board's id"),
+          resourceKind: z.enum(["task", "card", "report", "sprint", "connector"]),
+          resourceId: z.string().describe("Task/card/sprint/connector id, or report seq"),
+          reason: z.string().describe("Why this single cross-board read is needed"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ targetBoardId, resourceKind, resourceId, reason, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "request_cross_board_read",
+          targetBoardId,
+          resourceKind,
+          resourceId,
+          reason,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -582,7 +702,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var) — when given, the delivered text is prefixed with a human-friendly sender label so the reader knows who it's from (DESIGN-BACKLOG.md item 61). Ignored for a bash target (would break the command).",
+              "Optional assertion of your own authenticated card id — when present, it must match the authenticated card and the delivered text is prefixed with its sender label (DESIGN-BACKLOG.md item 61). Ignored for a bash target (would break the command).",
             ),
           linkTaskId: z
             .string()
@@ -734,7 +854,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+              "Optional assertion of your own authenticated card id. The authenticated card identity draws the auto-connector to this note; a different value is refused.",
             ),
         },
       },
@@ -766,7 +886,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["replace", "append"])
             .optional()
             .describe("replace (default) swaps the whole note; append adds to the end. Works with both `content` and `path`."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. Normally omit it."),
         },
       },
       async ({ target, content, path, mode, callerCardId }) => {
@@ -787,7 +907,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+              "Optional assertion of your own authenticated card id. The authenticated card identity draws the auto-connector to this note; a different value is refused.",
             ),
         },
       },
@@ -809,7 +929,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+              "Optional assertion of your own authenticated card id. The authenticated card identity draws the auto-connector to this note; a different value is refused.",
             ),
         },
       },
@@ -831,10 +951,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       {
         description:
           "Ask the human to close ANY open card (yours, one you spawned, or any other) — same consent gate as spawn_agent/spawn_card/open_url. Requires human approval unless the requester's board is in autonomous mode. Closing a live terminal kills its process; no undo. " +
-          "WHAT HAPPENS TO THE TASKS LINKED TO THE CARD: a task that already ended (done, failed, superseded) is never touched — closing a card never reopens it and never concludes it. " +
-          "An open task is concluded as done (by the app, not as a judgment) only when the card is its implementer, has an accepted report of THAT task with ok:true filed after the card was linked to it (a report about another task, or filed before the link, does not count), and the requester is not that same implementer; with review=\"wanted\" the reviewer's approved verdict signs instead. " +
-          "Otherwise the card closes, its link to the task is released and the task KEEPS its status (it waits for a card again); the answer lists `concludedTasks` and `releasedTasks`. " +
-          "An implementer asking to close its OWN card with no such report is refused: it cannot leave a task by itself — ask the orchestrator. " +
+          "WHAT HAPPENS TO THE TASKS LINKED TO THE CARD: close_card NEVER concludes a task — not for ok:true, not for estado final, not for a reviewer aprovado on file. Closing only releases this card's link; the task KEEPS its status (it waits for a card again). The answer lists `releasedTasks` (never a done stamp). " +
+          "A task that already ended (done, failed, superseded) is never touched — closing never reopens it. " +
+          "Done/failed is judgment written elsewhere: linked reviewer (when review=\"wanted\"), board orchestrator, or human — via update_task / request_task_status, not via this tool. " +
+          "An implementer asking to close its OWN card with no accepted success report OF THAT TASK in the round (ok:true with estado final, filed after the link) is refused: it cannot leave a task by itself — ask the orchestrator (which releases the link and leaves status untouched). " +
+          "With review=\"wanted\", the only live reviewer may not close without a verdict on record (that would strand the task). " +
           "A card holding reserved tasks is refused unless you pass moveReservationsTo or releaseReservations; releasing a reservation frees the link and likewise never changes the status of a task that ended.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
@@ -847,7 +968,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .boolean()
             .optional()
             .describe("If this card holds RESERVED tasks, drop (release) them when closing. Without it (and without moveReservationsTo), closing is REFUSED naming the tasks."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — used to check whether YOUR board is in autonomous mode."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id — the board comes from the authenticated card identity."),
         },
       },
       async ({ target, reason, moveReservationsTo, releaseReservations, callerCardId }) => {
@@ -864,7 +985,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         inputSchema: {
           target: z.string().describe("The target card's id (list_cards only shows the loaded board's cards, so a cross-board target must be a real id you already have, not a label)"),
           reason: z.string().optional().describe("Why you want this deleted — shown to the human in the approval dialog when the board is loaded"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — used to check whether YOUR board is in autonomous mode when the target is on the loaded board."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id — the board comes from the authenticated card identity."),
         },
       },
       async ({ target, reason, callerCardId }) => {
@@ -876,7 +997,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     contractTool(server, {
       contract: REPORT_CONTRACT,
       description:
-        "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id. " +
+        "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, and also for mid-work checkpoints, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id. " +
+        REPORT_ESTADO_AGENT_HINT +
+        " " +
         "Acceptance: success is {ok: true, ...}; a report without ok is also accepted (not treated as failure). " +
         "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
         "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
@@ -1030,7 +1153,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(GATE_SCHEMA)
             .optional()
             .describe(
-              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Each entry is a plain string, OR `{ cmd: \"...\", exclusive: \"machine\" }` for a command that must NOT run concurrently with anything else on the machine (Lighthouse/e2e): exclusive gates run LAST, under the machine-wide lock. For a heavy command you run YOURSELF (not a declared gate), use `acbridge gate-lock -- <cmd>` / the `run_locked` tool — same lock, so your run never races the app's gate. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared. AUTHORSHIP: on a board with an orchestrator mark, ONLY the marked card may set or change this set — any other caller is REFUSED naming `gates` (clearing the set is authorship too). On a board with no mark, today's behavior is kept and the fact is recorded.",
+              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping measured stdout/stderr/exit-code into result_json.gateRun. Each entry is a plain string, OR `{ cmd: \"...\", exclusive: \"machine\" }` for a command that must NOT run concurrently with anything else on the machine (Lighthouse/e2e): exclusive gates run LAST, under the machine-wide lock. For a heavy command you run YOURSELF (not a declared gate), use `acbridge gate-lock -- <cmd>` / the `run_locked` tool. An isolated worktree contains one outer Git repository; when declared files or territory touch a nested Git repository, the runner falls back to the shared checkout and records that mode. Absolute paths under the board's declared root and the workspace root from `ai/workspace.yaml` are mounted read-only; other external tool directories must be listed in the board's `gateToolPaths`. Declare browser caches such as `~/.cache/ms-playwright` there as a specific directory; they are mounted read-only after `$HOME` is masked. Missing files, browser executables, and sandbox read-only filesystem failures are reported as `gate_env_error`, not a gate contradiction. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared. AUTHORSHIP: on a board with an orchestrator mark, ONLY the marked card may set or change this set — any other caller is REFUSED naming `gates` (clearing the set is authorship too). On a board with no mark, today's behavior is kept and the fact is recorded.",
             ),
           allowCommit: z
             .boolean()
@@ -1182,7 +1305,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .nullable()
             .optional()
             .describe(
-              "Set/clear gates list (string or `{ cmd, exclusive: \"machine\" }`). null clears; omit leaves unchanged. On a board with an orchestrator mark, ONLY that marked card may change the set (clearing included) — any other caller is REFUSED naming `gates`; on a board with no mark, today's behavior is kept and the fact is recorded.",
+              "Set/clear the app-run gates (string or `{ cmd, exclusive: \"machine\" }`). An isolated worktree contains one outer Git repository; if declared files or territory touch a nested Git repository, the runner uses the shared checkout and records that mode. Absolute paths under the board's declared root and the workspace root from `ai/workspace.yaml` are mounted read-only; other external tool directories must be listed in the board's `gateToolPaths`. Declare browser caches such as `~/.cache/ms-playwright` there as a specific directory; they are mounted read-only after `$HOME` is masked. Missing files, browser executables, and sandbox read-only filesystem failures are reported as `gate_env_error`, not a gate contradiction. null clears; omit leaves unchanged. On a board with an orchestrator mark, ONLY that marked card may change the set (clearing included) — any other caller is REFUSED naming `gates`; on a board with no mark, today's behavior is kept and the fact is recorded.",
             ),
           allowCommit: z
             .boolean()
@@ -1200,7 +1323,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Orchestrator only. When this write ACTIVATES the task (cardId) and its territory would collide with another active task, a non-empty reason here makes the guard PASS anyway and is recorded on the task's trail (get_task). Without it the write is REFUSED. An empty/blank reason does not bypass.",
             ),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. This field cannot establish identity; the authenticated peer does."),
         },
       },
       async ({
@@ -1262,7 +1385,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Why the change should happen — shown on the Queue modal, same as spawn_agent/open_url's reason"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. This field cannot establish identity; the authenticated peer does."),
         },
       },
       async ({ taskId, status, reason, callerCardId }) => {
@@ -1289,7 +1412,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Free text: adds detail to the chosen option, or — with no optionId — is the whole answer"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. This field cannot establish identity; the authenticated peer does."),
         },
       },
       async ({ taskId, optionId, note, callerCardId }) => {
@@ -1308,9 +1431,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_tasks",
       {
         description:
-          "List recorded tasks. Without filters this is the full history (prompt+result per row — hundreds of KB once a board has a sprint behind it). For the orchestrator, pass filters: status (one or many), boardId, since (updatedAt >= epoch-ms), hasCard (true = principal cardId has a live PTY right now). view \"summary\" drops prompt and result (the scan shape); \"full\" is the complete row (default). Survives card closes and app restarts. For one task's transitions/cards/verdicts use get_task. \"Pending with a live card\" = status pending + hasCard true, and `cardAlive` per row is that same fact by its own name. STATUS IS THE STORED TRUTH (task b41ac547): it stays `pending` until a judgment is written and never becomes `running` because some process exists. A row with status `superseded` is TERMINAL and is neither a success nor a failure: it carries `supersededBy` (the id of the task that replaced it) and must not be counted or retried as a failure.",
+          "List recorded tasks on your authenticated caller board. Omit boardId to use that board; a different boardId is refused. Without filters this is the full board history. Pass status, since, hasCard, and view to narrow the read; view \"summary\" drops prompt and result, while \"full\" returns every list field. For one task's transitions/cards/verdicts use get_task. `cardAlive` is the live PTY fact; status is the stored task status. A superseded row is terminal and carries `supersededBy`.",
         inputSchema: {
-          boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list across every board"),
+          boardId: z.string().optional().describe("Only the authenticated caller board — omit to use that board"),
           status: z
             .union([z.string(), z.array(z.string())])
             .optional()
@@ -1327,10 +1450,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["summary", "full"])
             .optional()
             .describe("summary = id/status/card/board/provider/purpose/deps/order/timestamps/… without prompt or result; full = every list field (default)"),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ boardId, status, since, hasCard, view }) => {
-        const res = await opts.handleRequest({ cmd: "list_tasks", boardId, status, since, hasCard, view });
+      async ({ boardId, status, since, hasCard, view, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "list_tasks", boardId, status, since, hasCard, view, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1678,7 +1802,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Navigate THIS browser card (an id from list_cards) instead of whichever one your reuse default would pick — the way to choose between two browsers you own. It is honored only if the card exists, is a browser, and is YOURS; otherwise the call FAILS naming why and navigates nothing (it never falls back to a different card). Do not combine with reuse:false.",
             ),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — a registered MCP process is identified by its URL stamp; this body field is not trusted to establish identity when the stamp is absent."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. Normally omit it — a registered MCP process is identified by its URL stamp; this body field is not trusted to establish identity when the stamp is absent."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
@@ -1791,7 +1915,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_agent",
       {
         description:
-          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`). RESPONSE says what stood up AND what happened to the brief: `briefMode` is \"argv\" (`briefDelivered: true` — the process was launched with it), \"typed\" (`briefDelivered: false` — the text is only QUEUED for typing, poll `get_delivery(briefDeliveryId)` for the settled verdict) or \"none\" (`briefDelivered: false` — you sent no `brief`/`taskId`, so the card is born MUTE and will sit idle until you `send_to_card` it: that is a deliberate state, not a lost text). A `{ok:false}` from this tool means THIS call created no card. When you passed `idempotencyKey` and this response is the earlier call's, it carries `idempotentReplay: true` — `cardId` is NOT a new card.",
+          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`). RESPONSE says what stood up AND what happened to the brief: `briefMode` is \"argv\" (`briefDelivered: true` — the process was launched with it), \"typed\" (`briefDelivered: false` — the text is only QUEUED for typing, poll `get_delivery(briefDeliveryId)` for the settled verdict) or \"none\" (`briefDelivered: false` — you sent no `brief`/`taskId`, so the card is born MUTE and will sit idle until you `send_to_card` it: that is a deliberate state, not a lost text). AUTONOMOUS BOARD QUEUE (measured 2026-10-05, board 64: a call sat 125s in the FIFO and the MCP client backgrounded it at ~120s): when the board is at its concurrency cap, this call does NOT hold open until a slot frees — it returns within the declared ack budget (20s, well under typical client watchdogs) as `{ok:true, queued:true, spawnId, position, queueReason}` naming why (`concurrency_cap`). Poll `get_spawn(spawnId)` for `queued`/`up`/`failed` (+ `cardId` when up); the bus still delivers the \"card UP\" notice to you. A `{ok:false}` from this tool means THIS call created no card. When you passed `idempotencyKey` and this response is the earlier call's, it carries `idempotentReplay: true` — `cardId`/`spawnId` is NOT a new card/queue entry (a retry while still queued returns the same spawnId).",
         inputSchema: {
           // Validação em RUNTIME contra o registro vivo (ver
           // `spawnableProviderIds`): o id tem de existir AGORA — nativo ou
@@ -1857,7 +1981,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "Reasoning effort. The accepted values are the PROVIDER's DECLARED range — claude low/medium/high/xhigh/max, cline none/low/medium/high/xhigh, antigravity low/medium/high, and so on per `capacity.effort` — with antigravity, some of its models (e.g. 'gemini-3.1-pro') REQUIRE one of those alongside `model`, or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside the provider's own range, or any effort for a provider that cannot honor it (bash, codex, cursor, opencode), is REFUSED naming `effort` and listing that provider's values — no spawn, never a silent drop or remap (measured 2026-09-15: any effort passed validation for those providers, never became argv, and nobody was told). This field is a free string on purpose: a static enum can only be a second, narrower copy of a per-provider fact.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. Normally omit it — spawn depth and board mode come from the authenticated card; this field cannot establish identity."),
           reason: z
             .string()
             .min(1)
@@ -1891,7 +2015,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own retry key for THIS spawn: same key + same caller card, within 10 minutes, returns the SAME card instead of creating a second one — and never waits in the queue twice. Use it whenever you might retry after a timeout (e.g. your client's own watchdog aborting a call): without it, a retry after an abort creates a second agent card on the same tree for the same work, which is how silent overwrites get manufactured. A key is scoped to your card, so reusing a string that another card also uses does not collide with it. Only the CARD is deduplicated: a failed attempt (nothing created) does not hold the key, so you can retry it normally.",
+              "Your own retry key for THIS spawn: same key + same caller card, within 10 minutes, returns the SAME card (or the SAME queued spawnId while still in the autonomous FIFO) instead of creating a second one — and never waits in the queue twice. Use it whenever you might retry after a timeout (e.g. your client's own watchdog aborting a call): without it, a retry after an abort creates a second agent card on the same tree for the same work, which is how silent overwrites get manufactured. A key is scoped to your card, so reusing a string that another card also uses does not collide with it. Only a successful effect is held: a failed attempt (nothing created, and not a live queue entry) does not hold the key, so you can retry it normally.",
             ),
           overrideTerritory: z
             .string()
@@ -1943,10 +2067,25 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "get_spawn",
+      {
+        description:
+          "Read the status of one spawn_agent that returned `{queued:true, spawnId}` on an autonomous board at its concurrency cap. Does not wait. `status` is \"queued\" (still in the FIFO — `position` is live), \"up\" (card exists — `cardId` present), or \"failed\" (queue timeout or spawn refused — `error` names why; no card). `queueReason` / `queueReasonCode` repeat the facts that forced the enqueue (today always concurrency_cap). The bus may also deliver a \"card UP\" notice when the entry finally dispatches after a long wait — this poll is the structured channel; that notice is the backup.",
+        inputSchema: {
+          spawnId: z.string().describe("The spawnId from spawn_agent's queued return"),
+        },
+      },
+      async ({ spawnId }) => {
+        const res = await opts.handleRequest({ cmd: "get_spawn", spawnId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "spawn_card",
       {
         description:
-          "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, the board's task queue, or a media viewer for an image/PDF already on disk) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind — including `media` (copies the file into the board's durable assets folder) — still requires human approval unless the board is in autonomous mode. `kind: \"media\"` requires `path` (absolute, or relative to your card's cwd) pointing at an existing image (.png .jpg .jpeg .gif .webp) or PDF (.pdf); unsupported types and missing/unreadable files are refused with a clear error before consent. The card shows a COPY, so later edits/deletes of the source leave the board content intact. `kind: \"browser\"` always opens a NEW browser card (never reuses one you already own) — use this when you need a second window alongside one opened via open_url; pass `reuse: true` only if you intentionally want open_url's navigate-existing behavior instead. By default the card lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
+          "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, the board's task queue, or a media viewer for an image/PDF already on disk) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind — including `media` (copies the file into the board's durable assets folder) — still requires human approval unless the board is in autonomous mode. `kind: \"media\"` requires `path` (absolute, or relative to your card's cwd) pointing at an existing image (.png .jpg .jpeg .gif .webp) or PDF (.pdf); unsupported types and missing/unreadable files are refused with a clear error before consent. The card shows a COPY, so later edits/deletes of the source leave the board content intact. `kind: \"browser\"` always opens a NEW browser card (never reuses one you already own) — use this when you need a second window alongside one opened via open_url; pass `reuse: true` only if you intentionally want open_url's navigate-existing behavior instead. For Push API / durable cookies on a browser card, pass `persistent: true` (a per-card `persist:` partition — never the app session); the card shows a badge when that profile is active. By default the card lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
         inputSchema: {
           kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task", "media"]).describe("Which card kind to create; task reuses the board's existing live queue card; browser always creates a new card unless reuse:true; media requires path"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
@@ -1963,7 +2102,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Only meaningful for kind:\"browser\". Default false: always create a new browser card. Set true to navigate your existing browser instead (same as open_url's default).",
             ),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),
+          persistent: z
+            .boolean()
+            .optional()
+            .describe(
+              'Only for kind:"browser". true = persist: partition for THIS card (Push API / cookies survive reopen). Default false = ephemeral (Push blocked like Chromium incognito). Never shares the app or owner session.',
+            ),
+          callerCardId: z.string().optional().describe("Optional assertion of your own authenticated card id. This field cannot establish identity; the authenticated peer does."),
           reason: z
             .string()
             .min(1)
@@ -1980,7 +2125,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ kind, cwd, url, path, reuse, cardId, callerCardId, reason, anchorCardId, side }) => {
+      async ({ kind, cwd, url, path, reuse, persistent, cardId, callerCardId, reason, anchorCardId, side }) => {
         const requesterId = caller(callerCardId);
         // DESIGN-BACKLOG.md §2.0 item 5 — spawn_card browser defaults to a
         // fresh card; reuse:true opts into open_url's navigate-existing path.
@@ -2006,7 +2151,18 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason, targetCardId: cardId });
           return { content: [{ type: "text", text: JSON.stringify(res) }] };
         }
-        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, path, requesterId, reason, anchorCardId, side });
+        const res = await opts.handleRequest({
+          cmd: "spawn_card",
+          kind,
+          cwd,
+          url,
+          path,
+          requesterId,
+          reason,
+          anchorCardId,
+          side,
+          persistent: kind === "browser" ? persistent === true : undefined,
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2014,21 +2170,31 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "snapshot",
       {
-        description: "See a screenshot of a specific card, an explicit board rect, or the whole window — returned as an embedded image, not a file path (MCP clients don't share this app's filesystem). Targeting a BROWSER card captures that page's own rendered surface at full resolution — exactly the card and nothing else, regardless of where it sits on the board, the board's zoom, or whether it is even on screen. Every other card kind is captured from the app window, so it must be visible on the board.",
+        description:
+          "See a screenshot of a specific card, an explicit board rect, or the whole window. Returns BOTH an embedded image AND a JSON text block with `{ok:true, path}` so you can cite the PNG as an artifact (same path acbridge snapshot prints). Targeting a BROWSER card captures that page's own rendered surface at full resolution — exactly the card and nothing else. Optional `fullPage` / `width` / `out` apply only to browser cards (full document, temporary CSS viewport width, absolute destination path). Every other card kind is captured from the app window, so it must be visible on the board.",
         inputSchema: {
           target: z.string().optional().describe("A card id to capture — omit along with rect for the whole window"),
           rect: z
             .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
             .optional()
             .describe("An explicit board-space rect to capture instead of a card"),
+          fullPage: z.boolean().optional().describe("Browser cards only — capture the full scrollable document, not just the viewport"),
+          width: z.number().optional().describe("Browser cards only — temporary CSS viewport width for this capture (restored after)"),
+          out: z.string().optional().describe("Absolute path to write the PNG (default: a temp file)"),
         },
       },
-      async ({ target, rect }) => {
-        const res = await opts.handleRequest({ cmd: "snapshot", target, rect });
+      async ({ target, rect, fullPage, width, out }) => {
+        const res = await opts.handleRequest({ cmd: "snapshot", target, rect, fullPage, width, out });
         if (!res.ok) return { content: [{ type: "text", text: JSON.stringify(res) }], isError: true };
         try {
-          const data = readFileSync(res.path as string).toString("base64");
-          return { content: [{ type: "image", data, mimeType: "image/png" }] };
+          const path = res.path as string;
+          const data = readFileSync(path).toString("base64");
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ ok: true, path }) },
+              { type: "image", data, mimeType: "image/png" },
+            ],
+          };
         } catch (err) {
           return { content: [{ type: "text", text: `failed to read snapshot file: ${String(err)}` }], isError: true };
         }
@@ -2039,21 +2205,29 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_page_text",
       {
         description:
-          "Read a browser card's rendered page text — cheaper than snapshot when you just need to know what the page says, not see it. SCOPE IT: pass `selector` to read ONE element's text; omitting it reads `document.body.innerText` (the whole page), which on a list-heavy page can be thousands of tokens. `maxChars` caps the returned text (default 20000, floor 200, ceiling 200000). The result ALWAYS announces a cut — `truncated: true` plus `totalChars` (the real length) — so never assume the text ends where it stops; narrow with `selector` instead. A `selector` that matches nothing is a NAMED error (nothing was read), never an empty string.",
+          "Read a browser card's rendered page text — cheaper than snapshot when you just need to know what the page says, not see it. SCOPE IT: pass `selector`, `scope` (alias), or a `ref` from browser_snapshot to read ONE subtree; when all are omitted and an open dialog/alertdialog exists, that dialog is the default scope (so a modal read does not pull the page behind it). Omitting scope with no dialog reads `document.body.innerText` (the whole page). `maxChars` caps the returned text (default 20000, floor 200, ceiling 200000). The result ALWAYS announces a cut — `truncated: true` plus `totalChars` — and carries `scope`/`scopeSource`. A selector that matches nothing is a NAMED error, never an empty string.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           selector: z
             .string()
             .optional()
-            .describe('CSS selector — read ONLY this element\'s text instead of the whole page (the scope fix). The answer carries `scope: "selector"`.'),
+            .describe('CSS selector — read ONLY this element\'s text instead of the whole page. The answer carries `scope: "selector"`.'),
+          scope: z
+            .string()
+            .optional()
+            .describe("CSS selector scope (same as selector). Prefer this name when you mean \"read inside this region\"."),
+          ref: z
+            .string()
+            .optional()
+            .describe("Element ref from browser_snapshot — scopes the read to that node (takes precedence over selector/scope)."),
           maxChars: z
             .number()
             .optional()
             .describe("Max characters returned (default 20000; clamped to [200, 200000]). The answer says `truncated` + `totalChars` when it cuts."),
         },
       },
-      async ({ target, selector, maxChars }) => {
-        const res = await opts.handleRequest({ cmd: "get_page_text", target, selector, maxChars });
+      async ({ target, selector, scope, ref, maxChars }) => {
+        const res = await opts.handleRequest({ cmd: "get_page_text", target, selector, scope, ref, maxChars });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2069,21 +2243,37 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_click",
       {
         description:
-          "Click inside an already-open browser card. Prefer `selector` (plain CSS, resolved against the live page) or a `ref` from browser_snapshot over raw `x`/`y`. The card scrolls the target into view and RE-READS the page immediately before dispatching: if the target's rect moved, or something else (overlay, modal, sticky header) sits on top of it, or the point falls outside the page's viewport, the click is REFUSED — `{ok:false, clicked:false, error}` naming the measured reason — and nothing is dispatched. On success the answer NAMES what was clicked: `{ok:true, clicked:true, x, y, target:{tag,id,role,text}, matched, warning}` — `warning` appears when the selector matched more than one element (the first in document order was clicked). A coordinate returned by one call describes what was at that point at that instant, NOT the identity of an element: re-read it with browser_query, or click by selector/ref again.",
+          "Click inside an already-open browser card. Target by `ref` (from browser_snapshot), plain CSS `selector`, `role` (+ optional `name`, getByRole), or visible `text` (getByText) — Playwright :has-text()/text= in selector are NOT CSS; use `text`/`role` instead. Prefer those over raw `x`/`y`. Pass `frame` (iframe CSS selector) to click inside an iframe. Dispatches a real Chromium pointer+mouse sequence via CDP Input.dispatchMouseEvent (works with Radix Tabs/Popover/Select). The card scrolls the target into view and RE-READS before dispatch: if the rect moved, an overlay covers it, or the point is outside the viewport, the click is REFUSED — `{ok:false, clicked:false, error}`. On success: `{ok:true, clicked:true, x, y, target:{tag,id,role,text}, matched, warning, after:{value,checked,ariaInvalid,ariaExpanded,ariaSelected,text}}`. `after` is the target's observed state after the click; `warning` appears on multi-match OR when that state did not change (no-op). Snapshot refs are rebound by role+name when a re-render drops the stamp.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
-          selector: z.string().optional().describe("CSS selector of the element to click — takes precedence over x/y if both given. Plain CSS only (the page's own document.querySelector); Playwright-style :has-text(...)/text=/>> are not supported — use browser_eval to match on text content"),
-          x: z.number().optional().describe("X coordinate in the page's own logical pixels, only used if selector is omitted"),
-          y: z.number().optional().describe("Y coordinate in the page's own logical pixels, only used if selector is omitted"),
+          selector: z.string().optional().describe("Plain CSS selector (document.querySelector). Do NOT put :has-text()/text= here — use `text` or `role`+`name`"),
+          role: z.string().optional().describe("Accessible role to find (button, link, tab, textbox, …) — like Playwright getByRole"),
+          name: z.string().optional().describe("Accessible name to pair with `role` (aria-label or visible text, case-insensitive exact match)"),
+          text: z.string().optional().describe("Visible text to find on a button/link/menuitem/… — like Playwright getByText (use this instead of :has-text in selector)"),
+          frame: z.string().optional().describe("CSS selector of an iframe — the click runs inside its contentDocument (same-origin only)"),
+          x: z.number().optional().describe("X coordinate in the page's own logical pixels, only used if selector/ref/role/text are omitted"),
+          y: z.number().optional().describe("Y coordinate in the page's own logical pixels, only used if selector/ref/role/text are omitted"),
           ref: z
             .string()
             .optional()
-            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. Survives re-render via a role+name handle when the data-stellar-ref stamp is gone; cleared on document navigation."),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, selector, ref, x, y, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, ref, x, y, requesterId: caller(callerCardId) });
+      async ({ target, selector, ref, role, name, text, frame, x, y, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_click",
+          target,
+          selector,
+          ref,
+          role,
+          name,
+          text,
+          frame,
+          x,
+          y,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2092,24 +2282,38 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_type",
       {
         description:
-          "Type text into an already-open browser card, IME-safe (inserted as a whole string, not synthesized key by key). Give `selector` to focus that field first — omit only if you already know the right element is focused.",
+          "Type text into an already-open browser card, IME-safe (whole string, not key-by-key). Target by `selector`, `ref`, or `role`(+`name`); pass `frame` for an iframe. Returns `after` (value/checked/aria-*) and `warning` when the field's observed state did not change.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
           selector: z.string().optional().describe("CSS selector of the input/textarea/editable element to focus before typing"),
+          role: z.string().optional().describe("Accessible role (e.g. textbox) — like getByRole"),
+          name: z.string().optional().describe("Accessible name to pair with `role`"),
+          frame: z.string().optional().describe("CSS selector of an iframe — type inside its contentDocument"),
           ref: z
             .string()
             .optional()
-            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. Rebound by role+name after re-render when possible."),
           replace: z
             .boolean()
             .optional()
-            .describe("true = CLEAR the field first, then type (the text replaces what was there). Default is append — typing after whatever is already in the field, which is what this tool did before and is still right when you are continuing a value by hand. Use `replace: true` whenever the field may already have content (re-typing a name, fixing a value): measured live, typing over an existing value silently produced \"Idy PlatformIdy Platform\". Clearing uses the real editing command (the same as Ctrl+A) and the text still goes in as ONE insertText, so IME input is not affected. It is refused, naming why, when the target is not an editable field (a div, a readonly/disabled input) — nothing would be typed rather than the document being selected and replaced."),
+            .describe("true = CLEAR the field first, then type (fill). On an EMPTY field this just types — it is NOT refused. Default is append. Use whenever the field may already have content (measured: typing over an existing value produced \"Idy PlatformIdy Platform\"). Refused only when the target is not editable (div/readonly/disabled) or content could not be selected for replace."),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, text, selector, ref, replace, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref, replace, requesterId: caller(callerCardId) });
+      async ({ target, text, selector, ref, role, name, frame, replace, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_type",
+          target,
+          text,
+          selector,
+          ref,
+          role,
+          name,
+          frame,
+          replace,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2140,18 +2344,22 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_query",
       {
         description:
-          "Inspect one element on an already-open browser card's page — existence, visible text, form value, link href, checked/disabled state, and real on-screen rect — without a screenshot.",
+          "Inspect one element on an already-open browser card's page — existence, visible text, form value, link href, checked/disabled state, and real on-screen rect — without a screenshot. Target by selector, ref, role(+name), or text; pass `frame` for an iframe.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
-          selector: z.string().optional().describe("CSS selector of the element to inspect. Plain CSS only (the page's own document.querySelector) — Playwright-style :has-text(...)/text=/>> are not supported"),
+          selector: z.string().optional().describe("Plain CSS selector — use `text`/`role` instead of Playwright :has-text()/text="),
+          role: z.string().optional().describe("Accessible role (getByRole)"),
+          name: z.string().optional().describe("Accessible name with `role`"),
+          text: z.string().optional().describe("Visible text (getByText)"),
+          frame: z.string().optional().describe("CSS selector of an iframe"),
           ref: z
             .string()
             .optional()
-            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — rebound by role+name after re-render when possible."),
         },
       },
-      async ({ target, selector, ref }) => {
-        const res = await opts.handleRequest({ cmd: "browser_query", target, selector, ref });
+      async ({ target, selector, ref, role, name, text, frame }) => {
+        const res = await opts.handleRequest({ cmd: "browser_query", target, selector, ref, role, name, text, frame });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2165,11 +2373,154 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_snapshot",
       {
         description:
-          "List every visible, interactive element on a browser card's page — each with a stable `ref`, its role, and the name a human reads on screen. This is how you target something you can SEE but have no selector for: snapshot first, then pass the ref to browser_click/browser_type/browser_query. Much cheaper and more reliable than a screenshot plus guessing coordinates. Refs are reissued on every call and stop being valid after a navigation or re-render — snapshot again rather than reusing an old one.",
-        inputSchema: { target: z.string().describe("The browser card's id or label (see list_cards)") },
+          "List interactive elements on a browser card's page — each with a `ref`, role, accessible name, and `offscreen` (true when the click point is outside the viewport). Pass `includeText: true` to also list visible non-interactive text nodes (chips/headings/status). Pass `includeBoxes: true` for `{x,y,w,h}` per element. Scope with `scope` (CSS) or `ref`; pass `frame` (iframe CSS selector) to snapshot inside an iframe. When scope/frame omitted, an open dialog/alertdialog is preferred so a modal snapshot does not mix in the page behind it. Refs are reissued every call and remembered as role+name handles so click/type can rebind after a re-render; cleared on document navigation.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          includeText: z.boolean().optional().describe("Also list visible non-interactive text nodes (default false)"),
+          includeBoxes: z.boolean().optional().describe("Include bounding boxes in CSS pixels (default false)"),
+          scope: z.string().optional().describe("CSS selector root for the snapshot (default: open dialog if any, else the document)"),
+          ref: z.string().optional().describe("Scope to this browser_snapshot ref (takes precedence over scope)"),
+          frame: z.string().optional().describe("CSS selector of an iframe — snapshot its contentDocument (same-origin)"),
+        },
+      },
+      async ({ target, includeText, includeBoxes, scope, ref, frame }) => {
+        const res = await opts.handleRequest({ cmd: "browser_snapshot", target, includeText, includeBoxes, scope, ref, frame });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_route",
+      {
+        description:
+          "Mock network responses INSIDE one browser card (Playwright page.route equivalent). Scope is that card's isolated session only — never global, never other cards. `urlPattern` is a full-URL glob (`*/api/items`, `http://127.0.0.1:*/snapshots`) or a `^regex`. Optional `method` (GET/POST/…). `response` supplies status + optional headers + `body` (string) or `bodyFile` (absolute path). Optional `times` auto-removes the route after N fulfills. Active routes show as a badge on the card so the owner sees the page is mocked; they clear when the card closes. Unmatched requests continue to the real network.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          urlPattern: z
+            .string()
+            .describe("Glob against the full request URL (`*/api/foo`) or a ^regex. Matched against the absolute URL the page fetches."),
+          method: z.string().optional().describe("HTTP method filter (case-insensitive). Omit to match any method."),
+          response: z
+            .object({
+              status: z.number().describe("HTTP status to fulfill with (100–599)"),
+              headers: z.record(z.string(), z.string()).optional().describe("Response headers"),
+              body: z.string().optional().describe("UTF-8 response body (mutually exclusive with bodyFile)"),
+              bodyFile: z.string().optional().describe("Absolute path to a file whose contents become the body"),
+            })
+            .describe("Mocked response"),
+          times: z.number().optional().describe("Fulfill at most N times then drop the route (omit = unlimited)"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, urlPattern, method, response, times, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_route",
+          target,
+          urlPattern,
+          method,
+          response,
+          times,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_unroute",
+      {
+        description:
+          "Remove mocked routes from one browser card. Pass `routeId` (from browser_route / browser_list_routes) or `urlPattern` to remove matches; omit both to clear ALL routes on that card. The header badge updates immediately. Does not affect any other card.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label"),
+          routeId: z.string().optional().describe("Id returned by browser_route"),
+          urlPattern: z.string().optional().describe("Remove every route whose urlPattern equals this string"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, routeId, urlPattern, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_unroute",
+          target,
+          routeId,
+          urlPattern,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_list_routes",
+      {
+        description:
+          "List active browser_route mocks on one browser card (id, urlPattern, method, status, timesRemaining, hitCount). Read-only — the same list the card header badge reflects.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label"),
+        },
       },
       async ({ target }) => {
-        const res = await opts.handleRequest({ cmd: "browser_snapshot", target });
+        const res = await opts.handleRequest({ cmd: "browser_list_routes", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_set_viewport",
+      {
+        description:
+          "Set (or reset) device emulation on one browser card so media queries evaluate at a real CSS width — e.g. 375 mobile vs 1440 desktop on the SAME card, without iframe hacks. Pass width+height (CSS pixels); optional deviceScaleFactor (1–3) and mobile (defaults to width<768). Pass reset:true alone to leave emulation and restore the card's layout size. A header badge shows the active size so the owner sees the page is emulated; agent-owned emulation survives closing the inspector.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          width: z.number().optional().describe("CSS viewport width (100–3000)"),
+          height: z.number().optional().describe("CSS viewport height (100–3000)"),
+          deviceScaleFactor: z.number().optional().describe("Device pixel ratio 1–3 (default 1)"),
+          mobile: z.boolean().optional().describe("Mobile UA + touch media features (default: width < 768)"),
+          reset: z.boolean().optional().describe("Clear emulation (do not pass width/height with this)"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, width, height, deviceScaleFactor, mobile, reset, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_set_viewport",
+          target,
+          width,
+          height,
+          deviceScaleFactor,
+          mobile,
+          reset,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_screenshot",
+      {
+        description:
+          "Save a PNG of a browser card's page and return `{ok:true, path}`. Modes (mutually exclusive): default = current viewport; fullPage = entire scrollable document; selector or ref = crop to that element (scrolls it into view first). Optional out (absolute path) names the file; optional width temporarily sets the CSS viewport for this shot only. Prefer this over board-space snapshot when you need a named artifact or an element crop.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label"),
+          fullPage: z.boolean().optional().describe("Capture the full scrollable document"),
+          selector: z.string().optional().describe("CSS selector of the element to crop to"),
+          ref: z.string().optional().describe("Element ref from browser_snapshot (crop to that node)"),
+          out: z.string().optional().describe("Absolute path for the PNG (default: temp file)"),
+          width: z.number().optional().describe("Temporary CSS viewport width for this capture"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, fullPage, selector, ref, out, width, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_screenshot",
+          target,
+          fullPage,
+          selector,
+          ref,
+          out,
+          width,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2214,7 +2565,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_wait_for",
       {
         description:
-          "Block until a browser card's page shows (or stops showing) something — a CSS selector or a piece of visible text. Use this after an action instead of guessing how long to sleep; it returns as soon as the condition holds, and fails with a clear timeout if it never does.",
+          "Block until a browser card's page shows (or stops showing) something — a CSS selector or a piece of visible text. Use this after an action instead of guessing how long to sleep; it returns as soon as the condition holds. On timeout the answer includes `context`: summarized visible text, URL, title, last console lines, and failed network requests — so you do not need a second call to learn what was on screen.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           selector: z.string().optional().describe("Wait for this CSS selector to match an element (plain CSS only)"),
@@ -2241,10 +2592,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_navigate",
       {
         description:
-          "Route to a path INSIDE the site already open in a browser card, WITHOUT reloading the document: history.pushState plus a real popstate (and hashchange when the hash moved) — what clicking an in-app link/menu item does. This is the tool for a SPA whose session lives in MEMORY (logged-in app, wizard, dashboard): open_url swaps `location`, which REMOUNTS the app, and a route guard that rebuilt its state from scratch bounces the route to the login/home page — measured live: a requested route came back rewritten to `/` with a 78-character page, which killed the whole automation. RULE OF CHOICE: same site + an in-memory session that must survive → browser_navigate; different site, or a full document load is acceptable → open_url. Cross-origin targets are refused here, naming open_url — nothing is navigated.\n\nARRIVAL IS MEASURED, never assumed: pushState changes the address bar without rendering anything. After the route change the page is sampled (title, text, structure) until the view really changes, or until `expectSelector` (optional; the strongest signal — the element you expect on the new view) matches. Success carries the evidence: `arrival` (\"expect-selector\" | \"dom-changed\"), `weak` (true when only the node count moved — that can be a spinner rather than the new view, so judge before acting), `probes`/`waitedMs`, and `signal` (titleChanged/textChanged/nodesChanged). Failure is NAMED, never a silent no-op: `navigation-refused-by-app` (the page itself rewrote the URL — a route guard rejecting the route; the answer carries the observed URL, and retrying it with open_url hits the same guard, so reach the view via browser_snapshot + browser_click on the menu item), `no-arrival-signal` (the URL changed and the page did NOT react — a router that does not listen to popstate; the old view is still on screen while the URL lies — click the link instead), `document-reloaded` (it turned into a full document load, which is open_url's job), `expect-selector-missing`, `cross-origin`. A refusal happens BEFORE the route change, so the page was not touched at all.",
+          "Navigate a browser card you own. SAME ORIGIN: history.pushState + popstate (and hashchange when the hash moved) — keeps in-memory SPA session (what clicking an in-app link does). CROSS-ORIGIN on a card YOU own: full document load on that SAME card (arrival:\"document-load\") — no second card, no open_url consent. Cross-origin on a card you do NOT own is still refused (open_url / spawn_card for a new window).\n\nRULE OF CHOICE: same site + keep SPA session → browser_navigate with a path; other site on YOUR card → browser_navigate with the full URL; other site and you need a NEW window / do not own the card → open_url or spawn_card.\n\nARRIVAL IS MEASURED: success carries `arrival`, `weak`, `probes`/`waitedMs`, `signal`, and `notFound`/`notFoundReason`. A matched URL alone is NOT proof the view rendered — SPA soft-404s are flagged via documented heuristic (document HTTP 404 when known, title/visible-text patterns like \"404\"/\"not found\", or your `notFoundMarker` selector/text). On timeout/failure the answer includes `context` (visible text summary, URL, title, console tail, failed requests).",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
-          url: z.string().describe("A path inside the site already open (\"/estudante/curriculo?tab=1\") or a full SAME-ORIGIN http(s) URL. A different origin is refused — that is open_url's job."),
+          url: z
+            .string()
+            .describe(
+              'A path inside the site already open ("/estudante/curriculo?tab=1"), a same-origin http(s) URL, or — when YOU own the card — a different-origin http(s) URL (document load on this card).',
+            ),
           expectSelector: z
             .string()
             .optional()
@@ -2253,16 +2608,43 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .number()
             .optional()
             .describe("How long to keep sampling for arrival, in ms (default 4000, floor 120, ceiling 30000). Some routers navigate in a microtask after popstate — do not read a short wait as \"nothing happened\"."),
+          notFoundMarker: z
+            .string()
+            .optional()
+            .describe("Optional SPA-404 hint: a CSS selector (matched in the page) or a literal text needle searched in title/visible text. Combined with built-in title/text heuristics and document HTTP 404 when known."),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, url, expectSelector, timeoutMs, callerCardId }) => {
+      async ({ target, url, expectSelector, timeoutMs, notFoundMarker, callerCardId }) => {
         const res = await opts.handleRequest({
           cmd: "browser_navigate",
           target,
           url,
           expectSelector,
           timeoutMs,
+          notFoundMarker,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_set_display_mode",
+      {
+        description:
+          "Emulate CSS display-mode on a browser card so matchMedia('(display-mode: standalone)') (and PWA/iOS branches that key off it) evaluate as in an installed app. Pass mode:\"standalone\" to emulate, or mode:\"browser\" to reset. Uses CDP Emulation.setEmulatedMedia — does not change the Electron window chrome.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          mode: z.enum(["standalone", "browser"]).describe('"standalone" for installed-PWA media; "browser" to clear emulation'),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, mode, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_set_display_mode",
+          target,
+          mode,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
@@ -2273,19 +2655,86 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_eval",
       {
         description:
-          "Run arbitrary JavaScript in an already-open browser card's real page context and return the (JSON-stringified) result. Unlike the other browser_* tools, this has DevTools-console-level power — the script can read cookies, session storage, and anything else the logged-in page's own JS could read. Only use it against pages/data you'd be comfortable a human collaborator reading.",
+          "Run arbitrary JavaScript in an already-open browser card's real page context and return the (JSON-stringified) result. The script runs as the body of an async function: top-level `return` and `await` work (a bare expression still works too — its value is returned). A thrown exception comes back with message, stack, and script line — not Electron's opaque 'Script failed to execute'. Unlike the other browser_* tools, this has DevTools-console-level power — the script can read cookies, session storage, and anything else the logged-in page's own JS could read. Only use it against pages/data you'd be comfortable a human collaborator reading.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
-          js: z.string().describe("JavaScript to evaluate in the page's context — the expression's value becomes the result"),
+          js: z
+            .string()
+            .describe(
+              "JavaScript to run in the page as an async function body — use `return` for the value and `await` for promises/timers/portal renders. A bare expression (e.g. `1+1` or `document.title`) still works without `return`.",
+            ),
           timeoutMs: z
             .number()
             .optional()
-            .describe("How long to wait for the expression to settle, in ms (default 10000, floor 200, ceiling 120000). A returned promise/thenable IS awaited (detected by `.then`, so Zone.js/polyfill-patched promises work too), and an expression that never settles is refused with an error naming how long it waited — the script keeps running in the page, so nothing is left half-typed by the wait itself. Raise this when the eval legitimately takes long (waiting for a render, scrolling a big page)."),
+            .describe(
+              "How long to wait for the script to settle, in ms (default 30000, floor 200, ceiling 120000). A returned promise/thenable IS awaited (detected by `.then`, so Zone.js/polyfill-patched promises work too), and a script that never settles is refused with an error that names the `timeoutMs` parameter and how long it waited — the script keeps running in the page, so nothing is left half-typed by the wait itself. Raise `timeoutMs` when the eval legitimately takes long (waiting for a render, scrolling a big page).",
+            ),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
       async ({ target, js, timeoutMs, callerCardId }) => {
         const res = await opts.handleRequest({ cmd: "browser_eval", target, js, timeoutMs, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_run",
+      {
+        description:
+          `Run a SEQUENCE of browser actions on one already-open browser card in a SINGLE call — click, type, wait_for, navigate, snapshot, eval — so a screen flow does not burn 15–20 tool round-trips. The owner still watches the card live; each step is the same real action as the matching browser_* tool. Returns per-step results (ok, the tool's own payload, and post-action {url,title}) plus an optional finalSnapshot. Limits: at most ${BROWSER_RUN_MAX_STEPS} steps; wall-clock \`timeoutMs\` default ${BROWSER_RUN_DEFAULT_TIMEOUT_MS}ms (floor ${BROWSER_RUN_MIN_TIMEOUT_MS}, ceiling ${BROWSER_RUN_MAX_TIMEOUT_MS}). Default \`stopOnError: true\` stops after the first failing step (later steps are not started); set false to continue. Default \`finalSnapshot: false\` — pass true to include a browser_snapshot after the last step.`,
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          steps: z
+            .array(
+              z.object({
+                action: z
+                  .enum(["click", "type", "wait_for", "navigate", "snapshot", "eval"])
+                  .describe("Which browser_* action to run for this step"),
+                selector: z.string().optional().describe("CSS selector (click/type/wait_for)"),
+                ref: z.string().optional().describe("Element ref from browser_snapshot (click/type)"),
+                role: z.string().optional().describe("Accessible role (click/type) — getByRole"),
+                name: z.string().optional().describe("Accessible name with role (click/type)"),
+                frame: z.string().optional().describe("iframe CSS selector (click/type/snapshot)"),
+                x: z.number().optional().describe("Click x (with y) when not using selector/ref/role/text"),
+                y: z.number().optional().describe("Click y (with x) when not using selector/ref/role/text"),
+                text: z.string().optional().describe("For type: string to insert. For click: getByText. For wait_for: text to wait for"),
+                replace: z.boolean().optional().describe("browser_type replace mode"),
+                gone: z.boolean().optional().describe("browser_wait_for: wait until absent"),
+                url: z.string().optional().describe("browser_navigate path or same-site URL"),
+                expectSelector: z.string().optional().describe("browser_navigate arrival selector"),
+                js: z.string().optional().describe("browser_eval script (async function body)"),
+                timeoutMs: z.number().optional().describe("Per-step wait budget for wait_for/navigate/eval (capped by the run timeoutMs)"),
+              }),
+            )
+            .describe(`Ordered actions to run (1..${BROWSER_RUN_MAX_STEPS})`),
+          stopOnError: z
+            .boolean()
+            .optional()
+            .describe("Stop after the first failing step (default true). false continues and records each failure in steps[].ok"),
+          finalSnapshot: z
+            .boolean()
+            .optional()
+            .describe("If true, append a browser_snapshot after the last executed step (default false)"),
+          timeoutMs: z
+            .number()
+            .optional()
+            .describe(
+              `Wall-clock budget for the whole run in ms (default ${BROWSER_RUN_DEFAULT_TIMEOUT_MS}, floor ${BROWSER_RUN_MIN_TIMEOUT_MS}, ceiling ${BROWSER_RUN_MAX_TIMEOUT_MS}). On timeout, completed steps are kept and later ones are not started; the error names this timeoutMs.`,
+            ),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, steps, stopOnError, finalSnapshot, timeoutMs, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_run",
+          target,
+          steps,
+          stopOnError,
+          finalSnapshot,
+          timeoutMs,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -2395,20 +2844,48 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
   }
 
+  function hasInternalAuthorization(req: IncomingMessage): boolean {
+    const header = req.headers.authorization;
+    const match = typeof header === "string" ? /^Bearer\s+(.+)$/i.exec(header) : null;
+    if (!match || !options.internalToken) return false;
+    const supplied = Buffer.from(match[1]!);
+    const expected = Buffer.from(options.internalToken);
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  }
+
   const httpServer: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    // `?card=<id>` — ver o doc de `buildServer`. Base descartável só pra
-    // poder usar o parser de URL num caminho relativo; nada aqui olha o
-    // host (o servidor só escuta em 127.0.0.1).
     const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
     if (parsed.pathname !== "/mcp") {
       res.writeHead(404).end();
+      return;
+    }
+    if (parsed.searchParams.has("card")) {
+      res.writeHead(400, { "content-type": "application/json" }).end(
+        JSON.stringify({ ok: false, error: "?card identity stamps are no longer accepted; use the authenticated Stellar relay" }),
+      );
       return;
     }
     if (req.method !== "POST") {
       methodNotAllowed(res);
       return;
     }
-    const server = buildServer(parsed.searchParams.get("card") ?? undefined);
+    const applicationAuthorized = hasInternalAuthorization(req);
+    const callerHeader = req.headers["x-stellar-caller-card"];
+    if (callerHeader !== undefined && !applicationAuthorized) {
+      res.writeHead(401, { "content-type": "application/json" }).end(
+        JSON.stringify({ ok: false, error: "caller identity headers require the app's internal authorization" }),
+      );
+      return;
+    }
+    const callerCardId = typeof callerHeader === "string" ? callerHeader : undefined;
+    const transportIdentity = callerCardId ? options.resolveRelayIdentity?.(callerCardId) ?? null : null;
+    if (callerCardId && !transportIdentity) {
+      res.writeHead(401, { "content-type": "application/json" }).end(
+        JSON.stringify({ ok: false, error: "caller card is not an active authenticated process" }),
+      );
+      return;
+    }
+    const server = buildServer({ applicationAuthorized, transportIdentity });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     void server
       .connect(transport)
@@ -2444,7 +2921,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
   // and is updated in place once bound. Every consumer reads `.url` lazily
   // (pty-registry.ts's `registryOpts.mcpUrl` getter, see index.ts) rather
   // than copying the string at construction time, so this update is seen.
-  const state = { url: `http://127.0.0.1:${opts.port}/mcp` };
+  const state = { url: `http://127.0.0.1:${options.port}/mcp` };
   let relay: { close: () => void } | null = null;
   httpServer.on("listening", () => {
     const addr = httpServer.address();
@@ -2456,18 +2933,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     // do main); o shim só o usa se o binário existir ao lado, então ligar por
     // padrão não muda nada quando o pacote não o traz (degradação graciosa para
     // o shim node). `AGENT_CANVAS_MCP_RELAY=0` desliga — ver `relayEnabled`.
-    if (relayEnabled() && !relay) {
+    if (options.internalToken && relayEnabled() && !relay) {
       const socketPath = relaySocketPath(tmpdir(), state.url);
       if (socketPath) {
         relay = createRelayServer({
           socketPath,
           getMcpUrl: () => state.url,
+          getInternalToken: () => options.internalToken ?? "",
+          resolvePeerIdentity: options.resolvePeerIdentity,
           onError: (err) => console.error("mcp-relay: connection failed:", err),
         });
       }
     }
   });
-  httpServer.listen(opts.port);
+  httpServer.listen(options.port);
 
   function close() {
     relay?.close();

@@ -8,6 +8,7 @@ import { isRoundAttributableToTask, type TaskVerdictReadRule } from "../../main/
 // renderer only reads the `phase` carried by the board payload — it neither
 // reimplements the precedence nor assembles partial facts here.
 import { deriveBoardTaskPhase, type TaskPhase } from "../../main/task-phase-decision";
+import { projectTaskPrompt } from "../../task-prompt-projection";
 
 export type { TaskPurpose };
 export type { TaskPhase };
@@ -1193,7 +1194,10 @@ export function snapshotTaskToBoardItem(
   boardId: string,
 ): {
   id: string;
-  prompt: string | null;
+  promptPreview: string;
+  promptTruncated: boolean;
+  /** Historical detail must use the prompt frozen with this sprint. */
+  promptSnapshot: string | null;
   provider: string | null;
   status: string;
   cardId: string | null;
@@ -1232,10 +1236,18 @@ export function snapshotTaskToBoardItem(
    * `null` is the honest absence (the Fila simply does not draw the chip). */
   gateRun: null;
   gateProgress: null;
+  territory: null;
+  screenTurnState: null;
+  recentAction: null;
+  supersededTitle: null;
+  supersededReason: null;
 } {
+  const promptProjection = projectTaskPrompt(t.prompt);
   return {
     id: t.id,
-    prompt: t.prompt,
+    promptPreview: promptProjection.preview,
+    promptTruncated: promptProjection.truncated,
+    promptSnapshot: t.prompt,
     provider: null,
     status: t.status,
     cardId: null,
@@ -1277,5 +1289,10 @@ export function snapshotTaskToBoardItem(
     interruptionReason: null,
     gateRun: null,
     gateProgress: null,
+    territory: null,
+    screenTurnState: null,
+    recentAction: null,
+    supersededTitle: null,
+    supersededReason: null,
   };
 }

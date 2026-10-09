@@ -377,6 +377,7 @@ body {
 
 .topbar-title,
 .topbar-counts,
+.board-mount-progress,
 .zoom-pill,
 .modal-root {
   pointer-events: auto;
@@ -554,12 +555,21 @@ body {
    o `.topbar` é `space-between`, e sem o auto o segundo filho ficaria CENTRADO
    na barra em vez de colado no título. Valores migrados para tokens no mesmo
    gesto (gap/margin/padding/fonte eram px crus). */
-.topbar-counts {
+/* Pushes the zoom pill to the right: holds the agents count and (while a
+   board is opening) the real mount-progress chip. */
+.topbar-leading {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   margin-left: var(--space-3);
   margin-right: auto;
+  min-width: 0;
+}
+
+.topbar-counts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-2) var(--space-5);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -574,6 +584,55 @@ body {
 .topbar-counts:hover {
   color: var(--text);
   border-color: color-mix(in srgb, var(--text) 30%, var(--border));
+}
+
+/* Real board-open progress (docs/PERF.md §17) — N of M cards ready, not a
+   decorative spinner. Sits beside the agents count; fades via opacity. */
+.board-mount-progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--v2-line);
+  border-radius: var(--radius-pill);
+  background: var(--v2-elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--v2-text-3);
+  font-size: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity var(--duration-3) ease;
+}
+
+.board-mount-progress.is-fading {
+  opacity: 0;
+}
+
+.board-mount-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: color-mix(in srgb, var(--v2-primary) 22%, transparent);
+  transition: transform var(--duration-2) ease;
+  pointer-events: none;
+}
+
+.board-mount-progress-label {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-mount-progress,
+  .board-mount-progress-fill {
+    transition: none;
+  }
 }
 
 /* O DROPDOWN: um card por linha (id + nome), com os papéis à direita. A lista

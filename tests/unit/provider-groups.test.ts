@@ -15,6 +15,12 @@ function availability(ids: string[], installed: string[] = []): AgentAvailabilit
     label: id === "claude" ? "Claude" : id.toUpperCase(),
     installed: installed.includes(id),
     installCommand: null,
+    readiness: "unknown" as const,
+    readinessEvidence: "fixture",
+    readinessHint: null,
+    effortValues: [],
+    turnEndSignal: null,
+    oneShot: false,
   }));
 }
 

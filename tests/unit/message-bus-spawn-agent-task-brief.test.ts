@@ -28,6 +28,7 @@ function existingTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -125,7 +126,8 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
           inputLineLastAtMs: null,
         })) as never,
         listCards: (() => [
-          { id: "spawned-card", kind: "terminal", provider: spawned[0]?.params.provider ?? "bash", cwd: "", label: null },
+          { id: "spawned-card", kind: "terminal", provider: spawned[0]?.params.provider ?? "bash", cwd: "",
+ label: null },
         ]) as never,
         onReadCardRequest: ((requestId: string) => {
           bus?.resolveReadCard(requestId, { ok: true, text: "derive the brief from this prompt\nWorking" });

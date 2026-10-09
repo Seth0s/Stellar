@@ -4,9 +4,9 @@ import type { TaskBoardItem } from "../../src/preload/index";
 import { setLocale } from "../../src/shared/i18n";
 
 /**
- * The gate CHIP on the Fila: live progress ("rodando gates i/N · command") and
- * the final verdict (green/red), with the tooltip carrying the command, the
- * mode and the trailing output when red. Without a gate, no chip.
+ * Gate chip on the Fila V3 tile: live progress ("rodando gates i/N · command")
+ * and the final verdict. Verdict labels stay the V3 compact form (✓ / ✕);
+ * progress + title match HEAD (prototype omits those states).
  */
 
 vi.mock("@renderer/useTerminal", () => ({
@@ -35,7 +35,8 @@ const ID = "d00a03fa-1111-2222-3333-444444444444";
 function task(over: Partial<TaskBoardItem> = {}): TaskBoardItem {
   return {
     id: ID,
-    prompt: "faz X",
+    promptPreview: "faz X",
+    promptTruncated: false,
     provider: "claude",
     status: "running",
     cardId: null,
@@ -101,6 +102,7 @@ function stub(tasks: TaskBoardItem[]) {
   const noop = () => {};
   return (
     <TaskCard
+      cardId="fila-test"
       rect={{ x: 0, y: 0, w: 700, h: 400 }}
       zoom={1}
       zIndex={1}
@@ -109,7 +111,6 @@ function stub(tasks: TaskBoardItem[]) {
       concurrencyCapRaw={null}
       activeBoardId="b1"
       boardNames={{ b1: "Maestro" }}
-      taskCountsByBoard={{ b1: 2 }}
       onChange={noop}
       onCommit={noop}
       onRaise={noop}
@@ -125,7 +126,7 @@ function chip(): HTMLElement | null {
   return document.querySelector('[data-part="gate-chip"]');
 }
 
-describe("chip do gate (board 64)", () => {
+describe("chip do gate na Fila V3", () => {
   it("andamento ao vivo: 'rodando gates i/N · comando' com tom running", () => {
     render(
       stub([task({ gateProgress: { index: 1, total: 2, command: "npm run check:types" } })]),
@@ -137,7 +138,7 @@ describe("chip do gate (board 64)", () => {
     expect(el!.textContent).toContain("npm run check:types");
   });
 
-  it("veredito verde: 'gates N/M' com tom good", () => {
+  it("veredito verde: chip 'gates ✓' com tom good", () => {
     render(
       stub([
         task({
@@ -146,11 +147,12 @@ describe("chip do gate (board 64)", () => {
       ]),
     );
     const el = chip();
+    expect(el).toBeTruthy();
     expect(el!.getAttribute("data-tone")).toBe("good");
-    expect(el!.textContent).toContain("gates 2/2");
+    expect(el!.textContent).toContain("gates ✓");
   });
 
-  it("veredito vermelho: tom danger e tooltip com comando, modo e final da saída", () => {
+  it("veredito vermelho: tom danger, rótulo ✕ e title com comando, modo e final da saída", () => {
     render(
       stub([
         task({
@@ -166,8 +168,10 @@ describe("chip do gate (board 64)", () => {
       ]),
     );
     const el = chip();
+    expect(el).toBeTruthy();
     expect(el!.getAttribute("data-tone")).toBe("danger");
-    expect(el!.textContent).toContain("gates 1/2");
+    expect(el!.textContent).toMatch(/check:types/);
+    expect(el!.textContent).toContain("✕");
     const title = el!.getAttribute("title")!;
     expect(title).toContain("npm run check:types");
     expect(title).toContain("isolado");

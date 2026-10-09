@@ -216,7 +216,7 @@ export async function suggestQAScope(input: SuggestQAScopeInput = {}): Promise<S
   const headRef = input.headRef || "HEAD";
 
   // 1. Collect commits between baseRef and headRef
-  let commits: QACommit[] = [];
+  let commits: QACommit[];
   try {
     const logOutput = await gitExec(repoRoot, [
       "log",

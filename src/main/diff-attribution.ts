@@ -187,7 +187,7 @@ export function decideDiffAttribution(input: DiffAttributionInput): DiffAttribut
     if (declared === null) {
       // Forma inesperada (relatório que é ARRAY/STRING, sem `filesChanged`):
       // declarado, nunca pulado — é o que o dono pediu.
-      let shape = "sem filesChanged";
+      let shape: string;
       try {
         const parsed: unknown = JSON.parse(report.reportJson);
         shape = Array.isArray(parsed) ? "array" : typeof parsed;

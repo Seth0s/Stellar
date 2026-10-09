@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { TaskRow } from "../../src/main/store";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * `spawn_agent` COM `role` NO CAMINHO AUTÔNOMO — o lado que ninguém cobria.
@@ -54,6 +55,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: "impl-card",
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -161,25 +163,35 @@ describe("message-bus: spawn_agent role no caminho AUTÔNOMO (c8f129af)", () => 
   });
 
   it("board AUTÔNOMO na FILA: o spawn só acontece depois, e AINDA ASSIM o vínculo é 'reviewer'", async () => {
-    // Cap cheio: `autonomousSpawn` desvia para `enqueueSpawn`, que guarda o
-    // objeto `params` — que NÃO carrega `role`. O dispatch real acontece
-    // depois, noutro tick, por `tryDispatchQueued`. É aqui que um `role`
-    // que viajasse só nos params se perderia em silêncio.
+    // Cap full: `autonomousSpawn` routes to `enqueueSpawn`, which stores
+    // `params` (no `role`). Real dispatch happens later via
+    // `tryDispatchQueued`. A `role` that lived only in params would be lost
+    // here. The MCP call returns queued+spawnId immediately; the link is
+    // written on `eventual` when a slot opens.
     const { captured, state } = makeRig({ running: 4, cap: 4 });
-    const pending = bus!.handleRequest(spawnReviewer("t-review")) as Promise<{ ok: boolean; cardId?: string }>;
-
-    await new Promise((r) => setTimeout(r, 10));
+    const queued = (await bus!.handleRequest(spawnReviewer("t-review"))) as {
+      ok: boolean;
+      queued?: boolean;
+      spawnId?: string;
+    };
+    expect(queued.ok).toBe(true);
+    expect(queued.queued).toBe(true);
     expect(captured.spawned).toHaveLength(0); // ainda na fila: nada nasceu
 
     state.running = 0;
     bus!.notifyConcurrencyCapChanged("b1"); // uma vaga abriu
-    const res = await pending;
+    await new Promise((r) => setTimeout(r, 20));
 
-    expect(res.ok).toBe(true);
     expect(captured.spawned).toHaveLength(1);
     expect(captured.spawned[0].taskId).toBe("t-review");
     expect(captured.linked).toEqual([{ taskId: "t-review", cardId: "new-card", role: "reviewer" }]);
     expect(captured.principalWrites).toEqual([]);
+    const up = readBus<{
+      status: string;
+      cardId?: string;
+    }>(await bus!.handleRequest({ cmd: "get_spawn", spawnId: queued.spawnId }));
+    expect(up.status).toBe("up");
+    expect(up.cardId).toBe("new-card");
   });
 
   it("reviewer numa task SEM principal: continua não virando principal", async () => {

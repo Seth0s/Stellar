@@ -6,9 +6,11 @@
  * (0,2,0) vencer `.card-base` (0,1,0) garantido, sem depender de ordem
  * de import no bundle. */
 
-.stickyCard:global(.card-base) {
-  border-left: 3px solid var(--accent);
-}
+/* Accent strip is painted in cards.css via inset box-shadow on
+   `[data-kind="sticky"].card-base` so the border shorthand stays uniform. */
+
+.stickyCard :global(.card-head) { background: var(--card-note-head-surface); }
+.stickyCard :global(.card-foot) { background: var(--card-note-foot-surface); }
 
 /* Fills the clip below the header so textarea/preview keep flex:1 the
    way they did as direct CardFrame children. `--sticky-font-size` is

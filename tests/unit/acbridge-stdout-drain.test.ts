@@ -39,6 +39,7 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
       card_id: null,
       board_id: "board-drain",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -117,6 +118,10 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
           if (prop === "listTasks") return () => store.listTasks();
           if (prop === "listTasksByBoard") return (boardId: string) => store.listTasksByBoard(boardId);
           if (prop === "listCards") return () => [];
+          if (prop === "getBuildIdentity") return () => ({ mode: "dev" });
+          if (prop === "getCardBoardId") return (id: string) => id === "drain-test" ? "board-drain" : undefined;
+          if (prop === "isCardAlive") return (id: string) => id === "drain-test";
+          if (prop === "boardExists") return (boardId: string) => boardId === "board-drain";
           if (prop === "isCardAlive") return () => false;
           if (prop === "listAllConnectors") return () => [];
         if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
@@ -127,10 +132,13 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
         },
       },
     ) as Parameters<typeof createMessageBus>[1];
-    bus = createMessageBus(sockPath, callbacks);
+    bus = createMessageBus(sockPath, callbacks, {
+      getPeerPid: () => 1,
+      resolvePeerIdentity: () => ({ cardId: "drain-test", boardId: "board-drain" }),
+    });
 
     // Expected size = what the bus itself would serialize (no pipe).
-    const direct = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as { ok: boolean; tasks: unknown[] };
+    const direct = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "drain-test", view: "full" } as BusRequest, { callerCardId: "drain-test", scopeEnforced: true })) as { ok: boolean; tasks: unknown[] };
     expect(direct.ok).toBe(true);
     const expected = Buffer.from(JSON.stringify(direct.tasks) + "\n", "utf8");
     expect(expected.length).toBeGreaterThan(PIPE_CAP);

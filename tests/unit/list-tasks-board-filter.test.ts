@@ -37,6 +37,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       card_id: null,
       board_id: "default",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -75,6 +76,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
             };
           }
           if (prop === "listAllConnectors") return () => [];
+          if (prop === "getCardBoardId") return (id: string) => id === "caller-card" ? "board-a" : undefined;
         if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
         if (prop === "findSpawnByChild") return () => undefined;
         if (prop === "listSpawnsByParent") return () => [];
@@ -95,7 +97,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       store.upsertTask(baseTaskFields("t2", { board_id: "board-b" }));
       store.upsertTask(baseTaskFields("t3", { board_id: "board-a" }));
 
-      const filtered = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-a", view: "full" } as BusRequest)) as {
+      const filtered = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", boardId: "board-a", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         tasks: { id: string }[];
       };
@@ -104,23 +106,22 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       expect(counts.listTasksByBoard).toBe(1);
       expect(counts.listTasks).toBe(0);
 
-      const unfiltered = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
+      const unfiltered = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         tasks: { id: string }[];
       };
       expect(unfiltered.ok).toBe(true);
-      expect(unfiltered.tasks.map((t) => t.id).sort()).toEqual(["t1", "t2", "t3"]);
-      expect(counts.listTasks).toBe(1);
-      // still only the one call from the boardId request above.
-      expect(counts.listTasksByBoard).toBe(1);
+      expect(unfiltered.tasks.map((t) => t.id).sort()).toEqual(["t1", "t3"]);
+      expect(counts.listTasks).toBe(0);
+      expect(counts.listTasksByBoard).toBe(2);
 
-      // An empty board is a real, correct result — not an error.
-      const empty = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-nonexistent", view: "full" } as BusRequest)) as {
+      const foreign = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", boardId: "board-b", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
-        tasks: unknown[];
+        error?: string;
       };
-      expect(empty.ok).toBe(true);
-      expect(empty.tasks).toEqual([]);
+      expect(foreign.ok).toBe(false);
+      expect(foreign.error).toContain("boardId");
+      expect(counts.listTasksByBoard).toBe(2);
     } finally {
       bus.close();
       store.close();

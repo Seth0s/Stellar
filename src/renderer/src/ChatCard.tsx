@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { CardFrame } from "./CardFrame";
+import { decideChatFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
 import { toast } from "./useToast";
@@ -616,11 +617,13 @@ function ChatCardInner({
   // duplicate noise. A bash entry DOES still show once done (its stdout
   // summary is real information the consent block never had).
   const visibleActivity = toolActivity.filter((t) => t.name !== "write_file" && !(t.name === "bash" && t.status === "running"));
+  const chatFooter = decideChatFooter({ streaming: streaming !== null, elapsedMs, lastTurn });
 
   return (
     <CardFrame
       className="chat-card"
       kind="chat"
+      cardId={id}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -644,63 +647,53 @@ function ChatCardInner({
       footerContent={
         <span className="chat-foot-row">
           <span className="chat-foot-cwd">{cwd}</span>
-          {streaming !== null ? (
+          {chatFooter.durationMs !== null && streaming !== null ? (
             <span className="chat-foot-status" title={t("chat.elapsed")}>
-              {formatDuration(elapsedMs)}
+              {formatDuration(chatFooter.durationMs)}
             </span>
           ) : (
-            lastTurn && (
+            chatFooter.durationMs !== null && (
               <span
                 className="chat-foot-status"
                 title={t("chat.lastTurn", {
-                  duration: formatDuration(lastTurn.durationMs),
-                  input: lastTurn.inputTokens,
-                  output: lastTurn.outputTokens,
+                  duration: formatDuration(chatFooter.durationMs),
+                  input: chatFooter.inputTokens ?? 0,
+                  output: chatFooter.outputTokens ?? 0,
                 })}
               >
-                {formatDuration(lastTurn.durationMs)} · {formatTokenCount(lastTurn.inputTokens)} in / {formatTokenCount(lastTurn.outputTokens)} out
+                {formatDuration(chatFooter.durationMs)} · {formatTokenCount(chatFooter.inputTokens ?? 0)} in / {formatTokenCount(chatFooter.outputTokens ?? 0)} out
               </span>
             )
           )}
         </span>
       }
+      headerContext={
+        <div className="chat-card-context-controls">
+          <span className="chat-provider-picker">
+            {ALL_PROVIDERS.map((p) => (
+              <button
+                key={p}
+                className={provider === p ? "active" : ""}
+                title={keyStatus[p] ? t("chat.providerHasKey", { provider: PROVIDER_LABELS[p] }) : t("chat.providerMissingKey", { provider: PROVIDER_LABELS[p] })}
+                onClick={() => onProviderCommit(p)}
+              >
+                {PROVIDER_LABELS[p]}
+                <span className={`chat-provider-dot${keyStatus[p] ? " has-key" : ""}`} />
+              </button>
+            ))}
+          </span>
+          {provider !== "generic" ? (
+            <select className="chat-model-select" value={model} onChange={(e) => onModelCommit(e.target.value)}>
+              {PROVIDER_MODELS[provider].map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          ) : (
+            <input className="chat-model-input" value={model} onChange={(e) => onModelCommit(e.target.value)} placeholder={t("chat.modelPh")} title={t("chat.modelTitle")} />
+          )}
+        </div>
+      }
+      headerStatus={<span data-tone={streaming !== null ? "good" : undefined}>{streaming !== null ? "respondendo" : "ocioso"}{streaming !== null && <span className="card-head-status-live" aria-hidden="true" />}</span>}
       headerContent={
         <>
-          <span className="card-head-label">
-            <Icon name="chat" size={14} />
-            <span className="chat-provider-picker">
-              {ALL_PROVIDERS.map((p) => (
-                <button
-                  key={p}
-                  className={provider === p ? "active" : ""}
-                  title={keyStatus[p] ? t("chat.providerHasKey", { provider: PROVIDER_LABELS[p] }) : t("chat.providerMissingKey", { provider: PROVIDER_LABELS[p] })}
-                  onClick={() => onProviderCommit(p)}
-                >
-                  {PROVIDER_LABELS[p]}
-                  {/* Item 29 — indicador de qual provider já tem key salva,
-                      sem precisar clicar em cada um pra descobrir. */}
-                  <span className={`chat-provider-dot${keyStatus[p] ? " has-key" : ""}`} />
-                </button>
-              ))}
-            </span>
-            {provider !== "generic" ? (
-              <select className="chat-model-select" value={model} onChange={(e) => onModelCommit(e.target.value)}>
-                {PROVIDER_MODELS[provider].map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className="chat-model-input"
-                value={model}
-                onChange={(e) => onModelCommit(e.target.value)}
-                placeholder={t("chat.modelPh")}
-                title={t("chat.modelTitle")}
-              />
-            )}
-          </span>
           <span className="card-head-actions">
             <button
               className={sessionsOpen ? "active" : ""}

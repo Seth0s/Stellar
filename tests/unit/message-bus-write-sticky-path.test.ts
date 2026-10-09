@@ -56,7 +56,7 @@ describe("message-bus: write_sticky path form reuses fs-tools confine", () => {
               ? { boardId: "board-a", kind: "sticky", provider: null }
               : undefined,
         isBoardAutonomous: () => opts?.autonomous === true,
-        updateStickyContentDirect: (cardId: string, content: string, mode: "replace" | "append") => ({
+        updateStickyContentDirect: (_cardId: string, content: string, mode: "replace" | "append") => ({
           ok: true as const,
           content: mode === "append" ? `PREV${content}` : content,
         }),

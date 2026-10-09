@@ -78,18 +78,28 @@ export type SnapshotControlFacts = {
 };
 
 export type SnapshotTargetDecision =
-  | { list: true; refOn: "self" }
-  | { list: true; refOn: "label"; via: "label" }
+  | { list: true; refOn: "self"; offscreen?: boolean }
+  | { list: true; refOn: "label"; via: "label"; offscreen?: boolean }
   | { list: false; reason: string };
 
-/** Onde o clique deste controle realmente cai — e portanto onde o `ref` deve
- * ser carimbado. */
+/** Where a click on this control actually lands — and therefore where the ref
+ * is stamped. Off-viewport controls that are still actionable are listed with
+ * `offscreen: true` so the agent can scroll them into view instead of guessing. */
 export function decideSnapshotTarget(facts: SnapshotControlFacts): SnapshotTargetDecision {
   if (facts.selfVisible && facts.pointInViewport && facts.pointHitsSelf) {
     return { list: true, refOn: "self" };
   }
   if (facts.label?.visible) {
-    return { list: true, refOn: "label", via: "label" };
+    // Prefer the associated label when the control's own point is off-screen
+    // (measured: absolute;-9999px lists a self ref that browser_click refuses).
+    return facts.pointInViewport
+      ? { list: true, refOn: "label", via: "label" }
+      : { list: true, refOn: "label", via: "label", offscreen: true };
+  }
+  // elementFromPoint is false outside the viewport by construction — still
+  // list a CSS-visible control so the agent can scroll it into view.
+  if (facts.selfVisible && !facts.pointInViewport) {
+    return { list: true, refOn: "self", offscreen: true };
   }
   return { list: false, reason: describeSnapshotSkip(facts) };
 }
@@ -163,6 +173,7 @@ export function snapshotTargetProbeSource(): string {
           ? { kind: associated.kind, visible: __stellarStyleVisible(associated.label) }
           : null,
         labelElement: associated ? associated.label : null,
+        box: { x: r.x, y: r.y, w: r.width, h: r.height },
       };
     }
   `;

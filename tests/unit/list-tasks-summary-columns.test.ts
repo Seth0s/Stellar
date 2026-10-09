@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { invalidBusRequest } from "../helpers/bus-response";
 
 // PERF (task c9db1d86, medido na 41813ab3 seq 447) — `list_tasks` com
 // `view:"summary"` selecionava as 31 colunas (incluindo `prompt` e
@@ -44,6 +45,7 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
       card_id: null,
       board_id: "default",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -192,6 +194,7 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
             if (prop === "findSpawnByChild") return () => undefined;
             if (prop === "listSpawnsByParent") return () => [];
             if (prop === "listCards") return () => [];
+            if (prop === "getCardBoardId") return (id: string) => id === "caller-card" ? "board-a" : undefined;
             return () => undefined;
           },
         },
@@ -207,16 +210,16 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
         store.upsertTask(baseTaskFields("t1", { board_id: "board-a", prompt: "prompt secreto", result_json: '{"v":1}' }));
         store.upsertTask(baseTaskFields("t2", { board_id: "board-a" }));
 
-        const summary = (await bus.handleRequest({ cmd: "list_tasks", view: "summary" } as BusRequest)) as {
+        const summary = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "summary" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
           ok: boolean;
           tasks: { id: string; prompt?: unknown; result?: unknown }[];
         };
         expect(summary.ok).toBe(true);
         expect(summary.tasks.map((t) => t.id).sort()).toEqual(["t1", "t2"]);
         // O statement largo não pode ter sido tocado.
-        expect(counts.listTasksSummary).toBe(1);
+        expect(counts.listTasksSummary).toBe(0);
         expect(counts.listTasks).toBe(0);
-        expect(counts.listTasksSummaryByBoard).toBe(0);
+        expect(counts.listTasksSummaryByBoard).toBe(1);
         expect(counts.listTasksByBoard).toBe(0);
         // E a projeção continua valendo: os dois campos não saem no payload.
         for (const t of summary.tasks) {
@@ -227,38 +230,41 @@ describe("list_tasks view=summary — statement dedicado e escolha pela view", (
         // `view:"summary"` + boardId → statement summary por board.
         const summaryBoard = (await bus.handleRequest({
           cmd: "list_tasks",
+          requesterId: "caller-card",
           view: "summary",
           boardId: "board-a",
-        } as BusRequest)) as { ok: boolean; tasks: { id: string }[] };
+        } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as { ok: boolean; tasks: { id: string }[] };
         expect(summaryBoard.ok).toBe(true);
-        expect(counts.listTasksSummaryByBoard).toBe(1);
+        expect(counts.listTasksSummaryByBoard).toBe(2);
         expect(counts.listTasksByBoard).toBe(0);
         expect(counts.listTasks).toBe(0);
 
         // Novo contrato (task 6266d3e7): sem `view`, o default é SUMMARY.
-        const def = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
+        const def = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
           ok: boolean;
           tasks: { id: string; prompt?: unknown }[];
         };
         expect(def.ok).toBe(true);
-        expect(counts.listTasksSummary).toBe(2);
+        expect(counts.listTasksSummary).toBe(0);
+        expect(counts.listTasksSummaryByBoard).toBe(3);
         expect(counts.listTasks).toBe(0);
 
         // E `view:"full"` explícito continua largo.
-        const full = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
+        const full = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
           ok: boolean;
           tasks: { id: string; prompt?: unknown }[];
         };
         expect(full.ok).toBe(true);
-        expect(counts.listTasks).toBe(1);
-        expect(counts.listTasksSummary).toBe(2);
+        expect(counts.listTasks).toBe(0);
+        expect(counts.listTasksByBoard).toBe(1);
+        expect(counts.listTasksSummary).toBe(0);
         // O `full` de verdade continua trazendo o prompt — a prova de que a
         // economia do summary não vazou pro caminho largo.
         expect(full.tasks.find((t) => t.id === "t1")?.prompt).toBe("prompt secreto");
 
         // Valor de view desconhecido continua recusado (nada de cair no full
         // fingindo que o filtro funcionou).
-        const bad = (await bus.handleRequest({ cmd: "list_tasks", view: "resumido" } as BusRequest)) as {
+        const bad = (await bus.handleRequest(invalidBusRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "resumido" }), { callerCardId: "caller-card", scopeEnforced: true })) as {
           ok: boolean;
           error?: string;
         };

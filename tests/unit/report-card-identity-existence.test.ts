@@ -70,6 +70,7 @@ function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -117,7 +118,9 @@ function callbacksBackedByStore(
         if (prop === "findSpawnByChild") return () => undefined;
         if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
-        if (prop === "getCardBoardId") return () => undefined;
+        if (prop === "getCardBoardId") {
+          return (cardId: string) => store.getCard(cardId)?.board_id ?? undefined;
+        }
         return () => undefined;
       },
     },
@@ -291,31 +294,31 @@ describe("report: a identidade declarada tem de existir (task 34e27f66)", () => 
   });
 });
 /**
- * A MESMA recusa, pela PORTA que o defeito usa de verdade.
- *
- * O shim `stellar-mcp` (resources/bin) é um proxy stdio: ele carimba
- * `?card=<AGENT_CANVAS_CARD_ID>` na URL e repassa tudo para o servidor HTTP
- * (`mcp-server.ts`), que resolve a identidade SÓ pelo carimbo
- * (`caller-identity.ts`) e chama o bus. Este bloco sobe esse caminho
- * inteiro dentro do processo — store real, bus real, servidor MCP real,
- * cliente MCP real — porque um guarda que só vale no bus poderia ser
- * contornado por uma porta que passasse `requesterId` por outro caminho.
+ * The same existence refusal, through the HTTP MCP door the relay uses.
+ * `?card=` is refused at the TCP layer; identity is Bearer + caller header
+ * for active cards only (`resolveRelayIdentity`).
  */
 describe("report: a recusa pela porta do MCP (o caminho do shim)", () => {
   let dir: string;
   let store: ReturnType<typeof openStore>;
   let bus: ReturnType<typeof createMessageBus>;
   let server: ReturnType<typeof createMcpServer>;
-  let client: Client | null = null;
-
   const PHANTOM = "97924181";
+  const LIVE = "97924182";
+  const MCP_INTERNAL = "unit-existence-internal-token";
 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-report-identity-mcp-"));
     store = openStore(dir);
-    store.upsertCard(baseCard("97924182")); // a única linha de `cards`
-    bus = createMessageBus(join(dir, "mcp-door.sock"), callbacksBackedByStore(store, new Set(["97924182"])));
-    server = createMcpServer({ port: 0, handleRequest: (req) => bus.handleRequest(req) });
+    store.upsertCard(baseCard(LIVE));
+    bus = createMessageBus(join(dir, "mcp-door.sock"), callbacksBackedByStore(store, new Set([LIVE])));
+    server = createMcpServer({
+      port: 0,
+      internalToken: MCP_INTERNAL,
+      requireIdentity: true,
+      resolveRelayIdentity: (cardId) => (cardId === LIVE ? { cardId: LIVE, boardId: "default" } : null),
+      handleRequest: (req, identity) => bus.handleRequest(req, identity),
+    });
     await new Promise<void>((resolve) => {
       const tick = () => (server.url.endsWith(":0/mcp") ? setTimeout(tick, 5) : resolve());
       tick();
@@ -323,16 +326,24 @@ describe("report: a recusa pela porta do MCP (o caminho do shim)", () => {
   });
 
   afterAll(async () => {
-    await client?.close();
     server.close();
     bus.close();
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function report(stampedCardId: string, payload: Record<string, unknown>) {
-    const c = new Client({ name: `stamped-${stampedCardId}`, version: "0.0.0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(`${server.url}?card=${stampedCardId}`)));
+  async function report(cardId: string, payload: Record<string, unknown>) {
+    const c = new Client({ name: `stamped-${cardId}`, version: "0.0.0" });
+    await c.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: {
+          headers: {
+            authorization: `Bearer ${MCP_INTERNAL}`,
+            "x-stellar-caller-card": cardId,
+          },
+        },
+      }),
+    );
     const res = (await c.callTool({ name: "report", arguments: { report: payload } })) as {
       content: { text: string }[];
     };
@@ -340,23 +351,32 @@ describe("report: a recusa pela porta do MCP (o caminho do shim)", () => {
     return JSON.parse(res.content[0]!.text) as { ok: boolean; error?: string; seq?: number };
   }
 
-  it("O DEFEITO, pela porta real: o carimbo de um card que não existe não grava nada", async () => {
-    const res = await report(PHANTOM, { ok: true, taskId: "3fe0db6e", entregue: "trabalho real" });
+  it("TCP refuses ?card= identity stamps", async () => {
+    const res = await fetch(`${server.url}?card=${LIVE}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/\?card/);
+  });
 
-    expect(res.ok).toBe(false);
-    expect(res.error).toContain(PHANTOM);
-    expect(res.error).toContain("does NOT exist");
+  it("O DEFEITO, pela porta real: header de um card inativo não grava nada", async () => {
+    await expect(report(PHANTOM, { ok: true, taskId: "3fe0db6e", entregue: "trabalho real" })).rejects.toThrow(
+      /not an active authenticated process|Streamable HTTP error/i,
+    );
     expect(reportRows(dir, PHANTOM)).toEqual([]);
     expect(store.nextReportSeqSeed()).toBe(0);
   });
 
-  it("CONTROLE, pela mesma porta: o carimbo de um card VIVO reporta sob o próprio id", async () => {
-    const res = await report("97924182", { ok: true, entregue: "trabalho real" });
+  it("CONTROLE, pela mesma porta: card VIVO autenticado reporta sob o próprio id", async () => {
+    const res = await report(LIVE, { ok: true, entregue: "trabalho real" });
 
     expect(res.error).toBeUndefined();
     expect(res.ok).toBe(true);
     expect(res.seq).toBe(1);
-    expect(reportRows(dir, "97924182")).toHaveLength(1);
+    expect(reportRows(dir, LIVE)).toHaveLength(1);
     expect(reportRows(dir, PHANTOM)).toEqual([]);
   });
 });

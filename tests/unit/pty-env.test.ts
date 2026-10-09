@@ -30,9 +30,14 @@ describe("pty-env: the parent app's identity does not cross into a card", () => 
     expect(PTY_IDENTITY_ENV_PREFIXES).toContain("ELECTRON_");
   });
 
-  it("keeps everything else: AGENT_CANVAS_*, PATH, desktop description", () => {
+  it("strips inherited card/auth identity keys so a parent cannot forge the child's label", () => {
+    for (const key of ["AGENT_CANVAS_CARD_ID", "AGENT_CANVAS_AUTH_TOKEN", "AGENT_CANVAS_MCP_APP_TOKEN"]) {
+      expect(isIdentityEnvKey(key), key).toBe(true);
+    }
+  });
+
+  it("keeps everything else: other AGENT_CANVAS_*, PATH, desktop description", () => {
     for (const key of [
-      "AGENT_CANVAS_CARD_ID",
       "AGENT_CANVAS_NODE",
       "AGENT_CANVAS_MCP_URL",
       "PATH",

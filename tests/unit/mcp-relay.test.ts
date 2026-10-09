@@ -9,7 +9,6 @@ import {
   createRelayServer,
   extractJsonLine,
   httpRelayForwarder,
-  parseRelayHandshake,
   relayEnabled,
   relaySocketPath,
 } from "../../src/main/mcp-relay";
@@ -25,12 +24,10 @@ describe("relayEnabled — o bridge é PADRÃO (task 52c895da)", () => {
 
 describe("relaySocketPath — derivado da porta do MCP, sem variável nova", () => {
   it("URL local válida => caminho com a porta", () => {
-    expect(relaySocketPath("/tmp", "http://127.0.0.1:8799/mcp")).toBe(
-      join("/tmp", "stellar-mcp-relay-8799.sock"),
-    );
+    expect(relaySocketPath("/tmp", "http://127.0.0.1:8799/mcp")).toBe(join("/tmp", "stellar-mcp-relay-8799.sock"));
   });
 
-  it("o mesmo par (tmpdir, porta) dá o mesmo arquivo — é o contrato com o stub", () => {
+  it("query string na URL não muda o socket (identidade não vem de ?card=)", () => {
     const a = relaySocketPath("/tmp", "http://127.0.0.1:5000/mcp");
     const b = relaySocketPath("/tmp", "http://127.0.0.1:5000/mcp?card=1");
     expect(a).toBe(b);
@@ -48,55 +45,25 @@ describe("relaySocketPath — derivado da porta do MCP, sem variável nova", () 
   });
 });
 
-describe("parseRelayHandshake", () => {
-  it("card string não-vazia => o id", () => {
-    expect(parseRelayHandshake('{"card":"98576088"}')).toBe("98576088");
-  });
-
-  it("espaços em volta são aparados", () => {
-    expect(parseRelayHandshake('{"card":"  abc  "}')).toBe("abc");
-  });
-
-  it("ausente/vazio/não-string/JSON quebrado/array => null", () => {
-    expect(parseRelayHandshake("{}")).toBeNull();
-    expect(parseRelayHandshake('{"card":""}')).toBeNull();
-    expect(parseRelayHandshake('{"card":"   "}')).toBeNull();
-    expect(parseRelayHandshake('{"card":123}')).toBeNull();
-    expect(parseRelayHandshake("{")).toBeNull();
-    expect(parseRelayHandshake('["card"]')).toBeNull();
-  });
-});
-
-describe("RelaySession — framing NDJSON + handshake", () => {
-  it("a primeira linha é o handshake; o resto vai carimbado com o card", () => {
+describe("RelaySession — framing NDJSON without client-declared identity", () => {
+  it("every complete line is a message; identity is not taken from the stream", () => {
     const s = new RelaySession();
-    const first = s.push('{"card":"c1"}\n');
-    expect(first).toEqual({ messages: [] });
-    const rest = s.push('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
-    expect(rest).toEqual({ messages: [{ cardId: "c1", line: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' }] });
-  });
-
-  it("handshake inválido => erro (nunca roteia sem identidade)", () => {
-    const s = new RelaySession();
-    expect(s.push("lixo\n")).toEqual({ messages: [], error: "relay handshake missing card id" });
+    const first = s.push('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
+    expect(first).toEqual({ messages: [{ line: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' }] });
   });
 
   it("linha cortada em chunks fica no buffer", () => {
     const s = new RelaySession();
-    s.push('{"card":"c1"}\n');
     const a = s.push('{"jsonrpc":"2.0","id":1,"met');
     expect(a.messages).toEqual([]);
     const b = s.push('hod":"ping"}\n');
-    expect(b.messages).toEqual([{ cardId: "c1", line: '{"jsonrpc":"2.0","id":1,"method":"ping"}' }]);
+    expect(b.messages).toEqual([{ line: '{"jsonrpc":"2.0","id":1,"method":"ping"}' }]);
   });
 
   it("linhas em branco são ignoradas; duas mensagens no mesmo chunk saem na ordem", () => {
     const s = new RelaySession();
-    const r = s.push('{"card":"c1"}\n\n{"a":1}\n{"b":2}\n');
-    expect(r.messages).toEqual([
-      { cardId: "c1", line: '{"a":1}' },
-      { cardId: "c1", line: '{"b":2}' },
-    ]);
+    const r = s.push('\n{"a":1}\n{"b":2}\n');
+    expect(r.messages).toEqual([{ line: '{"a":1}' }, { line: '{"b":2}' }]);
   });
 
   it("sem newline e acima do teto => erro em vez de crescer sem limite", () => {
@@ -111,7 +78,7 @@ describe("extractJsonLine — a resposta HTTP volta a UMA linha stdio", () => {
   });
 
   it("frame SSE: acha a linha `data:` mesmo com keepalive antes (não assume a primeira)", () => {
-    const sse = ": keepalive\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n\n";
+    const sse = ': keepalive\ndata: {"jsonrpc":"2.0","id":2,"result":{}}\n\n';
     expect(extractJsonLine(sse)).toBe('{"jsonrpc":"2.0","id":2,"result":{}}');
   });
 
@@ -122,17 +89,20 @@ describe("extractJsonLine — a resposta HTTP volta a UMA linha stdio", () => {
   });
 });
 
-describe("httpRelayForwarder — o POST de produção, contra um MCP HTTP real", () => {
+describe("httpRelayForwarder — Bearer + caller header, never ?card=", () => {
   let server: Server | null = null;
   let url = "";
 
-  async function start(handler: (body: string, query: URLSearchParams) => string | null, contentType = "application/json") {
+  async function start(
+    handler: (body: string, headers: Record<string, string | string[] | undefined>, query: URLSearchParams) => string | null,
+    contentType = "application/json",
+  ) {
     server = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
-        const out = handler(body, parsed.searchParams);
+        const out = handler(body, req.headers as Record<string, string | string[] | undefined>, parsed.searchParams);
         if (out === null) {
           res.writeHead(202).end();
           return;
@@ -151,28 +121,45 @@ describe("httpRelayForwarder — o POST de produção, contra um MCP HTTP real",
     server = null;
   });
 
-  it("carimba `?card=` e devolve a linha JSON (paridade com a rota HTTP do main)", async () => {
-    let seenCard: string | null = null;
+  it("forwards with Authorization Bearer and x-stellar-caller-card", async () => {
+    let seenAuth: string | null = null;
+    let seenCaller: string | null = null;
+    let seenCardQuery: string | null = null;
     let seenBody = "";
-    await start((body, query) => {
-      seenCard = query.get("card");
+    await start((body, headers, query) => {
+      seenAuth = typeof headers.authorization === "string" ? headers.authorization : null;
+      seenCaller = typeof headers["x-stellar-caller-card"] === "string" ? headers["x-stellar-caller-card"] : null;
+      seenCardQuery = query.get("card");
       seenBody = body;
       return JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } });
     });
-    const line = await httpRelayForwarder(() => url)("card-7", '{"jsonrpc":"2.0","id":1,"method":"tools/list"}');
-    expect(seenCard).toBe("card-7");
+    const line = await httpRelayForwarder(
+      () => url,
+      () => "internal-token",
+    )({ cardId: "card-7", boardId: "board-a" }, '{"jsonrpc":"2.0","id":1,"method":"tools/list"}');
+    expect(seenAuth).toBe("Bearer internal-token");
+    expect(seenCaller).toBe("card-7");
+    expect(seenCardQuery).toBeNull();
     expect(JSON.parse(seenBody).method).toBe("tools/list");
     expect(line).toBe('{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}');
   });
 
   it("resposta SSE volta como UMA linha; corpo vazio => null", async () => {
-    await start((body, _q) => `data: ${JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} })}\n\n`, "text/event-stream");
-    const sse = await httpRelayForwarder(() => url)("c", '{"id":2}');
+    await start((_body) => `data: ${JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} })}\n\n`, "text/event-stream");
+    const sse = await httpRelayForwarder(
+      () => url,
+      () => "t",
+    )({ cardId: "c", boardId: null }, '{"id":2}');
     expect(sse).toBe('{"jsonrpc":"2.0","id":2,"result":{}}');
 
     server?.close();
     await start(() => null);
-    expect(await httpRelayForwarder(() => url)("c", '{"method":"notifications/initialized"}')).toBeNull();
+    expect(
+      await httpRelayForwarder(
+        () => url,
+        () => "t",
+      )(null, '{"method":"notifications/initialized"}'),
+    ).toBeNull();
   });
 });
 
@@ -187,15 +174,18 @@ describe("createRelayServer — round-trip real pelo Unix socket", () => {
     dir = null;
   });
 
-  it("handshake + duas mensagens: o forwarder recebe (card, linha) e a resposta volta em ordem", async () => {
+  it("NDJSON lines reach the forwarder; peer identity is resolved per message", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-relay-"));
     const socketPath = join(dir, "relay.sock");
-    const seen: Array<[string, string]> = [];
+    const seen: Array<[string | null, string]> = [];
     relay = createRelayServer({
       socketPath,
       getMcpUrl: () => "http://127.0.0.1:1/mcp",
-      forward: async (cardId, line) => {
-        seen.push([cardId, line]);
+      getInternalToken: () => "tok",
+      resolvePeerIdentity: () => ({ cardId: "c42", boardId: "b1" }),
+      getPeerPid: () => 4242,
+      forward: async (identity, line) => {
+        seen.push([identity?.cardId ?? null, line]);
         return JSON.stringify({ echo: line });
       },
     });
@@ -211,7 +201,6 @@ describe("createRelayServer — round-trip real pelo Unix socket", () => {
       for (const l of lines) if (l.trim()) received.push(l);
     });
 
-    socket.write('{"card":"c42"}\n');
     socket.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
     socket.write('{"jsonrpc":"2.0","id":2,"method":"ping"}\n');
 
@@ -229,26 +218,36 @@ describe("createRelayServer — round-trip real pelo Unix socket", () => {
     ]);
   });
 
-  it("conexão sem handshake válido é descartada sem chamar o forwarder", async () => {
+  it("missing peer credentials still forwards as anonymous (never accept stream-declared identity)", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-relay-"));
     const socketPath = join(dir, "relay.sock");
-    let calls = 0;
-    const errors: unknown[] = [];
+    const seen: Array<string | null> = [];
     relay = createRelayServer({
       socketPath,
       getMcpUrl: () => "http://127.0.0.1:1/mcp",
-      forward: async () => {
-        calls += 1;
-        return null;
+      getInternalToken: () => "tok",
+      getPeerPid: () => null,
+      forward: async (identity, line) => {
+        seen.push(identity?.cardId ?? null);
+        return JSON.stringify({ ok: true, line });
       },
-      onError: (e) => errors.push(e),
     });
 
     const socket = connect({ path: socketPath });
-    const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
-    socket.write("{nao-e-handshake}\n");
-    await closed;
-    expect(calls).toBe(0);
-    expect(errors.length).toBe(1);
+    const received: string[] = [];
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const l of lines) if (l.trim()) received.push(l);
+    });
+    socket.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
+    const deadline = Date.now() + 3000;
+    while (received.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    socket.destroy();
+    expect(seen).toEqual([null]);
+    expect(received).toHaveLength(1);
   });
 });

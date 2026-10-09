@@ -15,7 +15,7 @@
 .card-frame.selected {
   outline: 2px solid var(--foam);
   outline-offset: 2px;
-  border-radius: var(--radius);
+  border-radius: var(--card-radius);
 }
 
 /* Achado ao vivo (2026-09-04) — "quando faço resize e existe caracteres
@@ -104,77 +104,130 @@
      tokens.css) em vez de depender do `inherit` recalcular certo sob
      transform — bug presente em QUALQUER zoom != 100%, não é específico
      de transparência (reproduzido também em cards opacos). */
-  border-radius: var(--radius);
+  border-radius: var(--card-radius);
 }
 
 .card-head {
   display: flex;
   align-items: center;
-  gap: 4px;
-  /* Pendentes #188 — antes 32px/13px fixos, iguais num card de 320px e
-     num de 2000px de largura. `cqw` mede contra `.card-scale`/`.card-frame`
-     (ver container-name: card acima) — a largura real do card em
-     unidades de mundo, sem zoom misturado junto. Faixa calibrada pra
-     bater ~32px/13px (a aparência de sempre) perto da largura padrão de
-     spawn (~700px de mundo); só cresce/encolhe visivelmente fora disso. */
-  height: clamp(28px, 4.6cqw, 48px);
-  /* Both sides need >= --radius (10px) of clearance: .card-clip clips this
-     whole row to the card's rounded corners (overflow:hidden;
-     border-radius:inherit), so a button whose box reaches into the curved
-     corner area gets its own corner visibly chopped off at an angle by
-     that clip — confirmed live, that's what read as "broken header" in a
-     zoomed screenshot after the header padding was tightened below the
-     radius. */
-  padding: 0 6px 0 10px;
-  background: var(--panel);
-  font-size: clamp(12px, 1.9cqw, 16px);
-  color: var(--muted);
+  gap: var(--card-head-gap);
+  height: var(--card-head-height);
+  padding: var(--card-head-padding);
+  background: var(--card-head-surface);
+  border-bottom: 1px solid var(--card-divider);
+  /* Name size lives on `.card-head-name` (prototype `.nm`); the header
+     itself inherits the board text color like prototype `.hd`. */
+  color: var(--card-name);
   cursor: grab;
   user-select: none;
   flex: none;
 }
 
-/* DESIGN-BACKLOG.md §2.1, identidade + header — tipo e nome são duas
-   informações diferentes: o tipo é o contrato técnico (`task`, `browser`,
-   etc.), enquanto o nome é a identidade que o humano cita ("Fila",
-   "Claude 2°", ou um rótulo escolhido). CardFrame owns both slots so a
-   custom header (browser) or a minimal one (stroke) cannot accidentally
-   omit either. The accent is inherited from that card's existing provider/
-   kind token; no new color is introduced here. */
-.card-head-identity {
+/* Icon + name are direct `.card-head` children (prototype `.ic` + `.nm`). */
+.card-head-icon {
+  width: var(--card-icon-size);
+  height: var(--card-icon-size);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   flex: none;
-  min-width: 0;
-  max-width: 42%;
+  border-radius: var(--card-icon-radius);
+  color: var(--accent, var(--card-context));
+  background: color-mix(in srgb, var(--accent, var(--card-context)) 14%, transparent);
 }
 
-.card-kind-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  padding: 3px 7px;
-  border: 1px solid color-mix(in srgb, var(--accent, var(--muted)) 42%, var(--border));
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent, var(--muted)) 14%, transparent);
-  color: var(--accent, var(--muted));
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  text-transform: lowercase;
+.card-frame[data-kind="terminal"] .card-head-icon { background: var(--card-icon-terminal-bg); color: var(--card-icon-terminal-fg); }
+.card-frame[data-kind="browser"] .card-head-icon { background: var(--card-icon-browser-bg); color: var(--card-icon-browser-fg); }
+.card-frame[data-kind="files"] .card-head-icon { background: var(--card-icon-files-bg); color: var(--card-icon-files-fg); }
+.card-frame[data-kind="changes"] .card-head-icon { background: var(--card-icon-changes-bg); color: var(--card-icon-changes-fg); }
+.card-frame[data-kind="sticky"] .card-head-icon { background: var(--card-icon-note-bg); color: var(--card-icon-note-fg); }
+
+.card-head-context {
+  /* Prototype `.ctx` — shrinks, does not grow; the spacer absorbs free space. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--card-context);
+  font-size: var(--card-context-size);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.card-kind-dot {
-  width: 6px;
-  height: 6px;
+.card-head-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.card-frame[data-kind="browser"] .card-head-context,
+.card-frame[data-kind="files"] .card-head-context,
+.card-frame[data-kind="changes"] .card-head-context {
+  font-family: var(--font-mono);
+}
+
+.card-head-signals {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* Do not shrink/clip state pills — ellipsis belongs on headerContext. */
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.card-head-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--card-status-gap);
+  /* Prefer ellipsizing headerContext; the state pill keeps its full label
+     instead of truncating mid-word. */
+  max-width: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: visible;
+  padding: var(--card-status-padding);
+  border-radius: var(--radius-pill);
+  color: var(--card-context);
+  background: var(--card-pill-surface);
+  font-size: var(--card-status-size);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.card-head-status[data-tone="good"] { color: var(--good); }
+.card-head-status[data-tone="warn"] { color: var(--warn); }
+.card-head-status[data-tone="danger"] { color: var(--danger); }
+.card-head-status > [data-tone="good"] { color: var(--good); }
+.card-head-status > [data-tone="warn"] { color: var(--warn); }
+.card-head-status > [data-tone="danger"] { color: var(--danger); }
+
+.card-head-status-live {
+  width: var(--card-live-size);
+  height: var(--card-live-size);
   flex: none;
   border-radius: 50%;
-  background: var(--accent, var(--muted));
+  background: var(--card-live);
+  animation: card-live-pulse var(--card-live-duration) ease-in-out infinite;
 }
+
+@keyframes card-live-pulse {
+  0% { box-shadow: 0 0 0 0 var(--card-live-glow); }
+  70% { box-shadow: 0 0 0 6px var(--card-live-clear); }
+  100% { box-shadow: 0 0 0 0 var(--card-live-clear); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-head-status-live { animation: none; }
+}
+
+.card-head-task-slot {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-frame[data-kind="terminal"] .card-head-status { color: var(--card-pill-terminal-text); background: var(--card-pill-terminal); }
+.card-frame[data-kind="changes"] .card-head-status { color: var(--card-pill-change-text); background: var(--card-pill-change); }
+.card-frame[data-kind="browser"] .card-head-status { color: var(--card-pill-browser-text); background: var(--card-pill-browser); }
 
 /* Whatever each card kind's own headerContent renders (label ↔ actions,
    already its own space-between pair) — wrapped so CardFrame.tsx's
@@ -182,12 +235,13 @@
    `.card-head` without becoming a 3rd competitor for that space-between
    layout. */
 .card-head-inner {
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 48%;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--card-head-gap);
   height: 100%;
 }
 
@@ -222,10 +276,13 @@
   border: none;
   color: var(--muted);
   cursor: pointer;
+  width: var(--card-action-size);
+  height: var(--card-action-size);
+  flex: none;
   font-size: 15px;
   line-height: 1;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: var(--card-action-radius);
   transition: background-color 0.12s ease, color 0.12s ease;
 }
 
@@ -292,14 +349,16 @@
 .card-head .card-head-task {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--card-status-gap);
   flex: none;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  color: var(--muted);
-  font-size: var(--text-2);
-  line-height: 1.5;
+  padding: var(--card-status-padding);
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--card-link-text);
+  background: var(--card-pill-link);
+  font-family: var(--font-mono);
+  font-size: var(--card-status-size);
+  line-height: 1.2;
   white-space: nowrap;
 }
 
@@ -365,18 +424,22 @@
   clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
 }
 
+/* Prototype `.nm` + SPEC.md ("name stays intact; context ellipsizes first").
+   `flex: none` keeps the label from shrinking under header pressure. */
+.card-head-name,
 .card-tag {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 3px 7px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent, var(--muted)) 22%, transparent);
-  color: var(--accent, var(--muted));
+  display: block;
+  min-width: 0;
+  font-size: var(--card-name-size);
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--card-name);
   flex: none;
   cursor: text;
-  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -429,24 +492,44 @@
 
 .card-foot {
   flex: none;
-  /* Reportado ao vivo (2026-08-31) — o badge de fim de linha (contagem de
-     links do terminal, branch do files-card) encostava na zona de resize
-     do canto SE (18x18px, `right:-7px;bottom:-7px` — CardFrame.tsx/
-     `.card-resize-se` abaixo — 11px dela ficam DENTRO do card). Padding
-     direito de 18px garante que nenhum conteúdo do footer nunca renderiza
-     sob a área de acerto do resize (2026-09-02: o grip visual que ficava
-     nesse canto foi removido — só a zona de hit-test invisível continua). */
-  padding: 5px 18px 5px 12px;
-  /* Pendentes #188 — mesma lógica do `.card-head` acima: 11px fixo não
-     acompanhava o resize do card. */
-  font-size: clamp(10px, 1.6cqw, 14px);
-  color: var(--muted);
-  border-top: 1px solid var(--border);
-  background: var(--panel);
+  display: flex;
+  align-items: center;
+  gap: var(--card-foot-gap);
+  height: var(--card-foot-height);
+  box-sizing: border-box;
+  padding: var(--card-foot-padding);
+  font-size: var(--card-foot-size);
+  color: var(--card-context);
+  border-top: 1px solid var(--card-divider);
+  background: var(--card-foot-surface);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.card-foot-row {
+  display: flex;
+  align-items: center;
+  gap: var(--card-foot-gap);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-foot-row > * {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-foot-row > :last-child { margin-left: auto; }
+.card-foot-row [data-tone="good"] { color: var(--good); }
+.card-foot-row [data-tone="warn"] { color: var(--warn); }
+.card-foot-row [data-tone="danger"] { color: var(--danger); }
+.card-frame[data-kind="browser"] .card-foot-row .card-foot-status[data-tone="good"] { color: var(--card-browser-success); }
+.card-frame[data-kind="changes"] .card-foot-row [data-tone="good"] { color: var(--card-success); }
+.card-frame[data-kind="changes"] .card-foot-row [data-tone="danger"] { color: var(--card-danger); }
 
 /* Pedido ao vivo (2026-09-01): redimensionar por qualquer lado, não só
    pelo canto inferior-direito. Oito zonas invisíveis (2026-09-02: o grip
@@ -531,12 +614,35 @@
    aqui, então componentes migrados pra CSS Module não precisam duplicar
    essas 5 propriedades no próprio módulo. */
 .card-base {
+  /* Prototype cards use the initial content-box model: declared w/h are
+     the content box, so a 1px border measures as +2px outer (V7 parity
+     lesson — never shrink-wrap border into the declared size). */
+  box-sizing: content-box;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: var(--card-border-w, 1px) solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--card-shadow, var(--shadow-card));
+  background: var(--card-surface);
+  border: var(--card-border-w, 1px) solid var(--card-line);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow, var(--card-shadow-base));
+}
+
+/* Sticky accent strip via inset shadow so `border` stays a uniform
+   shorthand (parity measures that property; a thicker border-left made
+   getComputedStyle return an empty border). */
+.card-frame[data-kind="sticky"].card-base {
+  box-shadow: inset 3px 0 0 0 var(--accent, var(--card-line)), var(--card-shadow, var(--card-shadow-base));
+}
+
+.card-frame[data-focused="true"].card-base {
+  border-color: var(--card-focus);
+  box-shadow: 0 0 0 1px var(--card-focus), var(--card-shadow-focused);
+}
+
+.card-frame[data-kind="sticky"][data-focused="true"].card-base {
+  box-shadow:
+    inset 3px 0 0 0 var(--accent, var(--card-line)),
+    0 0 0 1px var(--card-focus),
+    var(--card-shadow-focused);
 }
 
 /* Acento do provider ao redor do card inteiro (2026-09-02, pedido ao vivo
@@ -580,7 +686,7 @@
 .files-card-foot-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--card-head-inner-gap);
   min-width: 0;
   width: 100%;
 }
@@ -1141,6 +1247,14 @@
   border-radius: 999px;
   padding: 2px;
   flex: none;
+}
+
+.chat-card-context-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .chat-provider-picker button {
@@ -1836,4 +1950,49 @@
 .card-frame.chromeless.chrome-active .card-head {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Board open queue (docs/PERF.md §17): real-size placeholder until the card
+   is released for heavy mount. Background uses the v2 field token so a
+   browser never shows as a black empty canvas while create/paint wait. */
+.card-skeleton-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--v2-field);
+  overflow: hidden;
+}
+
+.card-skeleton-label {
+  color: var(--v2-text-6);
+  font-size: var(--text-3);
+}
+
+.card-skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 25%,
+    color-mix(in srgb, var(--v2-text) 6%, transparent) 45%,
+    transparent 65%
+  );
+  background-size: 200% 100%;
+  animation: card-skeleton-shimmer 1.4s ease-in-out infinite; /* sd:allow: continuous skeleton shimmer while the board mount queue runs */
+}
+
+@keyframes card-skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-skeleton-shimmer {
+    animation: none;
+    background: color-mix(in srgb, var(--v2-text) 4%, transparent);
+  }
 }

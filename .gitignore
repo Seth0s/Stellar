@@ -10,5 +10,7 @@ DESIGN-BACKLOG.md
 .commandcode/
 tmp/
 resources/relay/target/
+resources/peer-credentials/build/
 resources/bin/stellar-mcp-relay
 resources/bin/stellar-mcp-relay.exe
+resources/bin/stellar-peer-credentials.node

@@ -36,7 +36,7 @@ import type { TaskRow } from "../../src/main/store";
 
 const BOARD = "board-context-test";
 
-function task(overrides: Partial<TaskRow> = {}): TaskRow {
+function task(): TaskRow {
   return {
     id: "t1",
     prompt: "implement the thing",

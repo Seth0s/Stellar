@@ -27,6 +27,7 @@ function baseTask(id: string, over: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -81,6 +82,10 @@ function callbacksBackedByStore(
             };
           case "listTasks":
             return () => store.listTasks();
+          case "listTasksByBoard":
+            return (boardId: string) => store.listTasksByBoard(boardId);
+          case "listTasksSummaryByBoard":
+            return (boardId: string) => store.listTasksSummaryByBoard(boardId);
           case "getBoardOrchestratorCardId":
             return (boardId: string) => (boardId === "default" ? "orch" : null);
           case "isCardAlive":
@@ -282,7 +287,7 @@ describe("task superseded — caminho real pelo update_task", () => {
     expect(got.task.supersededBy).toBe("t2");
     expect(got.task.phase).toBe("superseded");
 
-    const listed = (await b.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as unknown as {
+    const listed = (await b.handleRequest({ cmd: "list_tasks", requesterId: "orch", view: "full" } as BusRequest, { callerCardId: "orch", scopeEnforced: true })) as unknown as {
       tasks: { id: string; supersededBy: string | null }[];
     };
     expect(listed.tasks.find((t) => t.id === "t1")?.supersededBy).toBe("t2");

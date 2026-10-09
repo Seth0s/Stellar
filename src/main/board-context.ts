@@ -27,8 +27,9 @@
  * e `attachBoardContext`): o ponto onde o brief é montado não deve ganhar I/O
  * para ganhar contexto.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { writePrivateFile } from "./user-data-permissions";
 
 /**
  * O marcador que diz, dentro do brief, que o texto abaixo NÃO é a task. É
@@ -152,10 +153,7 @@ export function readBoardContext(userDataDir: string, boardId: string): BoardCon
  *  arquivo antigo inteiro, nunca um JSON pela metade. */
 export function writeBoardContext(userDataDir: string, boardId: string, ctx: BoardContext): void {
   const path = boardContextPath(userDataDir, boardId);
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(ctx, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  writePrivateFile(path, `${JSON.stringify(ctx, null, 2)}\n`);
 }
 
 function provenance(entry: BoardContextEntry): string {

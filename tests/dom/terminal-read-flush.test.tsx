@@ -96,7 +96,8 @@ describe("read_card de um card fora da tela", () => {
     card.receiveOutput("REPEAT_MARK\n");
 
     const first = await readTerminalText("c-once", 20);
-    expect(first.split("REPEAT_MARK").length - 1).toBe(1);
+    expect(first).not.toBeNull();
+    expect(first!.split("REPEAT_MARK").length - 1).toBe(1);
     expect(card.heldBytes()).toBe(0);
     const writesAfterRead = writes.length;
 
@@ -106,7 +107,8 @@ describe("read_card de um card fora da tela", () => {
     expect(writes.length).toBe(writesAfterRead);
 
     const second = await readTerminalText("c-once", 20);
-    expect(second.split("REPEAT_MARK").length - 1).toBe(1);
+    expect(second).not.toBeNull();
+    expect(second!.split("REPEAT_MARK").length - 1).toBe(1);
     expect(writes.length).toBe(writesAfterRead);
   });
 

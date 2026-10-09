@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { createMessageBus } from "../../src/main/message-bus";
 
 /**
  * A SEGUNDA PORTA do spawn_agent: o CLI `acbridge` (task bf1fb0a7).
@@ -54,7 +54,15 @@ describe("acbridge spawn-agent: --reason e --idempotency-key (bf1fb0a7)", () => 
       isBoardAutonomous: () => false,
       nextReportSeqSeed: () => 0,
     };
-    bus = createMessageBus(sockPath, new Proxy({}, { get: (_t, prop: string) => overrides[prop] ?? (() => undefined) }) as never);
+    bus = createMessageBus(
+      sockPath,
+      new Proxy({}, { get: (_t, prop: string) => overrides[prop] ?? (() => undefined) }) as never,
+      {
+        // Unit harness: map every accepted peer to the card under test.
+        getPeerPid: () => 1,
+        resolvePeerIdentity: () => ({ cardId: "card-caller", boardId: "118" }),
+      },
+    );
     return { sockPath, spawned };
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
-import type { TaskCardRow, TaskRow } from "../../src/main/store";
+import type { TaskRow } from "../../src/main/store";
 import { createTaskWriteFunnel } from "../../src/main/task-write-funnel";
 
 /**
@@ -60,6 +60,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     territory_json: null,
     result_json: null,
     deps_json: null,
@@ -144,7 +145,8 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
         isCardAlive: (id: string) => id === "777" || id === "spawned-card",
         getTaskCards: () => [],
         listTaskCardsForCard: () => [],
-        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }],
         onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
           bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
@@ -174,11 +176,13 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
     mkdirSync(join(boardRoot, "tests/unit"), { recursive: true });
     writeFileSync(existingAbs, "");
     const spawnParams: Array<Record<string, unknown>> = [];
-    const candidate = baseTask({ id: "candidate", cwd: null, territory_json: JSON.stringify(["tests/unit/**"]) });
+    const candidate = baseTask({ id: "candidate", cwd: null,
+    spawn_profile: null, territory_json: JSON.stringify(["tests/unit/**"]) });
     const activeSibling = baseTask({
       id: "active-sibling",
       card_id: "777",
       cwd: null,
+    spawn_profile: null,
       territory_json: JSON.stringify([existingAbs]),
     });
 
@@ -214,9 +218,12 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
   it("(f) CONTRACT CROSSING no brief NÃO lista task de outro repo — cwd por task", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-territory-crossing-"));
     const spawned: Array<Record<string, unknown>> = [];
-    const candidate = baseTask({ id: "candidate", cwd: "/repoA", territory_json: JSON.stringify(["src/**"]) });
-    const sameRepoInactive = baseTask({ id: "same-repo-task", cwd: "/repoA", territory_json: JSON.stringify(["src/main/x.ts"]) });
-    const otherRepoInactive = baseTask({ id: "other-repo-task", cwd: "/repoB", territory_json: JSON.stringify(["src/main/y.ts"]) });
+    const candidate = baseTask({ id: "candidate", cwd: "/repoA",
+    spawn_profile: null, territory_json: JSON.stringify(["src/**"]) });
+    const sameRepoInactive = baseTask({ id: "same-repo-task", cwd: "/repoA",
+    spawn_profile: null, territory_json: JSON.stringify(["src/main/x.ts"]) });
+    const otherRepoInactive = baseTask({ id: "other-repo-task", cwd: "/repoB",
+    spawn_profile: null, territory_json: JSON.stringify(["src/main/y.ts"]) });
 
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
@@ -227,7 +234,8 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
         isCardAlive: (id: string) => id === "spawned-card",
         getTaskCards: () => [],
         listTaskCardsForCard: () => [],
-        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }],
         onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawned.push(params);
           bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
@@ -268,7 +276,8 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
         isCardAlive: (id: string) => id === "777" || id === "spawned-card",
         getTaskCards: () => [],
         listTaskCardsForCard: () => [],
-        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }],
         onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
           bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
@@ -309,7 +318,8 @@ describe("spawn_agent recusa por conflito de território (mecanismo b)", () => {
         listTaskCardsForCard: () => [],
         // O ÚNICO vínculo do irmão é uma RESERVA — nada foi entregue ainda.
         listLiveImplementersForTask: (taskId: string) => (taskId === "reserved-sibling" ? [{ card_id: "777", reservation_state: "reserved" }] : []),
-        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "", label: null }],
+        listCards: () => [{ id: "spawned-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }],
         onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
           bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });

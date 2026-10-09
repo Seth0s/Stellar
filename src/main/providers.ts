@@ -176,11 +176,9 @@ export type McpServerShape =
   /** opencode's `{ type: "local", command: [<path>], enabled: true }`. */
   | "local-array"
   /**
-   * Servidor REMOTO direto no endpoint HTTP do main — `{ url: <...> }` (cursor)
-   * ou `{ type: "http", url: <...> }` (commandcode/agy/opencode). ZERO processo
-   * por card: some o shim stdio. O `url` é o template que os CLIs interpolam do
-   * ambiente do card (`${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}`),
-   * porque a porta é efêmera e a identidade é por card. Ver `mcp-registration.ts`.
+   * Remote HTTP entry shapes retained for provider declarations that describe
+   * external servers. Stellar card identity is never carried by a remote URL;
+   * built-in Stellar registrations use the stdio relay.
    */
   | "http-url"
   /** Task 7d3be060 — a forma REMOTA do `opencode`: `{ type: "remote", url }`
@@ -226,7 +224,14 @@ export type McpRegistrationCapability =
        * Só tem efeito nas formas que emitem `url` (`http-url`). */
       urlSyntax?: McpUrlSyntax;
     }
-  | { mechanism: "none" };
+  | { mechanism: "none" }
+  /**
+   * The CLI has MCP, but Stellar cannot write the shape it stores config in
+   * (e.g. SQLite via its own CLI, not a JSON file). Distinct from `none`
+   * (= the CLI does not read MCP). `reason` is free-form measured text —
+   * why registration is blocked, not a closed enum.
+   */
+  | { mechanism: "unsupported-by-app"; reason: string };
 
 /**
  * Como o id de sessão chega ao argv — declarado, nunca inferido.
@@ -653,7 +658,9 @@ export type ReportDiscovery =
  * Order: system-prompt flag → scrollback (if acbridge on PATH) →
  * unreachable (spawn must refuse). Shell cards are not agents.
  */
-export function deriveReportDiscovery(capacity: ProviderCapacity): ReportDiscovery {
+export function deriveReportDiscovery(
+  capacity: Pick<ProviderCapacity, "role" | "systemPrompt" | "acbridgeOnPath">,
+): ReportDiscovery {
   if (capacity.role === "shell") return "not_applicable";
   if (capacity.systemPrompt.mechanism !== "none") return "system_prompt";
   if (capacity.acbridgeOnPath) return "scrollback";
@@ -680,8 +687,15 @@ export function deriveReportDiscovery(capacity: ProviderCapacity): ReportDiscove
  */
 export type ReportChannel = "mcp" | "acbridge" | "unreachable";
 
-export function deriveReportChannel(capacity: ProviderCapacity): ReportChannel {
-  if (capacity.mcp.mechanism !== "none") return "mcp";
+export function deriveReportChannel(
+  capacity: Pick<ProviderCapacity, "mcp" | "acbridgeOnPath">,
+): ReportChannel {
+  // Only mechanisms that actually register/expose MCP count as the mcp
+  // channel. `none` and `unsupported-by-app` both fall through to acbridge
+  // (or unreachable) — treating "we cannot configure" as "mcp is live"
+  // would lie about the catalog the agent sees.
+  const mcp = capacity.mcp.mechanism;
+  if (mcp === "ephemeral-flag" || mcp === "global-config") return "mcp";
   if (capacity.acbridgeOnPath) return "acbridge";
   return "unreachable";
 }
@@ -782,18 +796,20 @@ export const ACBRIDGE_HINT =
   "close_card/snapshot/page-text/read_card/card_status/report/read_report — read " +
   "each tool's own description). Otherwise a CLI `acbridge` is on your " +
   "PATH with the same capabilities (`acbridge` with no args prints " +
-  "usage). If another card spawned you to do a task, report a structured " +
-  "result when you finish it, even if you keep running afterward: if a " +
-  "tool named `report` is in your tool catalog, call it; otherwise run " +
-  "`acbridge report '<json>'` with `verdict` inside the JSON. Same " +
-  "payload, same record either way. Use these only when it genuinely " +
-  "helps the task at hand.\n\n" +
-  // task 889dd934 — a marca de conteúdo card→card (ver
-  // pasted-content-decision.ts, que também produz o texto do PTY). Depende
-  // DESTA frase: sem ela o guia do Opus 5.5 é explícito que o bloco colado não
-  // é resistido. Injetada por `composeSystemPrompt` no mecanismo que cada
-  // provider já declara (`systemPrompt`: claude `--append-system-prompt`,
-  // cline `-s`, codex `developer_instructions`, …), nunca num canal novo.
+  "usage). If another card spawned you to do a task, report structured " +
+  "results as you go (checkpoints) and when you finish: if a tool named " +
+  "`report` is in your tool catalog, call it; otherwise run " +
+  "`acbridge report '<json>'`. Put estado: \"parcial\" | \"final\" in the " +
+  "JSON (omit = parcial — never finished); only you mark final. Declare " +
+  "decisaoTomada as soon as you decide (one or two sentences) — do not " +
+  "wait until the end. A formal `verdict` goes inside the JSON for " +
+  "acbridge (or as its own MCP argument). Same payload, same record " +
+  "either way. Use these only when it genuinely helps the task at hand.\n\n" +
+  // A marca de conteúdo card→card (pasted-content-decision.ts, also the
+  // PTY text). Depends on THIS sentence: without it Opus 5.5's guide is
+  // explicit that pasted blocks are not resisted. Injected by
+  // `composeSystemPrompt` via each provider's declared `systemPrompt`
+  // mechanism — never a new channel.
   CARD_MESSAGE_CONTENT_NOTICE;
 
 /** The custom prompt describes the task; ACBRIDGE_HINT describes the runtime
@@ -1030,12 +1046,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // and the environment hint are additive; neither should hide the
       // other, so compose them before passing the single appended block.
       args.push("--append-system-prompt", composeSystemPrompt(systemPrompt));
-      // Ephemeral registration (DESIGN-BACKLOG.md item 21, ponto 9) — a
-      // spawn-scoped `--mcp-config` flag, not a written .mcp.json. Never
-      // touches the project's own MCP config, never persists past this
-      // one process. `--strict-mcp-config` is deliberately NOT set here —
-      // this should ADD to whatever the user's own project already
-      // configures, not replace it.
+      // Ephemeral registration — the local stdio shim carries kernel-bound
+      // identity over the app's Unix relay. It does not persist in project
+      // config and contains no card id or token in argv.
       //
       // `--mcp-config <configs...>` is VARIADIC (`claude --help`): it
       // keeps eating non-option tokens. The brief used to be pushed right
@@ -1045,7 +1058,7 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       if (mcpUrl) {
         args.push(
           "--mcp-config",
-          JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }),
+          JSON.stringify({ mcpServers: { stellar: { command: "stellar-mcp" } } }),
         );
       }
       // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
@@ -1158,16 +1171,26 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     // repeatable, one value each. The brief is appended by `spawnArgv`
     // behind `--` (clap honours it, measured) so this stays true even if
     // a variadic flag is added later.
+    // `--no-daemon` forces embedded mode. Passing `-c` (or `--enable` /
+    // `--disable` / `--search`) already requires embedded mode; without
+    // an explicit request, 0.162+ prints a startup warning that the
+    // shared background server was skipped. Per-card isolation is the
+    // intended shape here (one process + one MCP registration each), so
+    // the flag is always emitted. Confirmed on `codex --help` and
+    // `codex resume --help` (0.162.0): clap accepts it after the resume
+    // subcommand. An older CLI that does not know the flag fails spawn
+    // with an unknown-argument error.
     buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("resume", resumeId);
       else if (continueLast) args.push("resume", "--last");
+      args.push("--no-daemon");
       if (model) args.push("-m", model);
       args.push(
         "-c",
         `developer_instructions=${JSON.stringify(composeSystemPrompt(systemPrompt))}`,
       );
-      if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
+      if (mcpUrl) args.push("-c", 'mcp_servers.stellar.command="stellar-mcp"');
       return args;
     },
   },
@@ -1193,16 +1216,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // comentário dizia "mesmas flags do claude" sem medição (R4 de
       // efc5b6fd) — ver `tests/unit/fixtures/one-shot/`.
       oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
-      // Global ~/.cursor/mcp.json — headless `agent` DOES read it
-      // (measured 2026-09-12). Why no cursor card ever saw the tools
-      // anyway, and the fix (`env` interpolation in the entry, because
-      // cursor whitelists the MCP child's environment): measured
-      // 2026-09-13, documented in mcp-registration.ts. Still insufficient
-      // alone for report DISCOVERY (no system-prompt flag) — see
-      // deriveReportDiscovery / capacity-contract header.
-      // `urlSyntax`: MEDIDO (task f7a2ac84 R4) — `agent mcp list-tools stellar`
-      // contra o servidor real devolveu 53 tools com `${env:...}` no url.
-      mcp: { mechanism: "global-config", urlSyntax: "dollar-env" },
+      // The global config invokes the stdio shim and explicitly forwards
+      // only the non-identity connection settings the CLI otherwise filters.
+      mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
       // Same honest "unmeasured" as codex above: no effort flag was ever
       // measured for cursor's `agent` CLI, and buildArgs has never sent

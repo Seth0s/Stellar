@@ -38,7 +38,8 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
   const now = Date.now();
   return {
     id: "t1", prompt: "faz X", provider: "claude", status: "pending", card_id: null,
-    board_id: "b1", cwd: null, result_json: null, deps_json: null, retry_count: 0,
+    board_id: "b1", cwd: null,
+    spawn_profile: null, result_json: null, deps_json: null, retry_count: 0,
     attempted_providers_json: null, max_retries: null, fallback_providers_json: null,
     order: null, suggested_order: null, implicit_order: null, diverged_status: null,
     diverged_actor: null, created_at: now, updated_at: now, ...overrides,
@@ -49,7 +50,8 @@ function buildRig(dir: string, opts: { orchestratorCardId?: string | null; auton
   const store = openStore(dir);
   // A marca mora no board (UI humana) — o rig grava direto no store.
   store.upsertBoard({
-    id: "b1", name: "Board b1", project: "", cwd: "", created_at: Date.now(),
+    id: "b1", name: "Board b1", project: "", cwd: "",
+ created_at: Date.now(),
     updated_at: Date.now(), last_accessed_at: null, autonomous: opts.autonomous ?? false,
     concurrency_cap: null, orchestrator_card_id: opts.orchestratorCardId ?? null,
   });

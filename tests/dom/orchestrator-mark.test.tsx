@@ -50,6 +50,8 @@ beforeEach(() => {
     onFullscreenChange: () => () => {},
     toggleFullscreen: () => {},
   };
+  const w = window as unknown as { pty?: Record<string, unknown> };
+  w.pty = { ...(w.pty ?? {}), health: async () => null };
 });
 
 const baseBoard: Board = {
@@ -57,9 +59,6 @@ const baseBoard: Board = {
   name: "Maestro",
   project: "Projects",
   cwd: "/tmp",
-  created_at: 1,
-  updated_at: 1,
-  last_accessed_at: 1,
   autonomous: false,
   concurrency_cap: null,
   orchestrator_card_id: null,
@@ -124,6 +123,7 @@ function terminalStub(overrides: Partial<ComponentProps<typeof TerminalCard>> = 
       onRename={noop}
       onResumeIdDiscovered={noop}
       onOpenUrl={noop}
+      shortcutOverridesRef={{ current: {} }}
       {...overrides}
     />
   );
@@ -153,9 +153,8 @@ describe("orchestrator mark — terminal card menu", () => {
       }),
     );
 
-    expect(document.querySelector('[data-role="terminal-orchestrator-badge"]')).toBeTruthy();
-
     const menuBtn = document.querySelector('[data-role="terminal-card-menu"]') as HTMLButtonElement;
+    expect(menuBtn).toBeTruthy();
     fireEvent.click(menuBtn);
 
     const clear = document.querySelector('[data-role="terminal-clear-orchestrator"]') as HTMLButtonElement;

@@ -123,7 +123,10 @@ describe("as oito edições naturais medidas — todas aceitas, todas com o efei
     {
       nome: "ajustar o store (bem fundo)",
       pedido: { capacity: { session: { store: { read: { content: { minBytes: 4096 } } } } } },
-      conferir: (spec) => expect(spec.capacity.session.store?.read.content).toEqual({ minBytes: 4096 }),
+      conferir: (spec) => {
+        const read = spec.capacity.session.store?.read;
+        expect(read && "content" in read ? read.content : undefined).toEqual({ minBytes: 4096 });
+      },
     },
     {
       nome: "trocar o papel",

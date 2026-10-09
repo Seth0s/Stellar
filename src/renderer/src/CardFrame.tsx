@@ -19,6 +19,18 @@ const RESIZE_DIRS: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
  * qualquer `kind` sem entrada própria em `KIND_MIN_SIZE` abaixo. */
 const MIN_CARD_W = 160;
 const MIN_CARD_H = 120;
+const HEADER_ICON = {
+  terminal: "terminal",
+  browser: "browser",
+  files: "files",
+  changes: "changes",
+  sticky: "sticky",
+  chat: "chat",
+  media: "fileImage",
+  task: "task",
+  "remote-window": "remoteWindow",
+  stroke: "pen",
+} as const;
 /** Pendentes #188 — um piso único pra todo `kind` deixava um terminal
  * encolher até ilegível. Cards com conteúdo denso (texto/código, canvas
  * de página real) ganham um piso maior; sticky/stroke (nota solta, forma
@@ -46,6 +58,10 @@ export function CardFrame({
   displayName,
   onRename,
   headerContent,
+  headerIcon,
+  headerContext,
+  headerStatus,
+  headerTask,
   footerContent,
   onFocus,
   children,
@@ -62,12 +78,18 @@ export function CardFrame({
   onSelectStart,
   onCloseAnimationEnd,
   aspectRatio,
+  dragBody = false,
   chromeless = false,
   chromeActive = false,
   onHeaderClick,
   screenProjected,
   panX,
   panY,
+  onDragEnter,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  cardId,
 }: {
   rect: Rect;
   zoom: number;
@@ -88,6 +110,14 @@ export function CardFrame({
   displayName: string;
   onRename: (label: string) => void;
   headerContent: React.ReactNode;
+  /** Type-specific glyph; the default is the icon registered for `kind`. */
+  headerIcon?: React.ReactNode;
+  /** One-line card context (model/path, URL, branch, or media details). */
+  headerContext?: React.ReactNode;
+  /** Measured or persisted state shown as a compact pill. */
+  headerStatus?: React.ReactNode;
+  /** Optional task link shown beside the state pill. */
+  headerTask?: React.ReactNode;
   /** One-line strip at the bottom of the card (cwd, root path, URL, ...) —
    * reported live (2026-08-27) as inconsistent: each card kind that
    * wanted one duplicated its own `<div className="card-foot">`, and two
@@ -138,6 +168,8 @@ export function CardFrame({
    * Aditivo: nenhum outro tipo de card passa isso, então o resize livre
    * de sempre continua idêntico pra todos os outros. */
   aspectRatio?: number;
+  /** Lets an image card move from its body when its content has no pan range. */
+  dragBody?: boolean;
   /** Pedido ao vivo (2026-09-01): "O CARD TIPO MEDIA NÃO DEVERIA TER BODY"
    * — para uma imagem, o card É a imagem: sem header, sem rodapé, sem
    * moldura. O header não some de vez (fechar/girar/renomear precisam
@@ -229,6 +261,13 @@ export function CardFrame({
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
+  /** Optional HTML5 drag/drop handlers (terminal file drop). */
+  onDragEnter?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  /** Stable card id for hit-testing drops (`data-card-id` on the frame). */
+  cardId?: string;
 }) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
@@ -448,15 +487,31 @@ export function CardFrame({
           propagação no header em vez disso não serve: quebraria os modos
           conector/seleção, que dependem do evento chegar ao
           `.card-frame`. */}
-      <div className="card-clip" onPointerDown={chromeless ? onHeaderPointerDown : undefined}>
+      <div
+        className="card-clip"
+        onPointerDown={chromeless ? onHeaderPointerDown : dragBody ? (e) => {
+          if (!(e.target as HTMLElement).closest(".card-head, .card-foot")) onHeaderPointerDown(e);
+        } : undefined}
+      >
         <div className="card-head" onPointerDown={chromeless ? undefined : onHeaderPointerDown}>
-          <div className="card-head-identity">
-            <span className="card-kind-pill" title={t("card.type", { kind })} aria-label={t("card.type", { kind })}>
-              <span className="card-kind-dot" aria-hidden="true" />
-              <span>{kind}</span>
-            </span>
-            <CardTag label={displayName} onRename={onRename} />
-          </div>
+          {/* Prototype `.hd` children are siblings (ic, nm, ctx, …) — keep
+              icon + name as direct flex items so `.card-head-name` shrinks
+              like `.nm` instead of sitting in a non-shrinking identity wrap. */}
+          <span className="card-head-icon" title={t("card.type", { kind })} aria-label={t("card.type", { kind })}>
+            {headerIcon ?? <Icon name={HEADER_ICON[kind as keyof typeof HEADER_ICON] ?? "fileGeneric"} size={13} />}
+          </span>
+          <CardTag label={displayName} onRename={onRename} />
+          {headerContext !== undefined && headerContext !== null && (
+            <div className="card-head-context">{headerContext}</div>
+          )}
+          {/* Prototype flexible separator between context and pills/actions. */}
+          <span className="card-head-spacer" aria-hidden="true" />
+          {(headerStatus != null || headerTask != null) && (
+            <div className="card-head-signals">
+              {headerStatus != null && <span className="card-head-status">{headerStatus}</span>}
+              {headerTask != null && <span className="card-head-task-slot">{headerTask}</span>}
+            </div>
+          )}
           {/* Wrapping div, not headerContent's own two-item space-between
               row directly — keeps every card kind's own internal layout
               (label ↔ actions) untouched; the focus button below is
@@ -565,6 +620,7 @@ export function CardFrame({
     <div
       className={frameClass}
       data-kind={kind}
+      data-card-id={cardId || undefined}
       style={{
         position: "absolute",
         left: screenRect.x,
@@ -576,11 +632,28 @@ export function CardFrame({
         ...(borderW ? ({ "--card-border-w": borderW } as React.CSSProperties) : {}),
         ...(cardShadow ? ({ "--card-shadow": cardShadow } as React.CSSProperties) : {}),
       }}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       onPointerDown={(e) => {
         if (closing) return;
         onRaise();
         if (interactionMode === "connector") onConnectorStart?.(e);
         if (interactionMode === "select") onSelectStart?.(e);
+      }}
+      onPointerDownCapture={(e) => {
+        if (closing || interactionMode !== "normal") return;
+        document.querySelectorAll<HTMLElement>(".card-frame[data-focused='true']").forEach((frame) => {
+          if (frame !== e.currentTarget) frame.dataset.focused = "false";
+        });
+        e.currentTarget.dataset.focused = "true";
+      }}
+      onFocusCapture={(e) => {
+        document.querySelectorAll<HTMLElement>(".card-frame[data-focused='true']").forEach((frame) => {
+          if (frame !== e.currentTarget) frame.dataset.focused = "false";
+        });
+        e.currentTarget.dataset.focused = "true";
       }}
       // Pedido ao vivo (2026-08-27): scroll sobre QUALQUER card zoomava o
       // canvas inteiro por baixo — `useWorldTransform.ts`'s `onWheel`

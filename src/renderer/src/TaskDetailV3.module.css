@@ -1,0 +1,564 @@
+/* Task detail V3 — Main/Review/Superseded.dc.html */
+
+.root {
+  position: relative;
+  z-index: 1;
+}
+
+.dialog {
+  width: min(1120px, calc(100vw - 48px));
+  height: min(736px, calc(100vh - 64px));
+  box-sizing: border-box;
+  border-radius: var(--fila-detail-radius);
+  background: var(--fila-detail-surface);
+  border: 1px solid var(--fila-detail-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--card-name);
+  font-family: var(--font-ui);
+}
+
+.head {
+  padding: var(--fila-pad-18) var(--space-7) var(--fila-pad-14);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--card-divider);
+  flex: none;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.id {
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-13);
+  color: var(--card-context);
+}
+
+.pill {
+  font-size: var(--fila-text-12);
+  padding: var(--fila-pill-pad-y) var(--fila-pill-pad-x);
+  border-radius: var(--radius-pill);
+  background: var(--fila-type-impl-bg);
+  color: var(--fila-type-impl-fg);
+}
+
+.pillSprint {
+  background: var(--fila-sprint-bg);
+  color: var(--fila-sprint-fg);
+}
+
+.pillSuperseded {
+  background: var(--fila-superseded-bg);
+  color: var(--fila-superseded-fg);
+  font-weight: 600;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fila-text-21);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.phaseTrail {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--fila-text-12-5);
+  color: var(--fila-text-dim);
+}
+
+.phaseItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.phaseCurrent {
+  color: var(--card-name);
+  font-weight: 600;
+}
+
+.phaseDot {
+  width: var(--fila-live-size);
+  height: var(--fila-live-size);
+  border-radius: var(--radius-circle);
+  background: var(--fila-dot-done);
+  flex: none;
+}
+
+.phaseDotCurrent {
+  width: var(--space-5);
+  height: var(--space-5);
+  background: var(--card-live);
+  box-shadow: 0 0 0 4px var(--fila-phase-ring);
+}
+
+.phaseDotCurrentAmber {
+  background: var(--fila-dot-review);
+  box-shadow: 0 0 0 4px var(--fila-phase-ring-amber);
+}
+
+.phaseDotHollow {
+  background: transparent;
+  border: var(--fila-marker-hollow) solid var(--fila-hollow-border);
+  box-sizing: border-box;
+}
+
+.phaseLine {
+  width: var(--fila-phase-line);
+  height: 1px;
+  background: var(--fila-btn-border);
+  flex: none;
+}
+
+.phaseLineDone {
+  background: var(--fila-dot-done);
+}
+
+.supersededNote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--fila-text-12-5);
+  color: var(--fila-text-soft);
+}
+
+.agora {
+  margin: var(--fila-pad-14) var(--space-7) 0;
+  padding: var(--space-6) var(--fila-pad-14);
+  border-radius: var(--fila-tile-radius);
+  display: flex;
+  align-items: center;
+  gap: var(--fila-pad-14);
+  flex: none;
+}
+
+.agoraBlue {
+  background: var(--fila-agora-blue-bg);
+  border: 1px solid var(--fila-agora-blue-border);
+}
+
+.agoraAmber,
+.agoraAmberAlert {
+  background: var(--fila-agora-amber-bg);
+  border: 1px solid var(--fila-agora-amber-border);
+}
+
+.agoraDanger {
+  background: var(--fila-gate-fail-bg);
+  border: 1px solid var(--fila-gate-fail-fg);
+}
+
+.agoraNeutral {
+  background: var(--fila-agora-neutral-bg);
+  border: 1px solid var(--fila-agora-neutral-border);
+}
+
+.agoraDot {
+  width: var(--fila-agora-dot);
+  height: var(--fila-agora-dot);
+  border-radius: var(--radius-circle);
+  background: var(--card-live);
+  flex: none;
+}
+
+.agoraBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agoraTitle {
+  font-size: var(--fila-text-14-5);
+  font-weight: 600;
+}
+
+.agoraSub {
+  font-size: var(--fila-text-13);
+  color: var(--fila-text-sub);
+}
+
+.agoraAmber .agoraSub,
+.agoraAmberAlert .agoraSub {
+  color: var(--fila-phrase-amber);
+}
+
+.agoraActions {
+  display: flex;
+  gap: var(--space-3);
+  flex: none;
+}
+
+.btn {
+  min-height: var(--fila-detail-btn-height);
+  padding: 0 var(--fila-pad-14);
+  border-radius: var(--fila-btn-radius);
+  border: 1px solid var(--fila-btn-border);
+  background: var(--fila-btn-bg);
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--fila-text-13);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--fila-hover-border);
+}
+
+.btnPrimary {
+  background: var(--fila-primary);
+  border-color: var(--fila-primary);
+  color: var(--fila-on-primary);
+  font-weight: 600;
+}
+
+.btnIcon {
+  width: var(--fila-detail-btn-height);
+  padding: 0;
+  justify-content: center;
+}
+
+.tabs {
+  margin: var(--space-4) var(--space-7) 0;
+  display: flex;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--card-divider);
+  flex: none;
+}
+
+.tab {
+  height: var(--fila-tab-height);
+  padding: 0 var(--fila-pad-14);
+  border: 0;
+  background: transparent;
+  color: var(--fila-text-soft);
+  font: inherit;
+  font-size: var(--fila-text-14);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.tab:hover {
+  color: var(--card-name);
+}
+
+.tabOn {
+  color: var(--card-name);
+  border-bottom-color: var(--card-live);
+}
+
+.tabCount {
+  font-size: var(--fila-text-11-5);
+  color: var(--card-context);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--fila-pad-18) var(--space-7) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fila-pad-18);
+}
+
+.aside {
+  width: var(--fila-aside-width);
+  flex: none;
+  border-left: 1px solid var(--card-divider);
+  padding: var(--fila-pad-18) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  overflow-y: auto;
+  background: var(--fila-aside-bg);
+}
+
+/* Superseded.dc.html aside is a tight details column (13px / 6px gap). */
+.asideSuperseded {
+  gap: var(--space-3);
+  font-size: var(--fila-text-13);
+}
+
+.sectionKicker {
+  margin: 0;
+  font-size: var(--fila-text-12);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--card-context);
+}
+
+.sectionBody {
+  margin: 0;
+  font-size: var(--fila-text-14-5);
+  line-height: 1.6;
+  color: var(--fila-text-body);
+}
+
+.acceptanceList {
+  margin: 0;
+  padding: 0 0 0 var(--fila-pad-18);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--fila-text-14);
+  color: var(--fila-text-body);
+  line-height: 1.5;
+}
+
+.sectionMuted {
+  color: var(--fila-text-soft);
+}
+
+.briefEdit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.briefEditHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.draft {
+  width: 100%;
+  min-height: 88px;
+  box-sizing: border-box;
+  resize: vertical;
+  border-radius: var(--fila-chip-radius);
+  border: 1px solid var(--fila-btn-border);
+  background: var(--fila-btn-bg);
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--fila-text-13);
+  padding: var(--space-4) var(--space-5);
+}
+
+.draft:focus {
+  outline: none;
+  border-color: var(--fila-chip-on-border);
+}
+
+.promptError {
+  margin: 0;
+  color: var(--fila-gate-fail-fg);
+  font-size: var(--fila-text-12-5);
+}
+
+.link {
+  font-size: var(--fila-text-13);
+  color: var(--fila-link);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.link:hover {
+  color: var(--fila-link-hover);
+}
+
+.whoRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.whoAvatar {
+  width: var(--fila-who-avatar);
+  height: var(--fila-who-avatar);
+  border-radius: var(--fila-btn-radius);
+  display: grid;
+  place-items: center;
+  font-size: var(--fila-text-12);
+  font-weight: 600;
+  flex: none;
+}
+
+.whoAvatarCl {
+  background: var(--fila-avatar-cl-bg);
+  color: var(--fila-avatar-cl-fg);
+}
+
+.whoAvatarRv {
+  background: var(--fila-avatar-rv-bg);
+  color: var(--fila-avatar-rv-fg);
+}
+
+.whoAvatarEmpty {
+  border: 1px dashed var(--fila-hollow-border);
+  color: var(--card-context);
+  font-size: var(--fila-text-14-5);
+}
+
+.whoName {
+  font-size: var(--fila-text-13-5);
+}
+
+.whoMeta {
+  font-size: var(--fila-text-12);
+  color: var(--card-context);
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fila-text-13);
+  gap: var(--space-4);
+}
+
+.detailLabel {
+  color: var(--card-context);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-12);
+}
+
+.panel {
+  border: 1px solid var(--card-divider);
+  border-radius: var(--fila-tile-radius);
+  padding: var(--fila-pad-14);
+  background: var(--fila-rail-bg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.emptyReports {
+  border: 1px dashed var(--fila-dashed);
+  border-radius: var(--fila-tile-radius);
+  padding: var(--fila-empty-pad);
+  text-align: center;
+  color: var(--fila-text-soft);
+  font-size: var(--fila-text-14);
+}
+
+.trail {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  font-size: var(--fila-text-13-5);
+}
+
+.trailItem {
+  display: flex;
+  gap: var(--space-6);
+}
+
+.trailTime {
+  font-family: var(--font-mono);
+  color: var(--card-context);
+  width: var(--fila-trail-time);
+  flex: none;
+}
+
+.contractGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+}
+
+.diffRow {
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--fila-diff-pad-y) var(--fila-pad-14);
+  border-bottom: 1px solid var(--card-divider);
+  font-size: var(--fila-text-13);
+}
+
+.diffRow:last-child {
+  border-bottom: 0;
+}
+
+.diffFileRow {
+  display: grid;
+  grid-template-columns: 1.4em minmax(0, 1fr) auto 1.1em;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--fila-diff-pad-y) var(--fila-pad-14);
+  border-bottom: 1px solid var(--card-divider);
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-13);
+  text-align: left;
+}
+
+.diffFileRow:last-child {
+  border-bottom: 0;
+}
+
+.diffStatus {
+  color: var(--card-context);
+  text-transform: uppercase;
+}
+
+.diffPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diffTag {
+  color: var(--card-context);
+  white-space: nowrap;
+  font-size: var(--fila-text-11-5);
+}
+
+.diffNew {
+  display: inline-flex;
+  align-items: center;
+  color: var(--card-warning);
+  cursor: help;
+}
+
+.diffGroupLabel {
+  position: sticky;
+  top: 0;
+  background: var(--card-surface);
+  color: var(--card-context);
+  font-size: var(--fila-text-11-5);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  padding: var(--space-2) var(--fila-pad-14) var(--space-1);
+}
+
+.diffAdd {
+  color: var(--fila-dot-done);
+}
+
+.diffDel {
+  color: var(--card-danger);
+}

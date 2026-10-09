@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import { TASK_PROMPT_PREVIEW_MAX, projectTaskPrompt } from "../../src/task-prompt-projection";
 
 /**
- * O CONTRATO DA FATIA 3c (task ab83ba5f), travado antes da decisão de
- * produto. A peça é INERTE hoje (ninguém a importa) — o que estes testes
- * travam é a CONTA do que a linha da Fila precisaria receber no dia em que
- * o corte do payload for aprovado.
+ * O CONTRATO DA FATIA 3c (task ab83ba5f): a Fila recebe a projeção em seu
+ * payload vivo e lê o texto inteiro só ao abrir o detalhe.
  *
  * O que importa, em ordem: (1) o preview é SEMPRE do original — o marcador
  * de adição nunca vaza; (2) o corte respeita o teto, sem partir palavra nem

@@ -31,8 +31,9 @@
  * válido considera a migração concluída.
  */
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { ensurePrivateDirectory, hardenPrivateTree, writePrivateFile, PROFILE_BACKUP_PREFIX } from "./user-data-permissions";
 import { isOpaqueId } from "./local-identity-decision";
 import { isProviderHomeMode, type ProviderHomeMode } from "./config-home-decision";
 import {
@@ -108,7 +109,7 @@ export const PROFILE_BACKUP_ENTRIES = [
 ] as const;
 
 /** Prefixo da pasta de backup, na raiz (nunca apagada automaticamente). */
-export const PROFILE_BACKUP_DIR_PREFIX = "profiles-migration-backup-";
+export const PROFILE_BACKUP_DIR_PREFIX = PROFILE_BACKUP_PREFIX;
 
 /** Seams de I/O injetáveis (teste de falha de cópia); em produção, fs real. */
 export type ProfileMigrationIo = {
@@ -167,9 +168,7 @@ export function readProfilesRegistry(baseUserDataDir: string): RegistryReadResul
 
 export function writeProfilesRegistry(baseUserDataDir: string, registry: ProfilesRegistry): void {
   const path = profilesRegistryPath(baseUserDataDir);
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  writePrivateFile(path, `${JSON.stringify(registry, null, 2)}\n`);
 }
 
 /** Nomes dos subdiretórios em `profiles/`, ordenados. */
@@ -218,9 +217,7 @@ function readMigrationMarker(baseUserDataDir: string): MigrationMarker | null {
 
 function writeMigrationMarker(baseUserDataDir: string, marker: MigrationMarker): void {
   const path = profilesMigrationInProgressPath(baseUserDataDir);
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(marker, null, 2), "utf8");
-  renameSync(tmp, path);
+  writePrivateFile(path, JSON.stringify(marker, null, 2));
 }
 
 /**
@@ -240,7 +237,7 @@ function writeMigrationMarker(baseUserDataDir: string, marker: MigrationMarker):
  * retomada reusa a mesma pasta em vez de acumular backups.
  */
 function copyUserDataBackup(baseUserDataDir: string, profileDestDir: string, backupDir: string, io: ProfileMigrationIo): string[] {
-  mkdirSync(backupDir, { recursive: true });
+  ensurePrivateDirectory(backupDir);
   const copied: string[] = [];
   for (const entry of PROFILE_BACKUP_ENTRIES) {
     const atRoot = join(baseUserDataDir, entry);
@@ -250,6 +247,7 @@ function copyUserDataBackup(baseUserDataDir: string, profileDestDir: string, bac
     const dest = join(backupDir, entry);
     if (entry === "board-assets") io.copyDir(src, dest);
     else io.copyFile(src, dest);
+    hardenPrivateTree(dest);
     copied.push(entry);
   }
   return copied;
@@ -294,7 +292,7 @@ function migrateRootIntoProfile(
 
   // (2) MOVE — rename atômico por entrada. O diretório do perfil só nasce
   // agora: uma falha de backup acima não deixa pasta de perfil vazia.
-  mkdirSync(destDir, { recursive: true });
+  ensurePrivateDirectory(destDir);
   const movedNow: string[] = [];
   for (const entry of PROFILE_MIGRATE_ENTRIES) {
     const src = join(baseUserDataDir, entry);
@@ -320,9 +318,7 @@ function migrateRootIntoProfile(
     entries: [...inProfile],
   };
   const manifestPath = profilesBackupPath(baseUserDataDir);
-  const manifestTmp = `${manifestPath}.tmp`;
-  writeFileSync(manifestTmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  renameSync(manifestTmp, manifestPath);
+  writePrivateFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const registry: ProfilesRegistry = {
     schemaVersion: PROFILES_REGISTRY_SCHEMA_VERSION,
@@ -453,7 +449,7 @@ export function bootstrapProfiles(
     }
 
     const profileDir = profileDirectory(baseUserDataDir, selection.profileId);
-    mkdirSync(profileDir, { recursive: true });
+    ensurePrivateDirectory(profileDir);
     return { ok: true, migrated, registry, profileId: selection.profileId, profileDir, entriesMoved, notices };
   } catch (err) {
     return { ok: false, kind: "error", message: err instanceof Error ? err.message : String(err) };
@@ -530,7 +526,7 @@ export function createProfile(
   const id = opts.generateId();
   if (!isOpaqueId(id)) return { ok: false, reason: "generate-failed" };
 
-  mkdirSync(profileDirectory(baseUserDataDir, id), { recursive: true });
+  ensurePrivateDirectory(profileDirectory(baseUserDataDir, id));
   const homeMode = isProviderHomeMode(opts.homeMode) ? opts.homeMode : defaultHomeModeForKind(opts.kind);
   const profile = createProfileEntry(id, validation.name, opts.kind, opts.now, homeMode);
   const registry: ProfilesRegistry = {
@@ -633,7 +629,7 @@ export function ensureTeamProfile(
   const id = opts.generateId();
   if (!isOpaqueId(id)) return { ok: false, reason: "generate-failed" };
 
-  mkdirSync(profileDirectory(baseUserDataDir, id), { recursive: true });
+  ensurePrivateDirectory(profileDirectory(baseUserDataDir, id));
   const profile = createTeamProfileEntry(id, validation.name, opts.now, opts.team);
   const registry: ProfilesRegistry = {
     ...finding.registry,

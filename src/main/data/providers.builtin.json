@@ -169,8 +169,7 @@
           "mechanism": "global-config",
           "configPath": "~/.config/opencode/opencode.json",
           "configKey": "mcp",
-          "serverShape": "remote-url",
-          "urlSyntax": "brace-env"
+          "serverShape": "local-array"
         },
         "acbridgeOnPath": true,
         "effort": { "mechanism": "none", "reason": "no-flag" },

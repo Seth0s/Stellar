@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, resolveCardAmbiguity, type BusRequest } from "../../src/main/message-bus";
 import { openStore, type CardRow, type ReportRow, type TaskRow } from "../../src/main/store";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * Task d7fa2d58 — O PONTEIRO DE EVIDÊNCIA POR CARD ID APODRECE EM SILÊNCIO.
@@ -78,10 +79,10 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
 
   it("card_id de participação ÚNICA não é marcado ambíguo (o flag não é ruído)", async () => {
     makeBus({ getReport: () => row("98600001", 1), listTaskIdsForCard: () => ["t-unica"] });
-    const res = (await bus!.handleRequest({ cmd: "get_report", target: "98600001" } as BusRequest)) as {
+    const res = readBus<{
       ambiguous: boolean;
       taskIds: string[];
-    };
+    }>(await bus!.handleRequest({ cmd: "get_report", target: "98600001" } as BusRequest));
     expect(res.ambiguous).toBe(false);
     expect(res.taskIds).toEqual(["t-unica"]);
   });
@@ -125,7 +126,7 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
 
   it("TRI-ESTADO `true`: o slot tem >1 task — SEI que é ambíguo", async () => {
     makeBus({ getReport: () => row("97924064", 700), listTaskIdsForCard: () => ["t-a", "t-b"] });
-    const res = (await bus!.handleRequest({ cmd: "get_report", target: "97924064" } as BusRequest)) as AmbiguityShape;
+    const res = readBus<AmbiguityShape>(await bus!.handleRequest({ cmd: "get_report", target: "97924064" } as BusRequest));
     expect(res.ambiguous).toBe(true);
     expect(res.ambiguousReason).toBeNull();
     expect(res.taskIds).toEqual(["t-a", "t-b"]);
@@ -133,7 +134,7 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
 
   it("TRI-ESTADO `false`: o slot tem UMA task — SEI que NÃO é ambíguo", async () => {
     makeBus({ getReport: () => row("98600001", 1), listTaskIdsForCard: () => ["t-unica"] });
-    const res = (await bus!.handleRequest({ cmd: "get_report", target: "98600001" } as BusRequest)) as AmbiguityShape;
+    const res = readBus<AmbiguityShape>(await bus!.handleRequest({ cmd: "get_report", target: "98600001" } as BusRequest));
     expect(res.ambiguous).toBe(false);
     expect(res.ambiguousReason).toBeNull();
     expect(res.taskIds).toEqual(["t-unica"]);
@@ -143,7 +144,7 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
     // O rig padrão devolve `undefined` para um callback que não conhece — o
     // MESMO "não sei" que antes virava `false` por causa do `?? []`.
     makeBus({ getReport: () => row("98600002", 2) });
-    const res = (await bus!.handleRequest({ cmd: "get_report", target: "98600002" } as BusRequest)) as AmbiguityShape;
+    const res = readBus<AmbiguityShape>(await bus!.handleRequest({ cmd: "get_report", target: "98600002" } as BusRequest));
     // Os DOIS estados "eu sei" NÃO podem aparecer aqui.
     expect(res.ambiguous).not.toBe(true);
     expect(res.ambiguous).not.toBe(false);
@@ -155,7 +156,7 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
 
   it("TRI-ESTADO `null` também na leitura por `seq` (a linha também pertence a um slot)", async () => {
     makeBus({ getReportBySeq: () => row("98600003", 3) });
-    const res = (await bus!.handleRequest({ cmd: "get_report", seq: 3 } as BusRequest)) as AmbiguityShape;
+    const res = readBus<AmbiguityShape>(await bus!.handleRequest({ cmd: "get_report", seq: 3 } as BusRequest));
     expect(res.ambiguous).toBeNull();
     expect(res.ambiguousReason).toBe("participation-channel-unavailable");
   });

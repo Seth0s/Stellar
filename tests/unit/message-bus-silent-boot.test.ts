@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { FIRST_OUTPUT_DEADLINE_MS } from "../../src/main/silent-boot-decision";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * O AVISO DE "SUBIU E NUNCA FALOU" pelo canal do watchdog de ocioso
@@ -96,7 +97,7 @@ describe("card que subiu e nunca falou (d77b524b)", () => {
     expect(avisos).toHaveLength(1);
     expect(avisos[0].text).toContain("Calado");
     // A frase diz o que se sabe e o que NÃO se sabe — nada de acusar abandono.
-    expect(avisos[0].text).toMatch(/no byte at all/i);
+    expect(avisos[0].text).toMatch(/produced no output/i);
     // UM aviso por card: o scan roda a cada 5s e não pode virar metralhadora.
     bus!.scanIdleWithoutReport();
     bus!.scanIdleWithoutReport();
@@ -109,18 +110,18 @@ describe("card que subiu e nunca falou (d77b524b)", () => {
     bus!.scanIdleWithoutReport();
     await flush();
     expect(writes.filter((w) => w.target === "spawner")).toHaveLength(0);
-    const status = (await bus!.handleRequest({ cmd: "card_status", target: "silencioso" } as BusRequest)) as {
+    const status = readBus<{
       status: string;
-    };
+    }>(await bus!.handleRequest({ cmd: "card_status", target: "silencioso" } as BusRequest));
     expect(status.status).not.toBe("no-output");
   });
 
   it("card_status responde no-output enquanto ninguém falou — o estado VISÍVEL do enunciado", async () => {
     rig({});
-    const status = (await bus!.handleRequest({ cmd: "card_status", target: "silencioso" } as BusRequest)) as {
+    const status = readBus<{
       status: string;
       note: string;
-    };
+    }>(await bus!.handleRequest({ cmd: "card_status", target: "silencioso" } as BusRequest));
     expect(status.status).toBe("no-output");
     expect(status.note).toMatch(/NOT ONE byte/i);
   });

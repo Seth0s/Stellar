@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { invalidBusRequest, readBus } from "../helpers/bus-response";
 
 describe("message-bus list_tasks: filtros + projeção", () => {
   let dir: string;
@@ -58,6 +59,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
             if (prop === "listTasksSummaryByBoard")
               return (boardId: string) => store.listTasksSummaryByBoard(boardId);
             if (prop === "listCards") return () => aliveCardIds.map((id) => ({ id }));
+            if (prop === "getCardBoardId") return (id: string) => id === "caller-card" || id === "c1" ? "board-a" : undefined;
             if (prop === "isCardAlive") return (id: string) => alive.has(id);
             if (prop === "listAllConnectors") return () => [];
         if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
@@ -89,11 +91,12 @@ describe("message-bus list_tasks: filtros + projeção", () => {
     try {
       const res = (await bus.handleRequest({
         cmd: "list_tasks",
+        requesterId: "caller-card",
         boardId: "board-a",
         status: "pending",
         hasCard: true,
         view: "summary",
-      } as BusRequest)) as { ok: boolean; tasks: Array<Record<string, unknown>> };
+      } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as { ok: boolean; tasks: Array<Record<string, unknown>> };
 
       expect(res.ok).toBe(true);
       expect(res.tasks).toHaveLength(1);
@@ -107,12 +110,15 @@ describe("message-bus list_tasks: filtros + projeção", () => {
 
       // E `status:"running"` não acha nada: `running` nunca é autoritativo,
       // então filtrar por ele não é o jeito de perguntar por participação.
-      const byFused = (await bus.handleRequest({
-        cmd: "list_tasks",
-        boardId: "board-a",
-        status: "running",
-        view: "summary",
-      } as BusRequest)) as { tasks: unknown[] };
+      const byFused = readBus<{ tasks: unknown[] }>(
+        await bus.handleRequest({
+          cmd: "list_tasks",
+          requesterId: "caller-card",
+          boardId: "board-a",
+          status: "running",
+          view: "summary",
+        } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }),
+      );
       expect(byFused.tasks).toHaveLength(0);
     } finally {
       bus.close();
@@ -126,7 +132,13 @@ describe("message-bus list_tasks: filtros + projeção", () => {
     store.upsertTask(baseTask("t1"));
     const bus = openBus(store);
     try {
-      const bad = (await bus.handleRequest({ cmd: "list_tasks", view: "tiny" } as BusRequest)) as {
+      const anonymous = readBus<{ ok: boolean; error?: string }>(
+        await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card" } as BusRequest),
+      );
+      expect(anonymous.ok).toBe(false);
+      expect(anonymous.error).toMatch(/caller board identity/);
+
+      const bad = (await bus.handleRequest(invalidBusRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "tiny" }), { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         error?: string;
       };
@@ -134,7 +146,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       expect(bad.error).toMatch(/view/);
 
       // Omitir não traz mais o firehose: summary é o default.
-      const def = (await bus.handleRequest({ cmd: "list_tasks" } as BusRequest)) as {
+      const def = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         tasks: Array<Record<string, unknown>>;
       };
@@ -142,7 +154,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       expect(def.tasks[0]).not.toHaveProperty("prompt");
 
       // `view:"full"` explícito continua largo.
-      const full = (await bus.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as {
+      const full = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         tasks: Array<Record<string, unknown>>;
       };
@@ -161,9 +173,10 @@ describe("message-bus list_tasks: filtros + projeção", () => {
     for (let i = 0; i < 120; i++) {
       store.upsertTask(baseTask(`t-${i}`, { board_id: "board-a", prompt: `task ${i} — ${"p".repeat(200)}` }));
     }
+    store.upsertTask(baseTask("foreign-board-task", { board_id: "board-b" }));
     const bus = openBus(store);
     try {
-      const res = (await bus.handleRequest({ cmd: "list_tasks", boardId: "board-a" } as BusRequest)) as {
+      const res = (await bus.handleRequest({ cmd: "list_tasks", requesterId: "caller-card" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
         ok: boolean;
         tasks: unknown[];
       };

@@ -30,6 +30,7 @@ function task(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     purpose: "fix",
@@ -166,7 +167,8 @@ describe("deriveAutoConnectLabel", () => {
             spawned.push(params);
             bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
           }) as never,
-          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "",
+ label: null }]) as never,
         }),
       );
 
@@ -197,7 +199,8 @@ describe("deriveAutoConnectLabel", () => {
             spawned.push(params);
             bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
           }) as never,
-          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "",
+ label: null }]) as never,
         }),
       );
 
@@ -232,8 +235,10 @@ describe("deriveAutoConnectLabel", () => {
             bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "reviewer-card" });
           }) as never,
           listCards: (() => [
-            { id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null },
-            { id: "impl", kind: "terminal", provider: "claude", cwd: "", label: null },
+            { id: "orch", kind: "terminal", provider: "claude", cwd: "",
+ label: null },
+            { id: "impl", kind: "terminal", provider: "claude", cwd: "",
+ label: null },
           ]) as never,
         }),
       );

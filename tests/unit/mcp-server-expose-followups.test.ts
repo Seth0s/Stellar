@@ -24,6 +24,7 @@ describe("mcp-server: follow-ups expostos (task 4c122327)", () => {
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      requireIdentity: false,
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         seen.push(req);
         if (req.cmd === "get_report" && req.seq !== undefined) {

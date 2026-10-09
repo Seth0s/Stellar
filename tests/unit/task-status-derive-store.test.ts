@@ -38,6 +38,7 @@ describe("task-status-derive + store (CAMADA 3)", () => {
       card_id: null,
       board_id: "default",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

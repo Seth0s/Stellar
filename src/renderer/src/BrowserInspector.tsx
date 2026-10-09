@@ -1522,20 +1522,40 @@ export function BrowserInspector({
     );
   }, [activeEmulation, frameZoom, dragDisplayZoom]);
 
-  // Desliga a emulação de dispositivo se o card fechar o inspector (ou
-  // desmontar) com uma ainda ativa — não deve sobreviver ao inspector
-  // fechado, senão a página fica "presa" num viewport mobile sem nenhum
-  // controle visível pra desligar.
+  // Clear inspector-owned emulation on unmount. Agent-owned viewports
+  // (browser_set_viewport) survive — setDeviceEmulation(..., "inspector")
+  // is a no-op when source is agent; the registry then publishes
+  // onEmulationChanged so BrowserCard keeps/clears the badge correctly.
   useEffect(
     () => () => {
       if (activeEmulationRef.current) {
         void window.browser.setDeviceEmulation(id, null);
         void window.browser.resize(id, cardSizeRef.current.w, cardSizeRef.current.h);
-        onEmulationChangeRef.current?.(null);
       }
     },
     [id],
   );
+
+  // Sync from the registry when the inspector mounts — an agent may have
+  // called browser_set_viewport while the panel was closed.
+  useEffect(() => {
+    let cancelled = false;
+    void window.browser.getDeviceEmulation(id).then((emulation) => {
+      if (cancelled || !emulation || activeEmulationRef.current) return;
+      setActiveEmulation({
+        width: emulation.width,
+        height: emulation.height,
+        deviceScaleFactor: emulation.deviceScaleFactor,
+        mobile: emulation.mobile,
+        label: `${emulation.width}×${emulation.height}`,
+      });
+      setCustomW(emulation.width);
+      setCustomH(emulation.height);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   // Pedido ao vivo do usuário (screenshot real): abrir a barra de
   // dispositivo só REVELAVA os controles, com o dropdown em "Nenhum" —
@@ -1547,10 +1567,30 @@ export function BrowserInspector({
   // ligado antes de esconder a barra (ver smoke-browser-inspector-device-
   // toolbar-toggle.mjs, "esconder controles ≠ 'Parar emulação'": reabrir a
   // barra com uma emulação já ativa não deve trocar o preset escolhido).
+  // Also skips when the registry already has agent-owned emulation.
   useEffect(() => {
     if (!deviceToolbarOpen || activeEmulationRef.current) return;
-    const preset = RESPONSIVE_PRESETS[0];
-    applyEmulation(preset.width, preset.height, preset.deviceScaleFactor, preset.mobile, preset.label);
+    let cancelled = false;
+    void window.browser.getDeviceEmulation(id).then((emulation) => {
+      if (cancelled) return;
+      if (emulation) {
+        setActiveEmulation({
+          width: emulation.width,
+          height: emulation.height,
+          deviceScaleFactor: emulation.deviceScaleFactor,
+          mobile: emulation.mobile,
+          label: `${emulation.width}×${emulation.height}`,
+        });
+        setCustomW(emulation.width);
+        setCustomH(emulation.height);
+        return;
+      }
+      const preset = RESPONSIVE_PRESETS[0];
+      applyEmulation(preset.width, preset.height, preset.deviceScaleFactor, preset.mobile, preset.label);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceToolbarOpen]);
 

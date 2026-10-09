@@ -228,7 +228,9 @@ export type DynamicProviderSpec = {
     /** `global-config` exige caminho/chave/forma (o registrador é a próxima
      * task). `ephemeral-flag` é recusa explícita: o sintetizador abaixo não
      * sabe montar o JSON de config de UMA CLI desconhecida — isso é
-     * `buildArgs` à mão, como nos nativos. */
+     * `buildArgs` à mão, como nos nativos. `unsupported-by-app` = the CLI has
+     * MCP but Stellar cannot write that config shape (e.g. SQLite) — requires
+     * a written `reason`; distinct from `none` (= the CLI does not read MCP). */
     mcp:
       | {
           mechanism: "global-config";
@@ -243,7 +245,8 @@ export type DynamicProviderSpec = {
            * zero-processo. Ausente = a CLI aceita o default (`${env:}`). */
           urlSyntax?: McpUrlSyntax;
         }
-      | { mechanism: "none" };
+      | { mechanism: "none" }
+      | { mechanism: "unsupported-by-app"; reason: string };
     acbridgeOnPath: boolean;
     effort:
       | { mechanism: "flag"; flag: string; values: string[] }
@@ -585,7 +588,7 @@ export function providersSchemaVersionRefusal(found: unknown): string {
 export const PROVIDER_ROLES = ["agent", "shell"] as const;
 const SESSION_FLAG_KEYS = ["resumeFlag", "imposeFlag", "continueFlag"] as const;
 export const SYSTEM_PROMPT_MECHANISMS = ["flag", "none"] as const;
-export const MCP_MECHANISMS = ["global-config", "none"] as const;
+export const MCP_MECHANISMS = ["global-config", "none", "unsupported-by-app"] as const;
 export const MCP_SERVER_SHAPES = ["stdio-command", "local-array", "remote-url"] as const;
 /** Task 2e1bc3be — as sintaxes de interpolação de env MEADAS no `url` de um MCP
  * remoto. `dollar-env` = `${env:VAR}` (default de quem não declara);
@@ -1164,6 +1167,19 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
   let mcp: DynamicProviderSpec["capacity"]["mcp"];
   if (mcpRaw.mechanism === "none") {
     mcp = { mechanism: "none" };
+  } else if (mcpRaw.mechanism === "unsupported-by-app") {
+    const reason = nonEmptyString(mcpRaw.reason);
+    if (!reason) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.mcp.reason",
+          'a non-empty string naming why the app cannot write this CLI\'s MCP config (required when mechanism is "unsupported-by-app")',
+          mcpRaw.reason,
+        ),
+      };
+    }
+    mcp = { mechanism: "unsupported-by-app", reason };
   } else if (mcpRaw.mechanism === "global-config") {
     const configPath = nonEmptyString(mcpRaw.configPath);
     const configKey = nonEmptyString(mcpRaw.configKey);
@@ -1735,16 +1751,19 @@ function capacitySchema(): Record<string, unknown> {
         flagField: "flag",
         flagDescription: 'Flag que recebe o prompt (ex.: "-s"). Obrigatória quando mechanism é "flag".',
       }),
-      mcp: mechanismObject({
+      // Three-way branch (global-config / none / unsupported-by-app): nested
+      // if/then/else so anti-drift's collect() still walks every required
+      // field. `mechanismObject` only models a binary flag/else split.
+      mcp: {
+        type: "object",
         description:
           'Onde esta CLI lê a lista de servidores MCP. "global-config" exige configPath/configKey/serverShape; ' +
-          '"none" = a CLI não lê arquivo de MCP (o report cai para o acbridge no PATH).',
-        mechanisms: MCP_MECHANISMS,
-        flagValue: "global-config",
-        flagField: "configPath",
-        flagDescription: 'Caminho do arquivo de config de MCP desta CLI (ex.: "~/.commandcode/mcp.json").',
-        alsoRequired: ["configKey", "serverShape"],
-        extra: {
+          '"none" = a CLI não lê MCP; "unsupported-by-app" = a CLI TEM MCP, mas o Stellar não sabe escrever ' +
+          "nessa forma (ex.: config em SQLite) — exige `reason` escrito. Os dois últimos caem no acbridge no PATH.",
+        required: ["mechanism"],
+        properties: {
+          mechanism: asEnum(MCP_MECHANISMS, "Como este recurso é entregue a esta CLI."),
+          configPath: asNonEmptyStr('Caminho do arquivo de config de MCP desta CLI (ex.: "~/.commandcode/mcp.json").'),
           configKey: asNonEmptyStr('Chave dentro do arquivo que lista os servidores (ex.: "mcpServers").'),
           serverShape: asEnum(
             MCP_SERVER_SHAPES,
@@ -1752,8 +1771,21 @@ function capacitySchema(): Record<string, unknown> {
               '"remote-url" = um servidor REMOTO ({ type: "remote", url }) — a forma do opencode, que usa a sintaxe de ' +
               "URL declarada em `urlSyntax`. Escolha a forma que a CLI de fato LÊ, nunca uma parecida.",
           ),
+          urlSyntax: asEnum(
+            MCP_URL_SYNTAXES,
+            'Sintaxe de interpolação de env no `url` (só formas que emitem url). Ausente = default dollar-env.',
+          ),
+          reason: asNonEmptyStr(
+            'Por que o Stellar não configura o MCP desta CLI. Obrigatório quando mechanism é "unsupported-by-app".',
+          ),
         },
-      }),
+        if: { properties: { mechanism: { const: "global-config" } }, required: ["mechanism"] },
+        then: { required: ["configPath", "configKey", "serverShape"] },
+        else: {
+          if: { properties: { mechanism: { const: "unsupported-by-app" } }, required: ["mechanism"] },
+          then: { required: ["reason"] },
+        },
+      },
       acbridgeOnPath: asBool(
         "true = o `acbridge` está no PATH de todo card (o Stellar o põe), então este provider entrega o report " +
           "mesmo sem MCP. Declare false só se foi medido o contrário.",
@@ -2704,7 +2736,9 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
               // classe exata que o round-trip do catálogo existe para pegar.
               ...(declared.mcp.urlSyntax ? { urlSyntax: declared.mcp.urlSyntax } : {}),
             }
-          : { mechanism: "none" },
+          : declared.mcp.mechanism === "unsupported-by-app"
+            ? { mechanism: "unsupported-by-app", reason: declared.mcp.reason }
+            : { mechanism: "none" },
       acbridgeOnPath: declared.acbridgeOnPath,
       effort:
         declared.effort.mechanism === "flag"

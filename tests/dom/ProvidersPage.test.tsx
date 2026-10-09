@@ -31,6 +31,8 @@ const CLINE_APP: ProvidersPageRow = {
   mcpEnabled: true,
   mcpConfigPath: "~/.cline/data/settings/cline_mcp_settings.json",
   mcpConfigKey: "mcpServers",
+  mcpUnsupportedByApp: false,
+  mcpUnsupportedReason: null,
   source: "app",
   // A linha É a declaração do app: nada escrito por cima (task edf3b047).
   appOverride: "none",
@@ -62,6 +64,8 @@ const MYCLI_FILE: ProvidersPageRow = {
   mcpEnabled: false,
   mcpConfigPath: null,
   mcpConfigKey: null,
+  mcpUnsupportedByApp: false,
+  mcpUnsupportedReason: null,
   source: "file",
   appOverride: "none",
   skipped: false,
@@ -132,7 +136,7 @@ beforeEach(() => {
 });
 
 function ids(role: string): (string | null)[] {
-  return [...document.querySelectorAll(`[data-role="${role}"]`)].map((el) =>
+  return Array.from(document.querySelectorAll(`[data-role="${role}"]`)).map((el) =>
     el.getAttribute("data-provider-id"),
   );
 }
@@ -152,7 +156,7 @@ describe("ProvidersPage", () => {
     expect(
       document.querySelector('[data-role="providers-natives"] [data-role="providers-edit"]'),
     ).toBeNull();
-    expect(screen.getByText(/Nativos do app — embutidos, não editáveis/)).toBeTruthy();
+    expect(screen.getByText(/Nativos do app/)).toBeTruthy();
 
     // Genérico é editável — inclusive o que já vem configurado (`do app`).
     expect(
@@ -183,6 +187,33 @@ describe("ProvidersPage", () => {
     expect(document.querySelector('[data-role="providers-native-flags"]')?.textContent).toContain(
       "argv é montado por card",
     );
+
+    // MCP on (cline) vs off (mycli) — distinct badges; unsupported is below.
+    expect(document.querySelector('[data-provider-id="cline"]')?.textContent).toContain("MCP habilitado");
+    expect(document.querySelector('[data-provider-id="mycli"]')?.textContent).toContain("MCP desativado");
+  });
+
+  it("MCP unsupported-by-app is NOT the same badge as MCP desativado", async () => {
+    const omp: ProvidersPageRow = {
+      ...MYCLI_FILE,
+      id: "omp",
+      label: "Oh My Pi",
+      binaryNames: ["omp"],
+      baseArgs: [],
+      bypassesPermissionPrompts: false,
+      mcpEnabled: false,
+      mcpUnsupportedByApp: true,
+      mcpUnsupportedReason: "config lives in SQLite; app only writes JSON files",
+    };
+    readProvidersConfig.mockImplementation(async () => view([CLINE_APP, omp]));
+    render(<ProvidersPage />);
+    await waitFor(() => expect(document.querySelector('[data-provider-id="omp"]')).toBeTruthy());
+    const row = document.querySelector('[data-provider-id="omp"]')!;
+    const badge = row.querySelector('[data-role="providers-mcp-unsupported"]');
+    expect(badge?.textContent).toBe("MCP não configurável pelo app");
+    expect(badge?.getAttribute("title")).toContain("SQLite");
+    expect(row.textContent).not.toContain("MCP desativado");
+    expect(row.querySelector('[data-role="providers-mcp"]')).toBeNull();
   });
 
   // A SOBRESCRITA sobre a declaração do app (task edf3b047). O badge dizia só
@@ -456,6 +487,8 @@ describe("ProvidersPage", () => {
       mcpEnabled: false,
       mcpConfigPath: null,
       mcpConfigKey: null,
+      mcpUnsupportedByApp: false,
+      mcpUnsupportedReason: null,
       source: "file",
       appOverride: "none",
       skipped: true,

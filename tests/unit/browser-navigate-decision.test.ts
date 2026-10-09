@@ -59,7 +59,7 @@ function arrivalFacts(overrides: Partial<NavigateArrivalFacts> = {}): NavigateAr
 describe("decideNavigatePrecheck — o que se recusa SEM tocar na página", () => {
   const doc = "https://app.exemplo.com/estudante/inicio";
 
-  it("recusa outra ORIGEM nomeando open_url (trocar de site é troca de documento)", () => {
+  it("recusa outra ORIGEM sem allowDocumentNav (trocar de site é troca de documento)", () => {
     const decision = decideNavigatePrecheck({
       requested: "https://outro-site.com/estudante/curriculo",
       documentHref: doc,
@@ -70,6 +70,18 @@ describe("decideNavigatePrecheck — o que se recusa SEM tocar na página", () =
     expect(decision.code).toBe("cross-origin");
     expect(decision.error).toContain("open_url");
     expect(decision.error).toContain("Nothing was navigated");
+  });
+
+  it("permite document-load cross-origin quando allowDocumentNav (card próprio)", () => {
+    const decision = decideNavigatePrecheck({
+      requested: "https://outro-site.com/path",
+      documentHref: doc,
+      expectSelectorError: null,
+      allowDocumentNav: true,
+    });
+    expect(decision.action).toBe("document-load");
+    if (decision.action !== "document-load") return;
+    expect(decision.href).toBe("https://outro-site.com/path");
   });
 
   it("recusa esquema não-http(s)", () => {

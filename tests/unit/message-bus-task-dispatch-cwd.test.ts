@@ -60,6 +60,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -96,6 +97,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       status: "pending",
       deps_json: JSON.stringify(["dep-done"]),
       cwd: "/home/lucas/Workplace/Projects/Stellar",
+    spawn_profile: null,
       prompt: "i18n fase 2",
     });
     const depBefore = { ...dep, status: "running" };
@@ -185,6 +187,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       status: "pending",
       deps_json: JSON.stringify(["dep-done"]),
       cwd: null,
+    spawn_profile: null,
       prompt: null,
     });
     const depBefore = { ...dep, status: "running" };
@@ -227,6 +230,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       provider: null,
       deps_json: JSON.stringify(["dep-done"]),
       cwd: null,
+    spawn_profile: null,
       prompt: "filho sem provider",
     });
     rows.set(dep.id, { ...dep, status: "running" });
@@ -282,6 +286,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       boardId: "b1",
       prompt: "x",
       cwd: "/tmp/repo",
+    spawn_profile: null,
     } as BusRequest);
     await bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "y" } as BusRequest);
 

@@ -1,6 +1,6 @@
 import { afterAll, describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   classifyGateFailure,
@@ -60,6 +60,66 @@ describe("gate-runner: existência do comando (task 17d96ade)", () => {
     expect(classifyGateFailure({ exitCode: null, timedOut: false })).toBe("not-run");
     expect(classifyGateFailure({ exitCode: 0, timedOut: true })).toBe("timeout");
     expect(classifyGateFailure({ exitCode: null, timedOut: false, notRun: true })).toBe("not-run");
+  });
+
+  it("missing file and directory diagnostics are environment errors", () => {
+    expect(
+      classifyGateFailure({
+        exitCode: 2,
+        timedOut: false,
+        command: "python3 /workspace/check.py",
+        stderr:
+          "python3: can't open file '/workspace/check.py': [Errno 2] No such file or directory",
+      }),
+    ).toBe("gate_env_error");
+    expect(
+      classifyGateFailure({
+        exitCode: 1,
+        timedOut: false,
+        command: "cd vhosts/Conecta && test -f app.txt",
+        stderr: "bash: line 1: cd: vhosts/Conecta: Arquivo ou diretório inexistente",
+      }),
+    ).toBe("gate_env_error");
+  });
+
+  it("a test assertion that mentions ENOENT remains a test failure", () => {
+    expect(
+      classifyGateFailure({
+        exitCode: 1,
+        timedOut: false,
+        command: "npm test",
+        stderr: "AssertionError: expected ENOENT: no such file or directory, open '/tmp/missing-fixture'",
+      }),
+    ).toBe("test-failed");
+  });
+
+  it("missing browser executables and read-only sandbox paths are environment errors", () => {
+    expect(
+      classifyGateFailure({
+        exitCode: 1,
+        timedOut: false,
+        command: "npx playwright test",
+        stderr:
+          "browserType.launch: Executable doesn't exist at /home/u/.cache/ms-playwright/firefox/firefox",
+      }),
+    ).toBe("gate_env_error");
+    expect(
+      classifyGateFailure({
+        exitCode: 1,
+        timedOut: false,
+        command: "npm run test:lighthouse",
+        stderr: "[lhci] Chrome installation not found. Set CHROME_PATH to a browser installation.",
+      }),
+    ).toBe("gate_env_error");
+    expect(
+      classifyGateFailure({
+        exitCode: 125,
+        timedOut: false,
+        command: "bash scripts/test-lang-redirect.sh",
+        sandboxed: true,
+        stderr: "podman: chmod /run/user/1000/libpod: Read-only file system",
+      }),
+    ).toBe("gate_env_error");
   });
 
   it("normalizeGateCommand remove o wrapper MORTO só quando ele é inalcançável", () => {

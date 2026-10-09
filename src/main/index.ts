@@ -14,7 +14,7 @@ import {
 } from "electron";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import {
@@ -50,19 +50,21 @@ import { decideIdentifyApply, decideIdentifyCardGate, decideIdentifyChoiceApply 
 // ver o doc comment de `getShortcutCombo`.
 import { matchesCombo, getShortcutCombo, type ShortcutKeyEvent } from "../renderer/src/shortcut-registry";
 import { deriveCardDisplayName } from "../shared/card-identity";
+import { summarizeRecentAction } from "../shared/recent-action";
 import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i18n";
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { readSpawnProfiles } from "./spawn-profiles";
 import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
-import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
+import { projectTaskPrompt } from "../task-prompt-projection";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
 import { deriveBoardTaskPhase, type TaskPhase } from "./task-phase-decision";
-import { checkAgentAvailability, providerById, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
+import { checkAgentAvailability, providerById, providerCapacity, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
+import { readCardHealth } from "./card-health";
 import { getProviderUsage } from "./provider-usage";
 import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
@@ -97,7 +99,9 @@ import {
   searchFileNames,
   writeFile,
 } from "./fs-tools";
-import { buildSlicePlan, gitStatus, runSlicePlan } from "./git-tools";
+import { diagnoseProject } from "./file-diagnostics";
+import { buildSlicePlan, gitDiffHeadUnified, gitShowHead, gitStatus, runSlicePlan } from "./git-tools";
+import { territoryFromSql } from "./task-contract-decision";
 // A ATRIBUIÇÃO POR ARQUIVO (task 56604aca) — pura, testada à parte: o main só
 // lê as linhas do store e entrega.
 import {
@@ -118,6 +122,8 @@ import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "
 // decisão pura que valida o que a UI escreve (nunca o inverso: o main não
 // aplica preset, ele guarda o que o humano escolheu).
 import { BOARD_PRESETS } from "./board-presets";
+import { readBoardContext, writeBoardContext } from "./board-context";
+import { applyGateToolPaths, applyRulesText, rulesTextFromEntries } from "./board-context-edit-decision";
 import { parseBoardTaskDefaultsInput, readBoardTaskDefaults } from "./board-preset-decision";
 import { PICK_MEDIA_EXTENSIONS, resolvePickedMediaFile } from "./spawn-media-decision";
 import {
@@ -133,6 +139,8 @@ import {
   type BlockedQuestion,
   type BusRequest,
   type BusResponse,
+  type HandleRequestOpts,
+  type CrossBoardReadAuditRecord,
   type StickyResult,
 } from "./message-bus";
 import { createPrototypeServer } from "./prototype-server";
@@ -141,6 +149,8 @@ import { ensureMcpRegistered } from "./mcp-registration";
 import { gateProgressForTask, parseGateDiffEvidence } from "./gate-runner";
 import { taskGateViewFromResult } from "./gate-notice-decision";
 import { createMcpServer } from "./mcp-server";
+import { createProcessIdentityAuthority } from "./process-identity";
+import { readProcessInfo } from "./peer-credentials";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
 import { createRemoteServer } from "./remote-server";
@@ -150,6 +160,7 @@ import { createAnthropicClient } from "./anthropic-client";
 import { createOpenAiClient } from "./openai-client";
 import {
   executeTool,
+  WRITE_FILE_TOOL_NAME,
   type ChatMessage,
   type WriteConsentRequest,
   type BashConsentRequest,
@@ -177,6 +188,7 @@ import {
   setDefaultProfile,
   setProfileHomeMode,
 } from "./profiles";
+import { sanitizeUserDataPermissions } from "./user-data-permissions";
 import { isProviderHomeMode, planConfigHome, workHomeToolForProvider } from "./config-home-decision";
 import { buildRelaunchArgs, isProfileKind, isValidProfileName, parseProfileArg } from "./profiles-decision";
 import { readLocalIdentityFile, setMachineIdentityDir } from "./local-identity";
@@ -190,6 +202,8 @@ import { resolvePlansUrl } from "./plan-decision";
 import { hostname } from "node:os";
 import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
 import { ACBRIDGE_PROTOCOL } from "./acbridge-protocol-decision";
+
+process.umask(0o077);
 
 // DESIGN-BACKLOG.md item 37 — reported live: fullscreen video in an
 // embedded browser card, then closing something, crashed the ENTIRE app.
@@ -805,6 +819,7 @@ function handleSnapshotRequest(
   messageBus: ReturnType<typeof createMessageBus>,
   requestId: string,
   target: { cardId: string } | { rect: { x: number; y: number; w: number; h: number } } | null,
+  outPath?: string,
 ) {
   if (win.isDestroyed()) {
     messageBus.resolveSnapshot(requestId, { ok: false, error: "window not available" });
@@ -815,7 +830,7 @@ function handleSnapshotRequest(
     win.webContents
       .capturePage(rect)
       .then((image) => {
-        const filePath = join(app.getPath("temp"), `agent-canvas-snapshot-${requestId}.png`);
+        const filePath = outPath ?? join(app.getPath("temp"), `agent-canvas-snapshot-${requestId}.png`);
         writeFileSync(filePath, image.toPNG());
         messageBus.resolveSnapshot(requestId, { ok: true, path: filePath });
       })
@@ -1271,8 +1286,23 @@ function createWindow() {
     ? join(process.resourcesPath, "mobile-client")
     : join(__dirname, "..", "..", "resources", "mobile-client");
 
+  sanitizeUserDataPermissions({
+    baseUserDataDir: BASE_USER_DATA,
+    userDataDir: app.getPath("userData"),
+    legacyUserDataDir: legacyDir,
+  });
   const store = openStore(app.getPath("userData"));
   const secretsStore = createSecretsStore(app.getPath("userData"));
+  const processIdentity = createProcessIdentityAuthority(readProcessInfo);
+  // VERIFY harness may pin this via AGENT_CANVAS_MCP_INTERNAL_TOKEN so a
+  // smoke can Authorization: Bearer the loopback MCP the same way the
+  // Unix relay does (Bearer + x-stellar-caller-card). Production leaves
+  // the env unset and gets a fresh random token per process.
+  const mcpInternalToken =
+    typeof process.env.AGENT_CANVAS_MCP_INTERNAL_TOKEN === "string" &&
+    process.env.AGENT_CANVAS_MCP_INTERNAL_TOKEN.trim()
+      ? process.env.AGENT_CANVAS_MCP_INTERNAL_TOKEN.trim()
+      : randomBytes(32).toString("base64url");
 
   // Task 326b78e4 — protótipos servidos por http LOCAL (o BrowserCard recusa
   // `file://`, ver browser-registry.ts::normalizeUrl). Raiz POR BOARD: o
@@ -1419,8 +1449,12 @@ function createWindow() {
 
   const chatToolCallbacks = {
     onToolStart: (cardId: string, name: string, input: unknown) => safeSend(win, "chat:tool-start", cardId, name, input),
-    onToolResult: (cardId: string, name: string, ok: boolean, summary: string) =>
-      safeSend(win, "chat:tool-result", cardId, name, ok, summary),
+    onToolResult: (cardId: string, name: string, ok: boolean, summary: string) => {
+      safeSend(win, "chat:tool-result", cardId, name, ok, summary);
+      // Intention checkpoint: each successful write_file counts toward the
+      // cheap "declare decisaoTomada" nudge (report-estado-decision).
+      if (ok && name === WRITE_FILE_TOOL_NAME) messageBus?.noteCardWrite(cardId);
+    },
     askWriteConsent,
     askBashConsent,
     delegateToAgent,
@@ -1506,7 +1540,28 @@ function createWindow() {
     // isolated test instances, which DO need a predictable port to dial
     // directly from outside the process (see smoke-mcp.mjs).
     port: Number(process.env.AGENT_CANVAS_MCP_PORT) || 0,
-    handleRequest: (req: BusRequest) => messageBus!.handleRequest(req, { channel: "http" }),
+    internalToken: mcpInternalToken,
+    // Refresh boardId from the store at resolve time: pty:spawn can win
+    // the race against store:upsert and freeze boardId=null on the record,
+    // which used to make board-scoped tools refuse a live card.
+    resolvePeerIdentity: (peerPid) => {
+      const identity = processIdentity.resolvePeer(peerPid);
+      if (!identity) return null;
+      return { cardId: identity.cardId, boardId: store.getCard(identity.cardId)?.board_id ?? identity.boardId };
+    },
+    resolveAuthToken: (token) => {
+      const identity = processIdentity.resolveToken(token);
+      if (!identity) return null;
+      return { cardId: identity.cardId, boardId: store.getCard(identity.cardId)?.board_id ?? identity.boardId };
+    },
+    resolveRelayIdentity: (cardId) => {
+      const identity = processIdentity.identityForCard(cardId);
+      if (!identity) return null;
+      return { cardId: identity.cardId, boardId: store.getCard(identity.cardId)?.board_id ?? identity.boardId };
+    },
+    redactSecrets: processIdentity.secrets,
+    handleRequest: (req: BusRequest, identity?: Pick<HandleRequestOpts, "callerCardId" | "callerBoardId" | "scopeEnforced">) =>
+      messageBus!.handleRequest(req, { channel: "http", ...identity }),
   });
 
   // CONTADOR DE MECANISMO (`STELLAR_PTY_FRAME_DEBUG=1`): quantas mensagens
@@ -1677,6 +1732,10 @@ function createWindow() {
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
     sockPath,
     binDir,
+    issueAuthToken: processIdentity.issueToken,
+    registerProcessIdentity: (cardId, pid, startTime, authToken) =>
+      processIdentity.register({ cardId, boardId: store.getCard(cardId)?.board_id ?? null, pid, startTime, authToken }),
+    removeProcessIdentity: processIdentity.remove,
     // Read live (not `mcpServer.url` copied once) — with `port: 0` above,
     // the real port is only known after the async `listening` event, which
     // fires well before any provider actually spawns and reads this.
@@ -1866,13 +1925,16 @@ function createWindow() {
   );
 
   const browserRegistry = createBrowserRegistry({
-    onNavigate: (id, url) => safeSend(win, "browser:did-navigate", id, url),
+    onNavigate: (id, url, httpResponseCode) => safeSend(win, "browser:did-navigate", id, url, httpResponseCode),
     onTitle: (id, title) => safeSend(win, "browser:title", id, title),
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
     onFrame: (id, jpeg, width, height, region) => safeSend(win, "browser:frame", id, jpeg, width, height, region),
     onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
     onContextMenu: (id, params) => safeSend(win, "browser:context-menu", id, params),
     onCdpEvent: (id, method, params) => safeSend(win, "browser:cdp-event", id, method, params),
+    onRoutesChanged: (id, routes) => safeSend(win, "browser:routes-changed", id, routes),
+    onEmulationChanged: (id, emulation) => safeSend(win, "browser:emulation-changed", id, emulation),
+    onProfileChanged: (id, profile) => safeSend(win, "browser:profile-changed", id, profile),
     // Achado ao vivo ("navegador parece 360p") — o display onde a janela
     // REAL do app está, não `getPrimaryDisplay()`, é correto mesmo num
     // setup multi-monitor com DPIs diferentes (a janela pode não estar no
@@ -1912,7 +1974,8 @@ function createWindow() {
   // campo que sumiu.
   type TaskBoardItem = {
     id: string;
-    prompt: string | null;
+    promptPreview: string;
+    promptTruncated: boolean;
     provider: string | null;
     status: string;
     cardId: string | null;
@@ -1980,6 +2043,10 @@ function createWindow() {
     /** DESIGN-BACKLOG.md "Falha TIPADA" — motivo visível quando a task
      * voltou pra "a fazer" por interrupção (não julgamento). */
     interruptionReason: string | null;
+    screenTurnState: "working" | "ended" | "unknown" | null;
+    recentAction: string | null;
+    supersededTitle: string | null;
+    supersededReason: string | null;
   };
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — o quadro de tasks (renderer)
   // precisa de push ao vivo, espelhando `onConnectorKindChanged`/
@@ -2124,9 +2191,11 @@ function createWindow() {
         existingDivergedStatus: t.diverged_status,
         existingDivergedActor: t.diverged_actor,
       });
+      const promptProjection = projectTaskPrompt(t.prompt);
       return {
         id: t.id,
-        prompt: t.prompt,
+        promptPreview: promptProjection.preview,
+        promptTruncated: promptProjection.truncated,
         provider: t.provider,
         status: storedStatus,
         cardId: t.card_id,
@@ -2179,6 +2248,28 @@ function createWindow() {
         // LIVE progress (the "rodando gates i/N" chip) comes from the runner's
         // in-memory registry — no polling, the push follows `onProgress`.
         gateProgress: gateProgressForTask(t.id),
+        // Declared territory for the code-card roster (null = undeclared).
+        territory: territoryFromSql(t.territory_json),
+        // Fila V3 status phrase — screen turn + last action from the live PTY.
+        // Null when there is no linked card; the renderer never invents work.
+        screenTurnState: implementerCardId ? registry.getScreenTurnState(implementerCardId) : null,
+        recentAction: implementerCardId
+          ? summarizeRecentAction(registry.getRecentOutput(implementerCardId))
+          : null,
+        ...(() => {
+          let supersededTitle: string | null = null;
+          let supersededReason: string | null = null;
+          if (t.result_json && (t.result_json.includes('"supersededTitle"') || t.result_json.includes('"supersededReason"'))) {
+            try {
+              const parsed = JSON.parse(t.result_json) as Record<string, unknown>;
+              if (typeof parsed.supersededTitle === "string") supersededTitle = parsed.supersededTitle;
+              if (typeof parsed.supersededReason === "string") supersededReason = parsed.supersededReason;
+            } catch {
+              /* ignore broken JSON */
+            }
+          }
+          return { supersededTitle, supersededReason };
+        })(),
       };
     });
   }
@@ -2396,7 +2487,27 @@ function createWindow() {
           case "changes":
             return { ...base, provider: "", cwd: c.cwd };
           case "browser":
-            return { ...base, provider: "", cwd: "", url: c.cwd };
+            // App.tsx toRow stores ownerCardId in `provider` — needed for
+            // owned-card cross-origin browser_navigate (allowDocumentNav).
+            return { ...base, provider: c.provider || "", cwd: "", url: c.cwd };
+          default:
+            return { ...base, provider: "", cwd: "" };
+        }
+      });
+    },
+    listCardsByBoard: (boardId) => {
+      const cards = store.listCards(boardId);
+      return cards.map((c) => {
+        const base = { id: c.id, kind: c.kind, label: c.label, displayName: cardDisplayName(c, cards) };
+        switch (c.kind) {
+          case "terminal":
+          case "chat":
+            return { ...base, provider: c.provider, cwd: c.cwd, resume_id: c.resume_id };
+          case "files":
+          case "changes":
+            return { ...base, provider: "", cwd: c.cwd };
+          case "browser":
+            return { ...base, provider: c.provider || "", cwd: "", url: c.cwd };
           default:
             return { ...base, provider: "", cwd: "" };
         }
@@ -2581,6 +2692,33 @@ function createWindow() {
     // aviso de sprint junto. Não "termine o trabalho" por simetria: se um dia
     // valer, o canal de sprint precisa ser tratado em separado.
     listSprints: (boardId) => store.listSprints(boardId),
+    getSprint: (sprintId) => store.getSprint(sprintId),
+    requestCrossBoardReadConsent: async (request: CrossBoardReadAuditRecord) => {
+      const options = {
+        type: "warning" as const,
+        title: "Cross-board read request",
+        message: `Allow one read from board ${request.targetBoardId}?`,
+        detail: `${request.resourceKind} ${request.resourceId}\nRequested by card ${request.requesterCardId ?? "standalone development client"} on board ${request.callerBoardId}.\nReason: ${request.reason.slice(0, 2000)}`,
+        buttons: ["Allow once", "Deny"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      };
+      const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+      return result.response === 0;
+    },
+    recordCrossBoardReadAudit: (request: CrossBoardReadAuditRecord) => {
+      store.recordCrossBoardReadAudit({
+        requester_card_id: request.requesterCardId,
+        caller_board_id: request.callerBoardId,
+        target_board_id: request.targetBoardId,
+        resource_kind: request.resourceKind,
+        resource_id: request.resourceId,
+        reason: request.reason,
+        decision: request.decision,
+        requested_at: request.requestedAt,
+      });
+    },
     openSprint: (boardId) => store.openSprint(boardId),
     closeSprint: (boardId) => {
       const result = store.closeSprint(boardId, (id) => registry.isAlive(id));
@@ -2645,6 +2783,8 @@ function createWindow() {
       }
     },
     listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
+    // Declared report matching ("has or had a link").
+    listTaskCardsForCardHistory: (cardId) => store.listTaskCardsForCardHistory(cardId),
     // CAMADA 4 — judgment write gate on update_task needs the task-side
     // dump (role of requester on THIS task), not the card-side live filter.
     getTaskCards: (taskId) => store.getTaskCards(taskId),
@@ -2771,27 +2911,37 @@ function createWindow() {
     // visível, que é exatamente o que foi relatado. Todo outro tipo de
     // card continua pelo caminho antigo: eles só existem como pixels
     // dentro da janela, não há superfície separada pra capturar.
-    onSnapshotRequest: (requestId, target) => {
+    onSnapshotRequest: (requestId, target, opts) => {
       if (target && "cardId" in target && store.getCard(target.cardId)?.kind === "browser") {
-        void browserRegistry.capturePage(target.cardId).then((result) => {
-          if (!result.ok) {
-            messageBus!.resolveSnapshot(requestId, result);
-            return;
-          }
-          const filePath = join(app.getPath("temp"), `agent-canvas-snapshot-${requestId}.png`);
-          writeFileSync(filePath, result.png);
-          messageBus!.resolveSnapshot(requestId, { ok: true, path: filePath });
-        });
+        void browserRegistry
+          .screenshot(target.cardId, {
+            fullPage: opts?.fullPage,
+            out: opts?.out,
+            width: opts?.width,
+          })
+          .then((result) => {
+            if (!result.ok) {
+              messageBus!.resolveSnapshot(requestId, result);
+              return;
+            }
+            // When the caller named --out, screenshot already wrote there.
+            // Otherwise the path is a temp file — keep the historical
+            // requestId-based name only when no explicit out was given and
+            // the registry picked a random temp name (already in result.path).
+            messageBus!.resolveSnapshot(requestId, { ok: true, path: result.path });
+          });
         return;
       }
-      handleSnapshotRequest(win, messageBus!, requestId, target);
+      handleSnapshotRequest(win, messageBus!, requestId, target, opts?.out);
     },
     // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — no consent needed
     // (see message-bus.ts's PAGE_TEXT_TIMEOUT_MS comment), so this goes
     // straight to browserRegistry instead of round-tripping through a
     // renderer ask/resolve pair like the two below.
-    onPageTextRequest: (requestId, cardId, selector, maxChars) => {
-      void browserRegistry.getPageText(cardId, selector, maxChars).then((result) => messageBus!.resolvePageText(requestId, result));
+    onPageTextRequest: (requestId, cardId, selector, maxChars, opts) => {
+      void browserRegistry
+        .getPageText(cardId, selector, maxChars, opts)
+        .then((result) => messageBus!.resolvePageText(requestId, result));
     },
     // DESIGN-BACKLOG.md §2.1 — same "no round trip needed" reasoning as
     // onPageTextRequest above: browserRegistry already owns the real
@@ -2800,17 +2950,25 @@ function createWindow() {
     // que carimba o atributo — nem o bus nem o servidor MCP precisam saber
     // o nome dele. Tem precedência sobre `selector`: quem passou um ref
     // acabou de olhar o snapshot e sabe exatamente o que quer.
-    browserClick: (cardId, x, y, selector, ref) => {
-      const sel = ref ? browserRegistry.refSelector(ref) : selector;
-      return sel ? browserRegistry.clickSelector(cardId, sel) : Promise.resolve(browserRegistry.clickAtPoint(cardId, x!, y!));
+    browserClick: (cardId, opts) => {
+      if (opts.ref || opts.selector || opts.role || opts.text) {
+        return browserRegistry.clickTarget(cardId, opts);
+      }
+      return browserRegistry.clickAtPoint(cardId, opts.x!, opts.y!);
     },
-    browserType: (cardId, text, selector, ref, replace) =>
-      browserRegistry.typeText(cardId, text, ref ? browserRegistry.refSelector(ref) : selector, replace === true),
+    browserType: (cardId, text, opts) =>
+      browserRegistry.typeText(cardId, text, opts, opts.replace === true),
     browserScroll: (cardId, dx, dy, selector, ref) =>
       browserRegistry.scroll(cardId, dx, dy, ref ? browserRegistry.refSelector(ref) : selector),
-    browserQuery: (cardId, selector, ref) => browserRegistry.query(cardId, ref ? browserRegistry.refSelector(ref) : selector!),
+    browserQuery: (cardId, opts) => browserRegistry.query(cardId, opts),
     browserEval: (cardId, js, timeoutMs) => browserRegistry.evalJs(cardId, js, timeoutMs),
-    browserSnapshot: (cardId) => browserRegistry.pageSnapshot(cardId),
+    browserSnapshot: (cardId, opts) => browserRegistry.pageSnapshot(cardId, opts),
+    browserRoute: (cardId, input) => browserRegistry.addRoute(cardId, input),
+    browserUnroute: (cardId, opts) => browserRegistry.clearRoutes(cardId, opts),
+    browserListRoutes: (cardId) => browserRegistry.listRoutes(cardId),
+    browserSetViewport: (cardId, input) => browserRegistry.setViewport(cardId, input),
+    browserScreenshot: (cardId, input) => browserRegistry.screenshot(cardId, input),
+    browserSetDisplayMode: (cardId, mode) => browserRegistry.setDisplayMode(cardId, mode),
     browserConsole: (cardId, level, limit) => browserRegistry.getConsole(cardId, level, limit),
     browserNetwork: (cardId, opts) => browserRegistry.getNetwork(cardId, opts),
     browserWaitFor: (cardId, opts) => browserRegistry.waitFor(cardId, opts),
@@ -2879,6 +3037,13 @@ function createWindow() {
     // doc comment na interface de callbacks.
     onAutoConnect: (fromCardId, toCardId, kind, label) =>
       safeSend(win, "connector:auto", fromCardId, toCardId, kind, label),
+  }, {
+    resolvePeerIdentity: (peerPid) => {
+      const identity = processIdentity.resolvePeer(peerPid);
+      if (!identity) return null;
+      return { cardId: identity.cardId, boardId: store.getCard(identity.cardId)?.board_id ?? identity.boardId };
+    },
+    redactSecrets: processIdentity.secrets,
   });
   ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
   // Achado ao vivo, 2026-09-03 — "aviso antes mesmo de abrir um agente":
@@ -3012,6 +3177,15 @@ function createWindow() {
   // mora em gate-lock.ts (main).
   ipcMain.handle("bus:gate-lock-status", () => messageBus!.handleRequest({ cmd: "gate_lock_status" }));
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
+  ipcMain.handle("pty:health", (_e, id: string) => {
+    const card = store.getCard(id);
+    if (!card || card.kind !== "terminal") return null;
+    const capability = providerCapacity(card.provider)?.health;
+    return {
+      lastActivityAt: registry.getLastActivityAt(id),
+      ...readCardHealth(capability, registry.getRecentOutput(id), Date.now()),
+    };
+  });
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
     // The UI unmount of a board the user LEFT sends `pty:kill` for every card;
@@ -3158,7 +3332,14 @@ function createWindow() {
   });
 
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
-  ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
+  ipcMain.handle("store:upsert", (_e, card: CardRow) => {
+    store.upsertCard(card);
+    // pty:spawn can register process-identity before this upsert lands;
+    // patch boardId so peer/Bearer resolution is not stuck with null.
+    if (typeof card.board_id === "string" && card.board_id) {
+      processIdentity.bindBoard(card.id, card.board_id);
+    }
+  });
   ipcMain.handle("store:delete", (_e, id: string) => {
     rememberBoardIdBeforeDelete(id);
     // APAGAR DE VERDADE TEM UM CONJUNTO SÓ, E ELE JÁ ESTAVA ESCRITO AQUI AO
@@ -3261,6 +3442,36 @@ function createWindow() {
   // ver o comentário de `main/board-presets.ts`. Dado puro, sem segredo e sem
   // efeito colateral: passivo, como `store:boards:list`.
   ipcMain.handle("store:board-presets:list", () => BOARD_PRESETS);
+  // Settings → Regras e gates: read/write the per-board context file
+  // (rules + gateToolPaths). Traps stay append-only from reports.
+  ipcMain.handle("board-context:get", (_e, boardId: string) => {
+    if (typeof boardId !== "string" || boardId.trim() === "") return { ok: false as const, error: "boardId required" };
+    const ctx = readBoardContext(app.getPath("userData"), boardId);
+    return {
+      ok: true as const,
+      rulesText: rulesTextFromEntries(ctx.rules),
+      gateToolPaths: ctx.gateToolPaths ?? [],
+      trapCount: ctx.traps.length,
+    };
+  });
+  ipcMain.handle("board-context:set-rules", (_e, boardId: string, text: unknown) => {
+    if (typeof boardId !== "string" || boardId.trim() === "") return { ok: false as const, error: "boardId required" };
+    if (typeof text !== "string") return { ok: false as const, error: "text must be a string" };
+    const dir = app.getPath("userData");
+    const prev = readBoardContext(dir, boardId);
+    writeBoardContext(dir, boardId, applyRulesText(prev, text));
+    return { ok: true as const };
+  });
+  ipcMain.handle("board-context:set-gate-tool-paths", (_e, boardId: string, paths: unknown) => {
+    if (typeof boardId !== "string" || boardId.trim() === "") return { ok: false as const, error: "boardId required" };
+    if (!Array.isArray(paths) || paths.some((p) => typeof p !== "string")) {
+      return { ok: false as const, error: "paths must be string[]" };
+    }
+    const dir = app.getPath("userData");
+    const prev = readBoardContext(dir, boardId);
+    writeBoardContext(dir, boardId, applyGateToolPaths(prev, paths as string[]));
+    return { ok: true as const };
+  });
   // Board orchestrator mark — UI-only, same narrow write path guarantee
   // as set-autonomous. Never reachable from message-bus/mcp-server.
   ipcMain.handle("store:boards:set-orchestrator-card", (_e, boardId: string, cardId: string | null) =>
@@ -3324,7 +3535,7 @@ function createWindow() {
         providers: [...tally.entries()].map(([provider, count]) => ({ provider, count })),
         tasksRunning: items.reduce((n, t) => n + (t.phase === "running" ? 1 : 0), 0),
         tasksAwaitingReview: awaiting.length,
-        awaitingReview: awaiting.map((t) => ({ taskId: t.id, title: t.prompt ?? "", updatedAt: t.updatedAt })),
+        awaitingReview: awaiting.map((t) => ({ taskId: t.id, title: t.promptPreview, updatedAt: t.updatedAt })),
       };
     }
     return out;
@@ -3424,6 +3635,14 @@ function createWindow() {
   // aberto).
   ipcMain.handle("store:tasks:list-by-board", (_e, boardId: string) => buildTaskBoard(boardId));
 
+  /** The live board payload carries only a prompt preview. Load the full
+   * briefing when a human opens the detail modal. */
+  ipcMain.handle("store:tasks:get-prompt", (_e, taskId: string) => {
+    const task = store.getTask(taskId);
+    if (!task) return { ok: false, error: `no such task "${taskId}"` };
+    return { ok: true, prompt: task.prompt };
+  });
+
   /** O DIFF que o app capturou nesta task (task 7096e8af) — SOB DEMANDA.
    * O push do board projeta `result_json` como NULL de propósito (tamanho:
    * medido 1,48 MB/evento); este canal só é aberto quando o modal de detalhe
@@ -3471,7 +3690,7 @@ function createWindow() {
     // `enqueueCardDelivery` with steer:true (0b728f1): same as send_to_card,
     // so a mid-turn park injects once instead of sitting in follow-ups.
     if (requesterId) {
-      messageBus?.notifyHumanMovedTask(requesterId, describeStatusAskResolved(requested, allowed));
+      messageBus?.notifyHumanMovedTask(requesterId, requested, allowed);
     }
     return { ok: true };
   });
@@ -3992,6 +4211,11 @@ function createWindow() {
   }
 
   ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
+  ipcMain.handle("git:show-head", (_e, cwd: string, filePath: string) => gitShowHead(cwd, filePath));
+  ipcMain.handle("git:diff-head", (_e, cwd: string, filePath: string) => gitDiffHeadUnified(cwd, filePath));
+  ipcMain.handle("project:diagnose", (_e, root: string, relativePath: string) =>
+    diagnoseProject(root, relativePath),
+  );
   ipcMain.handle("git:attribution", (_e, root: string) => diffAttributionFor(root));
   ipcMain.handle("git:verify-slice", async (_e, root: string, paths: string[]) => verifySliceFor(root, paths));
   /**
@@ -4008,7 +4232,11 @@ function createWindow() {
   ipcMain.handle("fs:watch-stop", (_e, root: string, clientId: string) => stopWatching(root, clientId));
   ipcMain.handle("fs:watch-stats", () => getWatchStats());
 
-  ipcMain.handle("browser:create", (_e, id: string, url: string) => browserRegistry.create(id, url));
+  ipcMain.handle(
+    "browser:create",
+    (_e, id: string, url: string, opts?: { persistent?: boolean }) => browserRegistry.create(id, url, opts),
+  );
+  ipcMain.handle("browser:get-profile", (_e, id: string) => browserRegistry.getProfile(id));
   ipcMain.handle("browser:navigate", (_e, id: string, url: string) => browserRegistry.navigate(id, url));
   ipcMain.handle("browser:back", (_e, id: string) => browserRegistry.back(id));
   ipcMain.handle("browser:forward", (_e, id: string) => browserRegistry.forward(id));
@@ -4111,8 +4339,9 @@ function createWindow() {
   ipcMain.handle(
     "browser:set-device-emulation",
     (_e, id: string, params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null) =>
-      browserRegistry.setDeviceEmulation(id, params),
+      browserRegistry.setDeviceEmulation(id, params, "inspector"),
   );
+  ipcMain.handle("browser:get-device-emulation", (_e, id: string) => browserRegistry.getDeviceEmulation(id));
   ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
   ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
   ipcMain.on("browser:input-key", (_e, id: string, evt: BrowserKeyEvent) => browserRegistry.sendKeyEvent(id, evt));
@@ -5042,6 +5271,11 @@ app.whenReady().then(async () => {
       mcpEnabled: spec.capacity.mcp.mechanism === "global-config",
       mcpConfigPath: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configPath : null,
       mcpConfigKey: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configKey : null,
+      // Distinct from mcpEnabled=false (= CLI has no MCP): the app knows the
+      // CLI has MCP but cannot write its config shape (e.g. SQLite).
+      mcpUnsupportedByApp: spec.capacity.mcp.mechanism === "unsupported-by-app",
+      mcpUnsupportedReason:
+        spec.capacity.mcp.mechanism === "unsupported-by-app" ? spec.capacity.mcp.reason : null,
       source,
       // Quanto da declaração do app esta linha carrega (ver
       // `coversWholeDeclaration`): "none" | "partial" | "whole". A ORIGEM

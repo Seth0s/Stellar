@@ -56,6 +56,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: BOARD,
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -256,6 +257,7 @@ describe("auto-dispatch — a MESMA regra do gate, uma função acima (2026-09-2
       status: "pending",
       provider: "claude",
       cwd: "/etc",
+    spawn_profile: null,
       deps_json: JSON.stringify(["dep-done"]),
     });
     rows.set(dep.id, { ...dep, status: "running" });

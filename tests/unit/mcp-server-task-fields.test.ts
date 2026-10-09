@@ -25,6 +25,7 @@ describe("mcp-server: purpose / role on the tool surface", () => {
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      requireIdentity: false,
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         seen.push(req);
         return { ok: true, echoed: req };
@@ -69,7 +70,10 @@ describe("mcp-server: purpose / role on the tool surface", () => {
     const schema = await schemaOf("update_task");
     expect(schema.properties?.purpose).toBeUndefined();
     seen.length = 0;
-    const res = await client.callTool({ name: "update_task", arguments: { taskId: "t1", status: "done", purpose: "fix" } });
+    const res = (await client.callTool({ name: "update_task", arguments: { taskId: "t1", status: "done", purpose: "fix" } })) as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
     // ATÉ 2026-09-20 este teste afirmava o oposto — `isError` falso e a chave
     // chegando ao bus (e sendo descartada lá). Era o comportamento errado
     // fixado como esperado: o mesmo descarte silencioso que deixou 8 tasks com
@@ -175,6 +179,7 @@ describe("mcp-server: campo de chamada dentro do payload", () => {
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      requireIdentity: false,
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         seen.push(req);
         return { ok: true, echoed: req };

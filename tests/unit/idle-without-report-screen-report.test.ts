@@ -83,6 +83,6 @@ describe("decideIdleWithoutReport — notify_screen_report", () => {
 
   it("o corpo do aviso diz o que se vê (relatório na tela, sem report)", () => {
     expect(screenReportPointerBody()).toMatch(/on screen/i);
-    expect(screenReportPointerBody()).toMatch(/never called/i);
+    expect(screenReportPointerBody()).toMatch(/report left on screen/i);
   });
 });

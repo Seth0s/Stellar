@@ -118,14 +118,14 @@ describe("pruneRendererGoneReloads / formatRendererGoneLogLine", () => {
 describe("decideSafeSend", () => {
   it("bloqueia janela/contents destruídos e frame inalcançável", () => {
     expect(
-      decideSafeSend({ windowDestroyed: true, contentsDestroyed: false, rendererReachable: true }).reason,
-    ).toBe("window-destroyed");
+      decideSafeSend({ windowDestroyed: true, contentsDestroyed: false, rendererReachable: true }),
+    ).toEqual({ action: "skip", reason: "window-destroyed" });
     expect(
-      decideSafeSend({ windowDestroyed: false, contentsDestroyed: true, rendererReachable: true }).reason,
-    ).toBe("contents-destroyed");
+      decideSafeSend({ windowDestroyed: false, contentsDestroyed: true, rendererReachable: true }),
+    ).toEqual({ action: "skip", reason: "contents-destroyed" });
     expect(
-      decideSafeSend({ windowDestroyed: false, contentsDestroyed: false, rendererReachable: false }).reason,
-    ).toBe("renderer-unreachable");
+      decideSafeSend({ windowDestroyed: false, contentsDestroyed: false, rendererReachable: false }),
+    ).toEqual({ action: "skip", reason: "renderer-unreachable" });
     expect(
       decideSafeSend({ windowDestroyed: false, contentsDestroyed: false, rendererReachable: true }),
     ).toEqual({ action: "send" });

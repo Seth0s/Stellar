@@ -365,6 +365,16 @@ export function useBoardStore(
     toast(cap === null ? t("toast.concurrencyDefault") : t("toast.concurrencyCap", { cap }));
   }
 
+  function setBoardDefaults(
+    id: string,
+    defaults: { review: "wanted" | null; reportSchema: string[] | null; allowCommit: boolean | null },
+  ) {
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, ...boardTaskDefaultsToSql(defaults) } : b)));
+    void window.store.boards.setDefaults(id, defaults).then((res) => {
+      if (!res.ok) void window.store.boards.list().then(setBoards);
+    });
+  }
+
   /**
    * BOARD PRESETS, FASE 2 (task 83f4cfa3) — aplicar um preset no board.
    *
@@ -500,6 +510,7 @@ export function useBoardStore(
     deleteBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    setBoardDefaults,
     applyBoardPreset,
     setBoardOrchestratorCard,
     clearOrchestratorMarkIfCard,

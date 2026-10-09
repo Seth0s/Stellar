@@ -19,13 +19,15 @@ import type { BusRequest, BusResponse } from "../../src/main/message-bus";
 describe("mcp-server: report argument envelope", () => {
   let server: ReturnType<typeof createMcpServer>;
   let client: Client;
-  const seen: BusRequest[] = [];
+  type ReportReq = Extract<BusRequest, { cmd: "report" }>;
+  const seen: ReportReq[] = [];
 
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      requireIdentity: false,
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
-        seen.push(req);
+        if (req.cmd === "report") seen.push(req);
         return { ok: true, echoed: req };
       },
     });

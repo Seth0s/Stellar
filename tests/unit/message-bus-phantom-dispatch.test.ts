@@ -61,6 +61,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -101,6 +102,7 @@ describe("auto-dispatch não pare card fantasma", () => {
       status: "pending",
       deps_json: JSON.stringify(["dep-done"]),
       cwd: null,
+    spawn_profile: null,
       prompt: "fase 2",
     });
     const stored: TaskRow = { ...snapshot, cwd: "/tmp/stellar-wt/w1" };

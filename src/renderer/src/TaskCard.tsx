@@ -1,6 +1,7 @@
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CardFrame } from "./CardFrame";
+import { decideTaskFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import { useModal } from "./useModal";
@@ -8,8 +9,6 @@ import type { Rect } from "./board-model";
 import type { TaskBoardItem } from "../../preload/index";
 import { parseTaskPrompt } from "../../task-prompt-decision";
 import {
-  COLUMN_ORDER,
-  COLUMN_TO_STATUS,
   columnForStatus,
   groupTasksByColumn,
   originBadge,
@@ -23,8 +22,6 @@ import {
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
-  resolveConcurrencyCap,
-  computeBoardScope,
   computeCycleTime,
   computeColumnDrop,
   isTaskCardLive,
@@ -52,8 +49,6 @@ import {
   sprintLabel,
   snapshotTaskToBoardItem,
   deriveTaskPhaseForBoardItem,
-  filterTasksByAwaitingReview,
-  countAwaitingReview,
   PHASE_LABEL_KEY,
   PHASE_TONE,
   TASK_HOVER_EVENT,
@@ -63,6 +58,9 @@ import {
   type MetaPillKind,
   type SprintView,
 } from "./task-board-model";
+import { TaskFilaV3Board, type QueueColumn } from "./TaskFilaV3Board";
+import { queueColumnToStatus, QUEUE_COLUMN_ORDER } from "./task-fila-v3-decision";
+import { TaskDetailV3 } from "./TaskDetailV3";
 import { computeWorkStats, formatCycleMinutes, MIN_COMPARE_N } from "./work-stats";
 import {
   decideTaskDiffPresentation,
@@ -82,24 +80,6 @@ import { getLocale, t } from "../../shared/i18n";
  * apresentação (não uma decisão testável) — mesmo tratamento que
  * `ROLE_LABEL` abaixo já recebe, vivendo no componente, não no módulo
  * puro. */
-const COLUMN_COLOR: Record<TaskColumn, string> = {
-  todo: "var(--muted)",
-  doing: "var(--foam)",
-  done: "var(--good)",
-  failed: "var(--danger)",
-  // Superseded is NEUTRAL: nobody failed.
-  superseded: "var(--muted)",
-};
-
-/** RODADA 3 (contrato §2.3, item 8) — empty column messages via i18n. */
-const COLUMN_EMPTY_KEY = {
-  todo: "task.empty.todo",
-  doing: "task.empty.doing",
-  done: "task.empty.done",
-  failed: "task.empty.failed",
-  superseded: "task.empty.superseded",
-} as const satisfies Record<TaskColumn, "task.empty.todo" | "task.empty.doing" | "task.empty.done" | "task.empty.failed" | "task.empty.superseded">;
-
 /** Column header keys — JSX only; agent-facing COLUMN_TITLE stays in the model. */
 const COLUMN_HEADER_KEY = {
   todo: "task.column.todo",
@@ -109,41 +89,14 @@ const COLUMN_HEADER_KEY = {
   superseded: "task.column.superseded",
 } as const satisfies Record<TaskColumn, "task.column.todo" | "task.column.doing" | "task.column.done" | "task.column.failed" | "task.column.superseded">;
 
-/** DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 — rodapé de escopo. Vive no
- * `footerContent` do `CardFrame`. Contagem "N em outros boards" é texto
- * puro (nunca link). O botão "trocar de board" da rodada anterior foi
- * REMOVIDO a pedido do dono do repo (2ª rodada de fidelidade) — a Home
- * continua alcançável pelo fluxo normal do app, não por este rodapé.
- *
- * §0 (2026-09-12) — o número principal é o sprint em foco (`focusedSprintCount`:
- * comprimento do quadro vivo ou do snapshot congelado). O total histórico
- * do board, quando diverge, aparece só como "total N" rotulado. */
-function TaskScopeFooter({
-  activeBoardId,
-  boardNames,
-  taskCountsByBoard,
-  focusedSprintCount,
-}: {
-  activeBoardId: string;
-  boardNames: Record<string, string>;
-  taskCountsByBoard: Record<string, number>;
-  focusedSprintCount: number;
-}) {
-  const scope = computeBoardScope(activeBoardId, taskCountsByBoard, boardNames, focusedSprintCount);
-  const ownName = boardNames[activeBoardId] ?? activeBoardId;
-  const otherBoardsTooltip = scope.otherBoards.map((b) => `${b.name ?? `board ${b.boardId} (não existe)`} (${b.count})`).join(", ");
-  const showBoardTotal = scope.boardTotal !== scope.ownCount;
+function TaskPulseFooter({ tasks }: { tasks: TaskBoardItem[] }) {
+  const pulse = decideTaskFooter(tasks, Date.now());
   return (
-    <span data-part="board-scope" className={styles.scopeFooter}>
-      <span className={styles.scopeOwn}>
-        {t("task.scope.board", { name: ownName })} · {t("task.scope.tasks", { n: scope.ownCount })}
-        {showBoardTotal ? ` · total ${scope.boardTotal}` : ""}
-      </span>
-      {scope.otherTotal > 0 && (
-        <span className={styles.scopeRight} title={otherBoardsTooltip}>
-          {t("task.scope.others", { n: scope.otherTotal })}
-        </span>
-      )}
+    <span className="card-foot-row" data-role="task-card-pulse">
+      <span data-tone="good">{pulse.working} trabalhando</span>
+      <span>{pulse.review} em revisão</span>
+      <span data-tone="warn">{pulse.needsHuman} precisam de você</span>
+      {pulse.latestAge !== null && <span>atualizado {pulse.latestAge}</span>}
     </span>
   );
 }
@@ -273,7 +226,8 @@ function GateChip({ gate, progress }: { gate: TaskBoardItem["gateRun"]; progress
  * contrato de fidelidade contra o protótipo pedido no review da RODADA 2,
  * fechado visualmente nesta rodada (comparação lado a lado, dono do
  * repo). */
-function TaskItem({
+/** Kept for unit/DOM tests that still mount the legacy tile anatomy. */
+export function TaskItem({
   task,
   now,
   rank,
@@ -365,7 +319,7 @@ function TaskItem({
   const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
   const statusAskNotice = describeStatusAskNotice(task.requestedStatus);
   const interruptNotice = task.interruptionReason;
-  const parsedPrompt = parseTaskPrompt(task.prompt);
+  const promptPreview = task.promptPreview;
   // Task 22f0a649 — a pergunta estruturada de `blocked`, respondida AQUI pelo
   // humano. `blockedQuestionOf` devolve null para shape podre/ausente: um
   // `blocked` sem pergunta não renderiza bloco nenhum (e é recusado na escrita).
@@ -427,7 +381,10 @@ function TaskItem({
           {describePurposeChip(purposeChip)}
         </div>
       )}
-      <div className={styles.prompt}>{parsedPrompt.original || t("task.noPrompt")}</div>
+      <div className={styles.prompt}>
+        {promptPreview || t("task.noPrompt")}
+        {task.promptTruncated ? "…" : ""}
+      </div>
       {task.cards.length > 0 && (
         <div className={styles.chips}>
           {task.cards.map((c) => (
@@ -578,7 +535,8 @@ function DiffFileRow({ row }: { row: DiffRow }) {
  * live divergence that a board row can otherwise hide in a clamp. Portaled
  * to `document.body` so screen-projected card transform never clips it.
  * Does not go through App.tsx (settings modal lives there). */
-function TaskDetailModal({
+/** Legacy detail modal — TaskDetailV3 is the V3 surface; keep for smoke parity. */
+export function TaskDetailModal({
   task,
   now,
   readOnly,
@@ -590,7 +548,10 @@ function TaskDetailModal({
   onClose: () => void;
 }) {
   const { modalProps } = useModal({ onClose });
-  const parsed = parseTaskPrompt(task.prompt);
+  const [fullPrompt, setFullPrompt] = useState<string | null>(null);
+  const [promptLoading, setPromptLoading] = useState(true);
+  const [promptLoadError, setPromptLoadError] = useState<string | null>(null);
+  const parsed = parseTaskPrompt(fullPrompt);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -605,6 +566,52 @@ function TaskDetailModal({
   // ESTE modal abre — o push do board não o carrega (tamanho). `null` do canal
   // vira o bloco AUSENTE (`present: false`), nunca um "vazio" inventado.
   const [diff, setDiff] = useState<TaskDiffView | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPromptLoading(true);
+    setPromptLoadError(null);
+
+    // A frozen sprint has its own immutable prompt snapshot. Live tasks use
+    // the on-demand IPC so task:changed never needs to carry the full text.
+    if (readOnly && task.promptSnapshot !== undefined) {
+      setFullPrompt(task.promptSnapshot);
+      setPromptLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const fetchPrompt = window.tasks?.getPrompt;
+    if (typeof fetchPrompt !== "function") {
+      setPromptLoadError(t("task.detail.error", { error: "prompt lookup unavailable" }));
+      setPromptLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void fetchPrompt(task.id)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          setPromptLoadError(t("task.detail.error", { error: result.error }));
+          return;
+        }
+        setFullPrompt(result.prompt);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          setPromptLoadError(t("task.detail.error", { error: message }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPromptLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [readOnly, task.id, task.promptSnapshot, task.updatedAt]);
+
   useEffect(() => {
     let cancelled = false;
     // Um duplo de teste (ou um preload antigo) pode não expor o canal: ausência
@@ -636,6 +643,7 @@ function TaskDetailModal({
         return;
       }
       setDraft("");
+      setFullPrompt(res.prompt);
     } finally {
       setBusy(false);
     }
@@ -794,19 +802,29 @@ function TaskDetailModal({
 
           <section>
             <div className={styles.detailSectionTitle}>{t("task.detail.prompt")}</div>
-            <div className={`${styles.detailScroll} ${styles.detailScrollTall}`} data-part="task-detail-prompt">
-              <div className={styles.detailPromptBlock} data-part="task-detail-prompt-original">
-                <span className={styles.detailPromptLabel}>{t("task.detail.promptOriginal")}</span>
-                {parsed.original || t("task.noPrompt")}
+            {promptLoading ? (
+              <div className={styles.detailHint} data-part="task-detail-prompt-loading" role="status">
+                {t("common.loading")}
               </div>
-              {parsed.additions.map((addition, i) => (
-                <div key={`${addition.at}-${i}`} className={styles.detailPromptBlock} data-part="task-detail-prompt-added">
-                  <span className={styles.detailPromptLabel}>{t("task.detail.promptAdded", { when: formatPromptWhen(addition.at) })}</span>
-                  {addition.text}
+            ) : promptLoadError ? (
+              <p className={styles.detailError} data-part="task-detail-prompt-error" role="alert">
+                {promptLoadError}
+              </p>
+            ) : (
+              <div className={`${styles.detailScroll} ${styles.detailScrollTall}`} data-part="task-detail-prompt">
+                <div className={styles.detailPromptBlock} data-part="task-detail-prompt-original">
+                  <span className={styles.detailPromptLabel}>{t("task.detail.promptOriginal")}</span>
+                  {parsed.original || t("task.noPrompt")}
                 </div>
-              ))}
-            </div>
-            {!readOnly && (
+                {parsed.additions.map((addition, i) => (
+                  <div key={`${addition.at}-${i}`} className={styles.detailPromptBlock} data-part="task-detail-prompt-added">
+                    <span className={styles.detailPromptLabel}>{t("task.detail.promptAdded", { when: formatPromptWhen(addition.at) })}</span>
+                    {addition.text}
+                  </div>
+                ))}
+              </div>
+            )}
+            {!readOnly && !promptLoading && !promptLoadError && (
               <>
                 <textarea
                   data-part="task-detail-prompt-draft"
@@ -1518,6 +1536,7 @@ function SprintsPanel({
 }
 
 function TaskCardInner({
+  cardId,
   rect,
   zoom,
   zIndex,
@@ -1530,7 +1549,6 @@ function TaskCardInner({
   concurrencyCapRaw,
   activeBoardId,
   boardNames,
-  taskCountsByBoard,
   onChange,
   onCommit,
   onRaise,
@@ -1540,13 +1558,14 @@ function TaskCardInner({
   onRename,
   onConnectorStart,
   onSelectStart,
-  onApproveCompletion,
+  onApproveCompletion: _onApproveCompletion,
   openTaskRequestId,
   onOpenTaskHandled,
   screenProjected,
   panX,
   panY,
 }: {
+  cardId: string;
   rect: Rect;
   zoom: number;
   zIndex: number;
@@ -1564,14 +1583,8 @@ function TaskCardInner({
    * default"), já carregado no estado `boards` de App.tsx — nenhuma
    * consulta nova só pro badge de WIP, ver `resolveConcurrencyCap`. */
   concurrencyCapRaw: number | null;
-  /** RODADA 3, peça 5 — rodapé de escopo. `taskCountsByBoard` é GLOBAL
-   * (todo board, não só este), `boardNames` é `{boardId: nome}` de
-   * `App.tsx`'s próprio estado `boards` (`useMemo`, ver seu comentário) —
-   * um boardId ausente daqui é um board que não existe mais (o achado
-   * desta rodada). */
   activeBoardId: string;
   boardNames: Record<string, string>;
-  taskCountsByBoard: Record<string, number>;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -1599,12 +1612,11 @@ function TaskCardInner({
   panY?: number;
 }) {
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
-  // FILTRO RÁPIDO (task 6266d3e7) — "aguardando revisão". Estado SÓ de UI: some
-  // ao reabrir o card. Clicar filtra; clicar de novo limpa (mesmo botão).
-  const [awaitingReviewOnly, setAwaitingReviewOnly] = useState(false);
+  const [queueQuery, setQueueQuery] = useState("");
+  const [creatingTask, setCreatingTask] = useState(false);
   // HOVER da gaveta (task 6266d3e7): a ReservationDrawer (de QUALQUER card)
   // emite `stellar:task-hover` no window; aqui o item correspondente acende.
-  const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+  const [, setHoveredTaskId] = useState<string | null>(null);
   // INDICADOR DE GATE (task ff24b36d) — quem segura/espera um lock de gate
   // AGORA (app ou `acbridge gate-lock`). Vazio = nenhum comando pesado rodando.
   const [gateLocks, setGateLocks] = useState<{ scope: "repo" | "machine"; label: string; cardId: string | null; queued: number }[]>([]);
@@ -1636,12 +1648,8 @@ function TaskCardInner({
     }
     onOpenTaskHandled?.();
   }, [openTaskRequestId, boardTasks, onOpenTaskHandled]);
-  // FILTRO RÁPIDO (task 6266d3e7): a MESMA derivação de fase alimenta o
-  // contador e o filtro. O filtro é de APRESENTAÇÃO (as colunas mostram só o
-  // subconjunto) — o modal de detalhe continua achando a task em `boardTasks`.
-  const awaitingReviewCount = countAwaitingReview(boardTasks);
-  const visibleBoardTasks = filterTasksByAwaitingReview(boardTasks, awaitingReviewOnly);
-  const groups = groupTasksByColumn(visibleBoardTasks);
+  // Legacy status columns still feed charts/WIP; the visible Fila uses phase columns.
+  const groups = groupTasksByColumn(boardTasks);
   // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
   // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push
   // de `task:changed` re-renderizar este componente NO MEIO de um arraste
@@ -1652,7 +1660,7 @@ function TaskCardInner({
   // closure velha).
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
-  const cap = resolveConcurrencyCap(concurrencyCapRaw);
+  void concurrencyCapRaw;
   // RODADA 4 — relógio ÚNICO do card (nunca um setInterval por task).
   // Granularidade de `formatTaskAge` é minuto; 15s basta pra "agora"→"1min"
   // sem acordar o renderer à toa.
@@ -1809,7 +1817,7 @@ function TaskCardInner({
       if (!isHumanCreatedTask(taskItem.firstActor)) continue;
       if (didHumanTaskGetClaimed(prev.get(taskItem.id), snap)) {
         try {
-          new Notification(t("task.dragGhost"), { body: taskItem.prompt?.slice(0, 120) || shortTaskId(taskItem.id), silent: false });
+          new Notification(t("task.dragGhost"), { body: taskItem.promptPreview.slice(0, 120) || shortTaskId(taskItem.id), silent: false });
         } catch {
           // Notification API indisponível/negada — nunca deve quebrar o quadro.
         }
@@ -1823,12 +1831,12 @@ function TaskCardInner({
   // REAL do DOM no momento do pointermove/pointerup (hit-test de
   // coordenada de tela), nunca de re-render por causa deles — mesma razão
   // de `CardFrame.tsx`'s `rectRef` existir como ref e não como estado.
-  const columnBodyRefs = useRef<Partial<Record<TaskColumn, HTMLDivElement | null>>>({});
+  const columnBodyRefs = useRef<Partial<Record<QueueColumn, HTMLDivElement | null>>>({});
   // Estado de fato (precisa re-renderizar): qual task está sendo
   // arrastada (some da lista normal enquanto isso — ver o filtro abaixo)
   // e onde ela pousaria se soltasse agora (a "zona fantasma").
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState<{ column: TaskColumn; index: number } | null>(null);
+  const [dragOver, setDragOver] = useState<{ column: QueueColumn; index: number } | null>(null);
   // ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 2, MÉDIO-ALTO) —
   // `beginTaskDrag` registrava `pointermove`/`pointerup` no `window` sem
   // nenhuma garantia de remoção fora do caminho feliz: alt-tab durante o
@@ -1852,11 +1860,9 @@ function TaskCardInner({
    * ANTES dele). Mesma técnica de coordenadas de tela que
    * `CardFrame.tsx`'s `onResizePointerDown`/`onHeaderPointerDown` já usam
    * (`getBoundingClientRect`/`clientX`/`clientY`), não uma segunda. */
-  function locateDropTarget(taskId: string, clientX: number, clientY: number): { column: TaskColumn; index: number } | null {
-    for (const col of COLUMN_ORDER) {
-      // The "superseded" column is NOT a drop target: the status requires a
-      // `supersededBy` (only the orchestrator/human write it) and is not a drag
-      // destination.
+  function locateDropTarget(taskId: string, clientX: number, clientY: number): { column: QueueColumn; index: number } | null {
+    for (const col of QUEUE_COLUMN_ORDER) {
+      // Superseded is not a drop target: it needs supersededBy from the writer.
       if (col === "superseded") continue;
       const el = columnBodyRefs.current[col];
       if (!el) continue;
@@ -1898,10 +1904,11 @@ function TaskCardInner({
    * a Fila mostra a marca de movimento humano; o card de trabalho NÃO
    * recebe push (interrupt não pedido). Status-ask Allow/Deny é outro
    * canal. */
-  function onDropTask(task: TaskBoardItem, column: TaskColumn, index: number) {
-    const destination = groupsRef.current[column].filter((t) => t.id !== task.id);
+  function onDropTask(task: TaskBoardItem, column: QueueColumn, index: number) {
+    // Destination list for ordering: tasks currently shown in that queue column.
+    const destination = boardTasks.filter((t) => t.id !== task.id);
     const result = computeColumnDrop(destination, index);
-    const status = COLUMN_TO_STATUS[column];
+    const status = queueColumnToStatus(column);
     window.tasks.moveTask(task.id, status, result.order, result.siblingImplicitOrders);
   }
 
@@ -1970,6 +1977,7 @@ function TaskCardInner({
     <CardFrame
       className=""
       kind="task"
+      cardId={cardId}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -1990,19 +1998,13 @@ function TaskCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      headerContext={<>{boardNames[activeBoardId] ?? activeBoardId}{activeSprintLabel ? ` · ${activeSprintLabel}` : ""}</>}
+      headerStatus={<span>{viewingFrozen ? "snapshot da sprint" : "quadro ao vivo"}</span>}
       footerContent={
-        <TaskScopeFooter
-          activeBoardId={activeBoardId}
-          boardNames={boardNames}
-          taskCountsByBoard={taskCountsByBoard}
-          focusedSprintCount={boardTasks.length}
-        />
+        <TaskPulseFooter tasks={boardTasks} />
       }
       headerContent={
         <>
-          <span className="card-head-label">
-            <Icon name="task" size={14} />
-          </span>
           <span className="card-head-actions">
             <button
               type="button"
@@ -2050,26 +2052,6 @@ function TaskCardInner({
           </button>
         </div>
       )}
-      {/* FILTRO RÁPIDO (task 6266d3e7) — "aguardando revisão" com contador.
-          Clicar filtra; clicar de novo limpa. Sem resultado → as colunas ficam
-          vazias e o próprio botão diz que o filtro está ligado (o contador
-          mostra 0), nunca um vazio mudo. */}
-      <div className={styles.phaseFilterBar} data-part="phase-filter">
-        <button
-          type="button"
-          className={`${styles.phaseFilterBtn} ${awaitingReviewOnly ? styles.phaseFilterActive : ""}`}
-          aria-pressed={awaitingReviewOnly}
-          onClick={() => setAwaitingReviewOnly((v) => !v)}
-        >
-          {t("task.filter.awaitingReview")}
-          <span className={styles.phaseFilterCount} data-part="phase-filter-count">
-            {awaitingReviewCount}
-          </span>
-        </button>
-      </div>
-      {/* INDICADOR DE GATE (task ff24b36d) — discreto: só aparece quando um
-          comando pesado (gate do app ou `acbridge gate-lock`) está rodando, e
-          diz QUEM segura (task/card). Ausente = nada rodando (nunca um "0"). */}
       {gateLocks.length > 0 && (
         <div className={styles.gateLockBar} data-part="gate-lock-indicator">
           {gateLocks.map((lock, i) => (
@@ -2086,74 +2068,36 @@ function TaskCardInner({
           ))}
         </div>
       )}
-      <div className={styles.board} data-sprint-frozen={viewingFrozen ? "true" : "false"}>
-        {COLUMN_ORDER.map((col) => (
-          <div key={col} className={styles.column}>
-            <div className={styles.columnHeader} data-part="column-header" style={{ color: COLUMN_COLOR[col] }}>
-              <span>{t(COLUMN_HEADER_KEY[col])}</span>
-              {col === "doing" ? (
-                <span className={styles.wipBadge} data-part="wip-badge">
-                  {t("task.wip", { current: groups.doing.length, cap })}
-                </span>
-              ) : (
-                <span className={styles.columnCount} data-part="column-count">
-                  {groups[col].length}
-                </span>
-              )}
-            </div>
-            <div
-              className={styles.columnBody}
-              ref={(el) => {
-                columnBodyRefs.current[col] = el;
-              }}
-            >
-              {col === "todo" && !viewingFrozen && <CreateTaskForm boardId={activeBoardId} onCreated={() => {}} />}
-              {/* FASE 2, peça 3 — a task arrastada some da lista normal
-                  enquanto o gesto dura (mesma lista que `locateDropTarget`
-                  compara pela posição real do DOM); a "zona fantasma"
-                  (`data-part="drop-ghost"`, contrato §2.3 item 7 —
-                  "ausente, peça 3 adiada" — agora presente) aparece no
-                  índice exato onde ela pousaria. */}
-              {(() => {
-                const visible = draggingTaskId ? groups[col].filter((t) => t.id !== draggingTaskId) : groups[col];
-                const overHere = !viewingFrozen && dragOver && dragOver.column === col ? dragOver : null;
-                return (
-                  <>
-                    {visible.length === 0 && !overHere && (
-                      <div className={styles.empty} data-part="column-empty">
-                        {t(COLUMN_EMPTY_KEY[col])}
-                      </div>
-                    )}
-                    {visible.map((task, i) => (
-                      <Fragment key={task.id}>
-                        {overHere && overHere.index === i && (
-                          <div className={styles.dropGhost} data-part="drop-ghost">
-                            solta aqui para mover
-                          </div>
-                        )}
-                        <TaskItem
-                          task={task}
-                          now={now}
-                          rank={i + 1}
-                          hovered={task.id === hoveredTaskId}
-                          onApproveCompletion={viewingFrozen ? () => {} : onApproveCompletion}
-                          onDragPointerDown={(e) => beginTaskDrag(task, e)}
-                          onOpenTask={(id) => setOpenTaskId(id)}
-                        />
-                      </Fragment>
-                    ))}
-                    {overHere && overHere.index === visible.length && (
-                      <div className={styles.dropGhost} data-part="drop-ghost">
-                        solta aqui para mover
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        ))}
-      </div>
+      <TaskFilaV3Board
+        tasks={boardTasks}
+        now={now}
+        query={queueQuery}
+        onQueryChange={setQueueQuery}
+        onOpenTask={(id) => setOpenTaskId(id)}
+        onBeginDrag={beginTaskDrag}
+        draggingTaskId={draggingTaskId}
+        dragOver={dragOver}
+        columnBodyRefs={columnBodyRefs}
+        viewingFrozen={viewingFrozen}
+        onOpenCharts={() => setChartsOpen(true)}
+        onCreateTask={() => setCreatingTask(true)}
+        totalDoneCount={
+          typeof (window as unknown as { __STELLAR_FILA_DONE_TOTAL__?: number }).__STELLAR_FILA_DONE_TOTAL__ ===
+          "number"
+            ? (window as unknown as { __STELLAR_FILA_DONE_TOTAL__: number }).__STELLAR_FILA_DONE_TOTAL__
+            : groups.done.length
+        }
+      />
+      {creatingTask && !viewingFrozen && (
+        <div data-part="create-task-inline" style={{ padding: "8px 18px" }}>
+          <CreateTaskForm
+            boardId={activeBoardId}
+            onCreated={() => {
+              setCreatingTask(false);
+            }}
+          />
+        </div>
+      )}
       <TeamQueueSection boardId={activeBoardId} onOpenTask={(id) => setOpenTaskId(id)} />
       {sprintsOpen && (
         <SprintsPanel
@@ -2171,7 +2115,14 @@ function TaskCardInner({
       )}
       {chartsOpen && <ChartsPanel tasks={boardTasks} />}
       {openTask && (
-        <TaskDetailModal task={openTask} now={now} readOnly={viewingFrozen} onClose={() => setOpenTaskId(null)} />
+        <TaskDetailV3
+          task={openTask}
+          now={now}
+          readOnly={viewingFrozen}
+          sprintLabel={activeSprintLabel}
+          onClose={() => setOpenTaskId(null)}
+          onOpenTask={(id) => setOpenTaskId(id)}
+        />
       )}
     </CardFrame>
   );

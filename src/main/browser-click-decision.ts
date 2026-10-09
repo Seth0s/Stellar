@@ -242,18 +242,35 @@ export const CLICK_DESCRIBE_MAX_CHARS = 80;
  * `CLICK_SETTLE_STABLE_FRAMES` frames seguidos) é a rede para quem continuar
  * animando por conta própria.
  */
-export function clickResolveSource(selector: string): string {
+export function clickResolveSource(selector: string, frameSelector: string | null = null): string {
   const sel = JSON.stringify(selector);
+  const frameJson = frameSelector === null ? "null" : JSON.stringify(frameSelector);
   return `(async () => {
     ${clickExtractorSource()}
+    const frameSel = ${frameJson};
+    let root = document;
+    let offsetX = 0;
+    let offsetY = 0;
+    let view = window;
+    if (frameSel) {
+      const frame = document.querySelector(frameSel);
+      if (!frame) return { __noMatch: true };
+      const fr = frame.getBoundingClientRect();
+      offsetX = fr.x;
+      offsetY = fr.y;
+      const doc = frame.contentDocument;
+      if (!doc) return { __selectorError: "iframe contentDocument is inaccessible (cross-origin?)" };
+      root = doc;
+      view = doc.defaultView || window;
+    }
     let el = null;
     try {
-      el = document.querySelector(${sel});
+      el = root.querySelector(${sel});
     } catch (err) {
       return { __selectorError: String((err && err.message) || err) };
     }
     if (!el) return { __noMatch: true };
-    const matched = document.querySelectorAll(${sel}).length;
+    const matched = root.querySelectorAll(${sel}).length;
     // scroll-behavior: smooth (na própria página ou em qualquer container
     // rolável acima do alvo) faz o rect ser lido ANTES de o scroll andar —
     // medido: o clique caiu em html, 3000px acima do alvo, com a tool
@@ -261,11 +278,11 @@ export function clickResolveSource(selector: string): string {
     // restaurado logo depois, sem deixar rastro nenhum na página.
     const scrollers = [];
     for (let node = el.parentElement; node; node = node.parentElement) {
-      if (node === document.documentElement || node === document.body) {
+      if (node === root.documentElement || node === root.body) {
         scrollers.push(node);
         continue;
       }
-      const style = getComputedStyle(node);
+      const style = (view.getComputedStyle ? view.getComputedStyle(node) : getComputedStyle(node));
       if (/^(auto|scroll)$/.test(style.overflowX) || /^(auto|scroll)$/.test(style.overflowY)) scrollers.push(node);
     }
     const savedBehavior = scrollers.map((node) => node.style.scrollBehavior);
@@ -289,15 +306,25 @@ export function clickResolveSource(selector: string): string {
     let stableFrames = 0;
     let last = null;
     for (let i = 0; i < ${CLICK_SETTLE_MAX_SAMPLES}; i++) {
-      const scrollBefore = { x: window.scrollX, y: window.scrollY };
+      const scrollBefore = { x: view.scrollX || 0, y: view.scrollY || 0 };
       const rect = el.getBoundingClientRect();
-      last = __stellarSample(el, rect.x + rect.width / 2, rect.y + rect.height / 2, matched);
+      const localX = rect.x + rect.width / 2;
+      const localY = rect.y + rect.height / 2;
+      // Hit-test inside the frame's document; sample point is TOP-LEVEL CSS
+      // so Input.dispatchMouseEvent lands on the iframe content.
+      const localHit = root.elementFromPoint(localX, localY);
+      const sample = __stellarSample(el, offsetX + localX, offsetY + localY, matched);
+      sample.hit = __stellarDescribe(localHit);
+      sample.hitFacts = localHit ? (${COLLECT_CLICK_TARGET_FACTS_JS})(localHit) : null;
+      sample.relation = __stellarRelation(el, localHit);
+      sample.viewport = { width: window.innerWidth, height: window.innerHeight };
+      last = sample;
       await new Promise((resolve) => requestAnimationFrame(() => resolve()));
       const movedByRect =
         previousRect &&
         (Math.abs(rect.x - previousRect.x) > ${CLICK_SETTLE_TOLERANCE_PX} ||
           Math.abs(rect.y - previousRect.y) > ${CLICK_SETTLE_TOLERANCE_PX});
-      const movedByScroll = scrollBefore.x !== window.scrollX || scrollBefore.y !== window.scrollY;
+      const movedByScroll = scrollBefore.x !== (view.scrollX || 0) || scrollBefore.y !== (view.scrollY || 0);
       stableFrames = movedByRect || movedByScroll ? 0 : stableFrames + 1;
       previousRect = rect;
       if (stableFrames >= ${CLICK_SETTLE_STABLE_FRAMES}) return { __value: last };
@@ -311,21 +338,42 @@ export function clickResolveSource(selector: string): string {
  * leitura que fica entre a resolução acima e o `sendInputEvent`. É da
  * comparação entre as duas que sai o `drift`.
  */
-export function clickVerifySource(selector: string): string {
+export function clickVerifySource(selector: string, frameSelector: string | null = null): string {
   const sel = JSON.stringify(selector);
+  const frameJson = frameSelector === null ? "null" : JSON.stringify(frameSelector);
   return `(() => {
     ${clickExtractorSource()}
+    const frameSel = ${frameJson};
+    let root = document;
+    let offsetX = 0;
+    let offsetY = 0;
+    if (frameSel) {
+      const frame = document.querySelector(frameSel);
+      if (!frame) return { __noMatch: true };
+      const fr = frame.getBoundingClientRect();
+      offsetX = fr.x;
+      offsetY = fr.y;
+      const doc = frame.contentDocument;
+      if (!doc) return { __selectorError: "iframe contentDocument is inaccessible (cross-origin?)" };
+      root = doc;
+    }
     let el = null;
     try {
-      el = document.querySelector(${sel});
+      el = root.querySelector(${sel});
     } catch (err) {
       return { __selectorError: String((err && err.message) || err) };
     }
     if (!el) return { __noMatch: true };
     const rect = el.getBoundingClientRect();
-    return {
-      __value: __stellarSample(el, rect.x + rect.width / 2, rect.y + rect.height / 2, document.querySelectorAll(${sel}).length),
-    };
+    const localX = rect.x + rect.width / 2;
+    const localY = rect.y + rect.height / 2;
+    const localHit = root.elementFromPoint(localX, localY);
+    const sample = __stellarSample(el, offsetX + localX, offsetY + localY, root.querySelectorAll(${sel}).length);
+    sample.hit = __stellarDescribe(localHit);
+    sample.hitFacts = localHit ? (${COLLECT_CLICK_TARGET_FACTS_JS})(localHit) : null;
+    sample.relation = __stellarRelation(el, localHit);
+    sample.viewport = { width: window.innerWidth, height: window.innerHeight };
+    return { __value: sample };
   })()`;
 }
 

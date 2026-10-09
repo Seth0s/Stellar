@@ -1,34 +1,31 @@
 /**
  * One Electron process per shared `userData`.
  *
- * Measured 2026-09-14: `app.setName` is identical in `electron-vite dev`
- * and the packaged `/opt/Stellar/stellar` binary, so both resolve to the
- * same userData (`~/.config/stellar` after the identity migration; was
- * `~/.config/agent-canvas`) — same `agent-canvas.db`, same
- * `agent-canvas.sock`, same Chromium SingletonLock key. The previous
- * gate (`requestSingleInstanceLock` only when `app.isPackaged`) existed
- * so dev could open beside the installed app; that accommodation is the
- * bug class:
+ * `app.setName` is identical in `electron-vite dev` and the packaged
+ * `/opt/Stellar/stellar` binary, so both resolve to the same userData
+ * (`~/.config/stellar`) — same `agent-canvas.db`, same
+ * `agent-canvas.sock`, same Chromium SingletonLock key. Two instances on
+ * that profile are the bug class:
  *
  * - Socket: whoever binds first serves `acbridge` from BOTH trees.
- * - Card ids: seed is read once per process and advanced in memory
- *   (store.ts FURO 2) — two writers collide.
+ * - Card ids: the seed is read once per process and advanced in memory
+ *   (store.ts) — two writers collide.
  * - "Is the app running old code?" is ambiguous with two "the app"s.
  *
- * Rejected alternatives (same day, with measurement):
- * - Separate userData by mode: live DB holds boards Maestro + Idyplatform,
+ * Rejected alternatives:
+ * - Separate userData by mode: the live DB holds the owner's boards plus
  *   cards/tasks/secrets/remote-devices/board-assets. Dev against an empty
  *   profile would wake the owner without their boards — expectation
  *   destruction, not a fix. Needs an explicit reversible migration if
  *   ever chosen; not this change.
- * - Per-resource flock only: socket already probes EADDRINUSE; that does
+ * - Per-resource flock only: the socket already probes EADDRINUSE; that does
  *   not stop a second process opening the DB with an independent seed.
  *   Refusing start when the resource is taken is what
  *   `requestSingleInstanceLock` already is.
  *
- * Policy: always request the lock after `setName`. Shared DB stays shared
- * (dev still sees Maestro when the packaged app is closed). Concurrent
- * writers are refused — second launch focuses the holder via
+ * Policy: always request the lock after `setName`. The shared DB stays
+ * shared (dev still sees the same boards when the packaged app is closed).
+ * Concurrent writers are refused — the second launch focuses the holder via
  * `second-instance`.
  *
  * Identity note: a still-running pre-migration `agent-canvas` process
@@ -45,7 +42,7 @@ export type SingleInstancePolicy = {
 };
 
 /**
- * @param _isPackaged Kept so call sites that used to branch on
+ * @param _isPackaged Kept so call sites that branch on
  *   `app.isPackaged` stay honest — the value MUST NOT affect the policy.
  */
 export function decideSingleInstancePolicy(_isPackaged: boolean): SingleInstancePolicy {
@@ -53,20 +50,19 @@ export function decideSingleInstancePolicy(_isPackaged: boolean): SingleInstance
 }
 
 /**
- * A recusa precisa FALAR. Medido com o dono (2026-09-14): um agente rodou
- * o app para testar, perdeu o lock e o processo saiu com `app.quit()` —
- * código 0, stderr vazio. Quem estava do outro lado viu "abriu e fechou" e
- * concluiu que o próprio teste estava quebrado. Sair em silêncio com
- * código de sucesso é a mesma classe de defeito que este repo vem matando:
- * o app sabia a resposta e não contou.
+ * The refusal has to SPEAK: losing the lock exits with `app.quit()` —
+ * code 0, empty stderr — and whoever launched the app reads "opened and
+ * closed" and concludes their own test is broken. Exiting silently with a
+ * success code is the same defect class this repo keeps killing: the app
+ * knew the answer and didn't say it.
  *
- * Isto é uma STRING DE DIAGNÓSTICO, não UI: vai para o stderr do processo
- * que está desistindo, que é onde um humano num terminal ou um agente
- * lendo a saída do `npm run dev` de fato olha. Por isso não passa por
- * `t()` — não há janela para traduzir, e o leitor pode ser um agente.
+ * This is a DIAGNOSTIC STRING, not UI: it goes to the stderr of the process
+ * that is giving up, which is where a human in a terminal or an agent
+ * reading `npm run dev` output actually looks. So it does not go through
+ * `t()` — there is no window to translate, and the reader may be an agent.
  *
- * Diz as três coisas que faltavam: QUE não é falha do teste, POR QUE
- * (userData compartilhado, um processo por banco) e O QUE FAZER.
+ * It states the three things: THAT it is not a test failure, WHY (shared
+ * userData, one process per database) and WHAT TO DO.
  */
 export function describeSingleInstanceRefusal(userDataDir: string): string {
   return (

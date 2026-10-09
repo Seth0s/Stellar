@@ -55,6 +55,8 @@ let cardAgentRoles: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   setLocale("pt-BR");
   vi.clearAllMocks();
+  const w = window as unknown as { pty?: Record<string, unknown> };
+  w.pty = { ...(w.pty ?? {}), health: async () => null };
   cardAgentRoles = vi.fn(async () => [
     {
       cardId: "97924195",
@@ -78,6 +80,10 @@ beforeEach(() => {
     onChanged: () => () => {},
     onSprintsChanged: () => () => {},
     onScopeChanged: () => () => {},
+    getPrompt: async (taskId: string) => ({
+      ok: true,
+      prompt: taskId === T1 ? "PROMPT UM" : taskId === T2 ? "PROMPT DOIS" : "PROMPT TRÊS",
+    }),
     updatePrompt: async () => ({ ok: true }),
     respondStatusAsk: async () => ({ ok: true }),
     create: async () => ({ ok: true, taskId: "x" }),
@@ -85,6 +91,7 @@ beforeEach(() => {
     closeSprint: async () => ({ ok: true }),
     deleteSprint: async () => ({ ok: true }),
     move: async () => ({ ok: true }),
+    gateDiff: async () => null,
   };
 });
 
@@ -117,6 +124,7 @@ function terminalStub(overrides: Partial<ComponentProps<typeof TerminalCard>> = 
       onRename={noop}
       onResumeIdDiscovered={noop}
       onOpenUrl={noop}
+      shortcutOverridesRef={{ current: {} }}
       {...overrides}
     />
   );
@@ -159,7 +167,8 @@ describe("metade 2 (consumidor) — o pedido abre o modal DA TASK CERTA", () => 
   function task(id: string, prompt: string, status: string): TaskBoardItem {
     return {
       id,
-      prompt,
+      promptPreview: prompt,
+      promptTruncated: false,
       provider: "cline",
       status,
       cardId: null,
@@ -191,6 +200,7 @@ describe("metade 2 (consumidor) — o pedido abre o modal DA TASK CERTA", () => 
     const noop = () => {};
     return (
       <TaskCard
+        cardId="fila-test"
         rect={{ x: 0, y: 0, w: 700, h: 400 }}
         zoom={1}
         zIndex={1}
@@ -199,7 +209,6 @@ describe("metade 2 (consumidor) — o pedido abre o modal DA TASK CERTA", () => 
         concurrencyCapRaw={null}
         activeBoardId="b1"
         boardNames={{ b1: "Maestro" }}
-        taskCountsByBoard={{ b1: 2 }}
         onChange={noop}
         onCommit={noop}
         onRaise={noop}

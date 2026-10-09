@@ -3,12 +3,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { CardTag } from "@renderer/CardTag";
 
 describe("CardTag", () => {
-  it("shows the label and enters rename on the pencil button", () => {
+  it("shows the label and enters rename on double-click", () => {
     const onRename = vi.fn();
     render(<CardTag label="Bash 1" onRename={onRename} />);
 
     expect(screen.getByText("Bash 1")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /renomeável/i }));
+    fireEvent.doubleClick(screen.getByText("Bash 1"));
     const input = screen.getByDisplayValue("Bash 1");
     fireEvent.change(input, { target: { value: "orquestrador" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -33,7 +33,7 @@ describe("CardTag", () => {
     const onRename = vi.fn();
     render(<CardTag label="sticky" onRename={onRename} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /renomeável/i }));
+    fireEvent.doubleClick(screen.getByText("sticky"));
     const input = screen.getByDisplayValue("sticky");
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.blur(input);

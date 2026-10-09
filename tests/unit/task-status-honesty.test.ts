@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { TaskRow } from "../../src/main/store";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * NASCE VERMELHO contra HEAD (task b41ac547).
@@ -47,6 +48,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -82,7 +84,10 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
       callbacksWithOverrides({
         getTask: (id: string) => (id === row.id ? row : undefined),
         listTasks: () => [row],
+        listTasksByBoard: () => [row],
         listTasksSummary: () => [row],
+        listTasksSummaryByBoard: () => [row],
+        getCardBoardId: (id: string) => id === "caller-card" ? row.board_id ?? undefined : undefined,
         isCardAlive: (id: string) => live.has(id),
       }),
     );
@@ -91,7 +96,7 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
 
   it("`pending` no banco LÊ `pending` mesmo com card vivo — viver não é trabalhar", async () => {
     const row = baseTask({ id: "t-live", status: "pending", card_id: "card-live" });
-    const res = (await rig(row, ["card-live"]).handleRequest({ cmd: "get_task", taskId: "t-live" } as BusRequest)) as {
+    const res = (await rig(row, ["card-live"]).handleRequest({ cmd: "get_task", taskId: "t-live" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as {
       ok: boolean;
       task: Record<string, unknown>;
     };
@@ -110,11 +115,15 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
       callbacksWithOverrides({
         getTask: (id: string) => (id === alive.id ? alive : id === dead.id ? dead : undefined),
         listTasks: () => [alive, dead],
+        listTasksByBoard: () => [alive, dead],
+        listTasksSummary: () => [alive, dead],
+        listTasksSummaryByBoard: () => [alive, dead],
+        getCardBoardId: (id: string) => id === "caller-card" ? "b1" : undefined,
         isCardAlive: (id: string) => live.has(id),
       }),
     );
-    const a = (await bus.handleRequest({ cmd: "get_task", taskId: "t-live" } as BusRequest)) as { task: Record<string, unknown> };
-    const d = (await bus.handleRequest({ cmd: "get_task", taskId: "t-dead" } as BusRequest)) as { task: Record<string, unknown> };
+    const a = readBus<{ task: Record<string, unknown> }>(await bus.handleRequest({ cmd: "get_task", taskId: "t-live" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
+    const d = readBus<{ task: Record<string, unknown> }>(await bus.handleRequest({ cmd: "get_task", taskId: "t-dead" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(a.task.cardAlive).toBe(true);
     expect(d.task.cardAlive).toBe(false);
     // Os dois fatos são independentes: os dois continuam `pending` no banco.
@@ -128,9 +137,9 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
     // `deriveTaskStatus` as achata em `pending` — a decisão do agente some da
     // leitura, e o orquestrador vê trabalho cancelado como trabalho esperando.
     const row = baseTask({ id: "t-cancelled", status: "cancelled", card_id: null });
-    const res = (await rig(row, []).handleRequest({ cmd: "get_task", taskId: "t-cancelled" } as BusRequest)) as {
+    const res = readBus<{
       task: Record<string, unknown>;
-    };
+    }>(await rig(row, []).handleRequest({ cmd: "get_task", taskId: "t-cancelled" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(res.task.status).toBe("cancelled");
   });
 
@@ -138,17 +147,19 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
     const row = baseTask({ id: "t-live", status: "pending", card_id: "card-live" });
     const res = (await rig(row, ["card-live"]).handleRequest({
       cmd: "list_tasks",
+      requesterId: "caller-card",
       status: ["pending"],
       view: "summary",
-    } as BusRequest)) as { ok: boolean; tasks: { id: string }[] };
+    } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as { ok: boolean; tasks: { id: string }[] };
     expect(res.ok).toBe(true);
     expect(res.tasks.map((t) => t.id)).toContain("t-live");
     // `hasCard` continua sendo o jeito HONESTO de perguntar por participação.
-    const byLiveness = (await bus!.handleRequest({
+    const byLiveness = readBus<{ tasks: { id: string }[] }>(await bus!.handleRequest({
       cmd: "list_tasks",
+      requesterId: "caller-card",
       hasCard: true,
       view: "summary",
-    } as BusRequest)) as { tasks: { id: string }[] };
+    } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(byLiveness.tasks.map((t) => t.id)).toEqual(["t-live"]);
   });
 
@@ -161,11 +172,11 @@ describe("task status: o que o banco diz é o que o agente lê", () => {
       id: "t-hold",
       status: "pending",
       card_id: "card-live",
-      transitions: [{ kind: "status", from_value: null, to_value: "pending", actor: "human", card_id: null, at: 2 }],
+      transitions: [{ id: "transition-1", task_id: "t-hold", kind: "status", from_value: null, to_value: "pending", actor: "human", card_id: null, at: 2 }],
     });
-    const res = (await rig(row, ["card-live"]).handleRequest({ cmd: "get_task", taskId: "t-hold" } as BusRequest)) as {
+    const res = readBus<{
       task: Record<string, unknown>;
-    };
+    }>(await rig(row, ["card-live"]).handleRequest({ cmd: "get_task", taskId: "t-hold" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(res.task.divergedStatus).toBe("pending");
     expect(res.task.divergedActor).toBe("human");
   });

@@ -1,13 +1,10 @@
 //! stellar-mcp-relay — stub stdio do bridge MCP, em RUST (task f7a2ac84).
 //!
-//! Substitui `stellar-mcp-relay.c` (que fica so como PROTOTIPO medido: a
-//! medicao de 1.4 MB / -98% por card foi feita com ele). Mesmo contrato, uma
-//! responsabilidade: le `AGENT_CANVAS_MCP_URL` e `AGENT_CANVAS_CARD_ID`, deriva
-//! o caminho do socket do bridge (`<tmpdir>/stellar-mcp-relay-<porta>.sock`, o
-//! MESMO que `src/main/mcp-relay.ts` calcula), manda a identidade do card como
-//! PRIMEIRA linha NDJSON (`{"card":"<id>"}`) e faz stdio<->socket ate um lado
-//! fechar. Nao entende JSON nem HTTP — so move bytes; quem fala MCP/HTTP e o
-//! main. Por isso a paridade MCP<->acbridge nao muda.
+//! This relay connects the stdio client to the app's Unix socket. The app
+//! authenticates the peer process instead of accepting an identity in a line.
+//! It reads `AGENT_CANVAS_MCP_URL`, derives the bridge socket path, and pumps
+//! stdio to that Unix socket. It does not send a caller identity; the main
+//! authenticates the kernel-reported peer PID and its PTY ancestry.
 //!
 //! POR QUE RUST (decisao do dono): seguranca de memoria; UM fonte em vez de
 //! reescrever Winsock2 a mao; e um lugar para acumular otimizacoes futuras de
@@ -115,15 +112,6 @@ fn main() -> ExitCode {
             return ExitCode::from(5);
         }
     };
-
-    // Handshake: identidade na PRIMEIRA linha NDJSON. Card ids sao opacos aqui;
-    // escapar `"`/`\` mantem o JSON valido sem depender de um serializador.
-    let card = std::env::var("AGENT_CANVAS_CARD_ID").unwrap_or_default();
-    let handshake = format!("{{\"card\":\"{}\"}}\n", card.replace('\\', "").replace('"', ""));
-    if let Err(e) = stream.write_all(handshake.as_bytes()) {
-        eprintln!("stellar-mcp-relay: handshake: {e}");
-        return ExitCode::from(6);
-    }
 
     let mut reader = match stream.try_clone() {
         Ok(s) => s,

@@ -149,7 +149,7 @@ describe("thresholds — warned once per level, and the delivery warning", () =>
     const alerts = healthAlerts({ health, capability: claude(), cardLabel: "Master", provider: "claude" });
     expect(alerts.map((a) => a.key)).toEqual(["context"]);
     expect(alerts[0].message).toContain("76%");
-    expect(alerts[0].message).toContain("758k of 1m");
+    expect(alerts[0].message).toContain("list_cards");
   });
 
   it("a context below the threshold warns nothing", () => {
@@ -165,7 +165,7 @@ describe("thresholds — warned once per level, and the delivery warning", () =>
     const alerts = healthAlerts({ health, capability: commandcode(), cardLabel: "7°", provider: "commandcode" });
     expect(alerts.map((a) => a.key)).toEqual(["quota:80"]);
     expect(alerts[0].message).toContain("81% used");
-    expect(alerts[0].message).toContain("80% quota warning");
+    expect(alerts[0].message).toContain("list_cards");
   });
 
   it("quota 96% crosses 80 AND 95", () => {

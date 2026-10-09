@@ -35,7 +35,8 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { openStore, type TaskVerdictReadRule } from "../../src/main/store";
+import { openStore } from "../../src/main/store";
+import type { TaskVerdictReadRule } from "../../src/main/task-verdict-read-decision";
 
 const source = process.env.STELLAR_VERDICT_AUDIT_DB;
 const suite = source && existsSync(source) ? describe : describe.skip;
