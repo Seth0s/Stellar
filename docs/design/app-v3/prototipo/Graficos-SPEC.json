@@ -1,0 +1,218 @@
+{
+  "id": "graficos-v4",
+  "title": "Gráficos V4",
+  "specMd": "Graficos.dc.html",
+  "proto": "Graficos.dc.html",
+  "impl": "graficos-v4",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "graficos-v4",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "[data-dc-root] > div",
+    "impl": "[data-part='graficos-v4']"
+  },
+  "pairs": [
+    {
+      "id": "title",
+      "proto": "h1",
+      "impl": "[data-part='graficos-title']"
+    },
+    {
+      "id": "back",
+      "proto": "header a",
+      "impl": "[data-part='graficos-back']"
+    },
+    {
+      "id": "chips",
+      "proto": "div[role='group']",
+      "impl": "[data-part='graficos-periods']"
+    },
+    {
+      "id": "chip",
+      "proto": "button.chip:not(.chipOn)",
+      "impl": "[data-part='graficos-chip']"
+    },
+    {
+      "id": "chip-on",
+      "proto": "button.chipOn",
+      "impl": "[data-part='graficos-chip-on']"
+    },
+    {
+      "id": "kpi",
+      "proto": "section[aria-label='Números do período'] > div",
+      "impl": "[data-part='graficos-kpi']"
+    },
+    {
+      "id": "panel",
+      "proto": "section[aria-label='Vereditos por provider']",
+      "impl": "[data-part='graficos-panel']"
+    },
+    {
+      "id": "screen",
+      "proto": "[data-dc-root] > div",
+      "impl": "[data-part='graficos-v4']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "panel-size",
+      "proto": "section[aria-label='Vereditos por provider']",
+      "impl": "[data-part='graficos-panel']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "provider-line",
+      "proto": "section[aria-label='Vereditos por provider'] div[style*='font-size: 13px']",
+      "impl": "[data-part='graficos-provider-line']",
+      "props": ["height"]
+    },
+    {
+      "id": "provider-bar",
+      "proto": "section[aria-label='Vereditos por provider'] span[style*='width: 70%']",
+      "impl": "[data-part='graficos-provider-bar']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "hist-bar",
+      "proto": "section[aria-label='Rodadas até aprovar'] span[style*='height: 200px']",
+      "impl": "[data-part='graficos-hist-bar']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "cycle-bar",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='height: 12px']",
+      "impl": "[data-part='graficos-cycle-bar']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "cycle-d97be5-q",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(1) > div[style*='height: 12px'] > span:nth-child(1)",
+      "impl": "[data-part='graficos-cycle-q-0']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-d97be5-r",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(1) > div[style*='height: 12px'] > span:nth-child(2)",
+      "impl": "[data-part='graficos-cycle-r-0']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-d97be5-v",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(1) > div[style*='height: 12px'] > span:nth-child(3)",
+      "impl": "[data-part='graficos-cycle-v-0']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-d97be5-dur",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(1) > span:last-child",
+      "impl": "[data-part='graficos-cycle-dur-0']",
+      "props": ["text"]
+    },
+    {
+      "id": "cycle-ba68dd-q",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(2) > div[style*='height: 12px'] > span:nth-child(1)",
+      "impl": "[data-part='graficos-cycle-q-1']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-ba68dd-r",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(2) > div[style*='height: 12px'] > span:nth-child(2)",
+      "impl": "[data-part='graficos-cycle-r-1']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-ba68dd-v",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(2) > div[style*='height: 12px'] > span:nth-child(3)",
+      "impl": "[data-part='graficos-cycle-v-1']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-ba68dd-dur",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(2) > span:last-child",
+      "impl": "[data-part='graficos-cycle-dur-1']",
+      "props": ["text"]
+    },
+    {
+      "id": "cycle-e0b6b8-q",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(3) > div[style*='height: 12px'] > span:nth-child(1)",
+      "impl": "[data-part='graficos-cycle-q-2']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-e0b6b8-r",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(3) > div[style*='height: 12px'] > span:nth-child(2)",
+      "impl": "[data-part='graficos-cycle-r-2']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-e0b6b8-v",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(3) > div[style*='height: 12px'] > span:nth-child(3)",
+      "impl": "[data-part='graficos-cycle-v-2']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-e0b6b8-dur",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(3) > span:last-child",
+      "impl": "[data-part='graficos-cycle-dur-2']",
+      "props": ["text"]
+    },
+    {
+      "id": "cycle-9012e6-q",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(4) > div[style*='height: 12px'] > span:nth-child(1)",
+      "impl": "[data-part='graficos-cycle-q-3']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-9012e6-r",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(4) > div[style*='height: 12px'] > span:nth-child(2)",
+      "impl": "[data-part='graficos-cycle-r-3']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-9012e6-v",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(4) > div[style*='height: 12px'] > span:nth-child(3)",
+      "impl": "[data-part='graficos-cycle-v-3']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-9012e6-dur",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(4) > span:last-child",
+      "impl": "[data-part='graficos-cycle-dur-3']",
+      "props": ["text"]
+    },
+    {
+      "id": "cycle-104e4f-q",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(5) > div[style*='height: 12px'] > span:nth-child(1)",
+      "impl": "[data-part='graficos-cycle-q-4']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-104e4f-r",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(5) > div[style*='height: 12px'] > span:nth-child(2)",
+      "impl": "[data-part='graficos-cycle-r-4']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-104e4f-v",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(5) > div[style*='height: 12px'] > span:nth-child(3)",
+      "impl": "[data-part='graficos-cycle-v-4']",
+      "props": ["left", "width"]
+    },
+    {
+      "id": "cycle-104e4f-dur",
+      "proto": "section[aria-label='Tempo de ciclo'] div[style*='flex-direction: column'] > div:nth-child(5) > span:last-child",
+      "impl": "[data-part='graficos-cycle-dur-4']",
+      "props": ["text"]
+    }
+  ],
+  "approvedDiffs": []
+}

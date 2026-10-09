@@ -151,21 +151,20 @@ try {
   check(`clicked task create row (${taskClick})`, taskClick, "ok");
   check("task card mounted", await waitFor(page, `document.querySelector('[data-part="sprints-toggle"]')`, 8000), true);
 
+  const columnInfo = await scrollbarInfo(page, `document.querySelector('[class*="columnBody"]')`);
+  check("task columnBody scrollbar-width: thin without marker", columnInfo?.scrollbarWidth, "thin");
+
   const sprintsToggle = await centerOf(page, '[data-part="sprints-toggle"]');
   await page.click(sprintsToggle.x, sprintsToggle.y);
-  check("sprints panel mounted", await waitFor(page, `document.querySelector('[data-part="sprints-panel"]')`), true);
+  check("sprints panel mounted", await waitFor(page, `document.querySelector('[data-part="sprints-v4"]')`), true);
   // Fresh board may still be fetching sprints — wait for the list OR the
   // empty/loading copy; then prefer the real `<ul>` when it appears.
-  await waitFor(
-    page,
-    `document.querySelector('[data-part="sprints-panel"] [role="listbox"]') || document.querySelector('[data-part="sprints-panel"]')`,
-    5000,
-  );
+  await waitFor(page, `document.querySelector('[data-part="sprints-scroll"]')`, 5000);
   await delay(400);
 
   const sprintsInfo = await scrollbarInfo(
     page,
-    `document.querySelector('[data-part="sprints-panel"] [role="listbox"]') || document.querySelector('[data-part="sprints-panel"] [class*="sprintsList"]')`,
+    `document.querySelector('[data-part="sprints-scroll"]')`,
   );
   if (sprintsInfo) {
     check("sprintsList scrollbar-width: thin without marker", sprintsInfo.scrollbarWidth, "thin");
@@ -201,13 +200,10 @@ try {
     check("sprintsList class probe has no thin-scroll class", sprintProbe?.hasThinScrollClass, false);
   }
 
-  const columnInfo = await scrollbarInfo(page, `document.querySelector('[class*="columnBody"]')`);
-  check("task columnBody scrollbar-width: thin without marker", columnInfo?.scrollbarWidth, "thin");
-
   const clip = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('[data-part="sprints-panel"]');
+        const el = document.querySelector('[data-part="sprints-v4"]');
         if (!el) return JSON.stringify(null);
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.max(1, r.width), height: Math.max(1, r.height), scale: 1 });
