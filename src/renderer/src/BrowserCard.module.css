@@ -23,6 +23,26 @@
   gap: var(--card-head-gap);
 }
 
+/* Shared `.card-head-inner` shrinks to zero (`min-width: 0`, max 48%).
+   This card's nav and tools live in that slot, so the shrink pushes them
+   past the card edge and `.card-clip` cuts them off. The URL is
+   `.card-head-context`, which already ellipsizes — the actions stay at
+   their content width. */
+.browserCard :global(.card-head-inner) {
+  flex: none;
+  max-width: none;
+  min-width: max-content;
+}
+
+/* The URL's flex basis is its text. With the actions no longer willing
+   to shrink, that basis overflows the header and the buttons slide past
+   the card. A zero basis lets the URL take only the room that is left. */
+.browserCard :global(.card-head-context) {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .browserCardAddress {
   display: flex;
   align-items: center;
@@ -33,13 +53,8 @@
    * cantos — resolvido pelos TRÊS filhos diretos abaixo (não mais os 8
    * botões/input soltos de antes), com o grupo do meio em `flex: 1`. */
   gap: var(--card-head-inner-gap);
-  width: auto;
-  /* Header responsivo (§2.1) — largura do PRÓPRIO card, não a viewport
-   * inteira (um @media normal não serviria: dois cards do mesmo tipo em
-   * larguras diferentes precisam colapsar independentemente). Electron
-   * 42 já suporta Container Queries nativamente, sem JS/ResizeObserver. */
-  container-type: inline-size;
-  container-name: browser-header;
+  flex: none;
+  width: max-content;
 }
 
 /* Grupo de navegação (voltar/avançar/recarregar), à esquerda. `flex: none`
@@ -267,16 +282,13 @@
   filter: brightness(1.15);
 }
 
-/* Header responsivo (§2.1) — < 380px (mesma largura lógica do preset
- * Mobile, de propósito), some da linha principal, mas nada fica
- * inacessível: os dois viram itens informativos dentro do Popover do
- * kebab (ver BrowserCard.tsx). Especificidade igual/maior que as regras
- * base acima (`.browserCardAddress button.browserCardOwner` inclusive)
- * E depois delas no arquivo — @container não eleva prioridade sozinho,
- * um empate de especificidade ainda cai pra ordem de origem (achado ao
- * vivo: a primeira versão, mais cedo no arquivo e com especificidade
- * menor, nunca vencia a cascata apesar da condição bater). */
-@container browser-header (max-width: 380px) {
+/* Below a phone-width card, the extra badges leave the header. They stay
+   reachable from the kebab. The query watches the card: `container-type`
+   on the address row sizes that row as if it had no buttons, so the row
+   laid out at width 0 and the actions painted past the card. The block
+   stays after the base rules — a container query does not raise
+   specificity, so source order is what makes `display: none` win. */
+@container card (max-width: 380px) {
   .browserCardAddress button.browserCardOwner,
   .browserCardConsoleBadge,
   .browserCardRoutesBadge,

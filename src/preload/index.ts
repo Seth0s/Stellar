@@ -86,6 +86,21 @@ const pty = {
     context: { usedTokens: number; windowTokens?: number; source: string; at: number } | null;
     quota: { text: string; percent?: number; at: number } | null;
   } | null> => ipcRenderer.invoke("pty:health", id),
+  /**
+   * Occupancy from the same `decideCardStatus` path as MCP `card_status`
+   * (running / idle / waiting / exited / unknown / …). Header pill only.
+   */
+  cardStatus: (
+    id: string,
+  ): Promise<
+    | {
+        ok: true;
+        status: "running" | "idle" | "at-prompt" | "unknown" | "waiting" | "exited" | "no-output";
+        provider: string | null;
+        note?: string;
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("pty:card-status", id),
   interrupt: (id: string): Promise<void> => ipcRenderer.invoke("pty:interrupt", id),
   kill: (id: string): Promise<void> => ipcRenderer.invoke("pty:kill", id),
   /** Marks every PTY of a board as RETAINED (`true` when leaving the board) or
@@ -1458,6 +1473,12 @@ const tasks = {
       hasSnapshot: boolean;
     }[]
   > => ipcRenderer.invoke("store:tasks:list-sprints", boardId),
+  /** Creates an active sprint only when the board has none. Returns the
+   * existing row when one is already open. */
+  openSprint: (
+    boardId: string,
+  ): Promise<{ ok: true; sprint: { id: string } } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:open-sprint", boardId),
   /** Frozen board of a closed sprint — never live task status. */
   sprintSnapshot: (
     sprintId: string,
@@ -2736,7 +2757,7 @@ const debugBridge = {
   > => ipcRenderer.invoke("debug:human-input-gate"),
   /** Test-only (Trilha A do navegador's verify coverage) — null in a
    * packaged build, see main/index.ts's guard. */
-  browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number } | null> =>
+  browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number; zoomFactor?: number } | null> =>
     ipcRenderer.invoke("debug:browser-content-size", cardId),
   /** Test-only — force a real renderer death (`forcefullyCrashRenderer`). */
   crashRenderer: (): Promise<void> => ipcRenderer.invoke("debug:crash-renderer"),
