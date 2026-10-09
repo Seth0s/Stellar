@@ -3224,6 +3224,15 @@ function createWindow() {
       ...readCardHealth(capability, registry.getRecentOutput(id), Date.now()),
     };
   });
+  /**
+   * Same decision as MCP/acbridge `card_status` — facts through
+   * `decideCardStatus`, not PTY byte heuristics. The renderer header pill
+   * reads this; inventing a second path would reintroduce the lie.
+   */
+  ipcMain.handle("pty:card-status", (_e, id: string) => {
+    if (!messageBus) return { ok: false as const, error: "bus not ready" };
+    return messageBus.handleRequest({ cmd: "card_status", target: id });
+  });
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
     // The UI unmount of a board the user LEFT sends `pty:kill` for every card;

@@ -29,8 +29,11 @@ vi.mock("@renderer/useTerminal", () => ({
     homeNotice: h.notices.get(id) ?? null,
     hasReceivedOutput: true,
     isActive: false,
+    agentStatus: "idle",
     fitNow: vi.fn(),
     interrupt: vi.fn(),
+    dropLive: true,
+    writeDroppedPaths: () => [],
   }),
 }));
 

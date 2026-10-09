@@ -299,6 +299,13 @@ export function useTerminal(
   // ok, PTY rodando, zero bytes recebidos ainda).
   const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
   /**
+   * Occupancy from main's `decideCardStatus` (same facts as MCP
+   * `card_status`). The header pill reads this — never `isActive`.
+   */
+  const [agentStatus, setAgentStatus] = useState<
+    "running" | "idle" | "at-prompt" | "unknown" | "waiting" | "exited" | "no-output" | null
+  >(null);
+  /**
    * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal por trás
    * da barra de atividade do header (TerminalCard.tsx). Desliga por:
    *   - providers sem sinal real: `ACTIVITY_IDLE_MS` sem bytes novos;
@@ -1201,6 +1208,40 @@ export function useTerminal(
 
   const dropLive = Boolean(ptyId) && exitCode === null;
 
+  // Header occupancy — poll the same path as `card_status`. Refresh also
+  // when turn/exit events land so the pill does not lag a full interval.
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => {
+      const api = window.pty?.cardStatus;
+      if (!api) return;
+      void api(id).then((result) => {
+        if (!mounted) return;
+        if (result && result.ok === true) setAgentStatus(result.status);
+        else if (exitCode !== null) setAgentStatus("exited");
+      }).catch(() => {
+        if (mounted && exitCode !== null) setAgentStatus("exited");
+      });
+    };
+    refresh();
+    const poll = window.setInterval(refresh, 1500);
+    const offTurn = window.pty.onTurnComplete((eventId) => {
+      if (eventId === id) refresh();
+    });
+    const offExit = window.pty.onExit((eventId) => {
+      if (eventId === id) {
+        setAgentStatus("exited");
+        refresh();
+      }
+    });
+    return () => {
+      mounted = false;
+      window.clearInterval(poll);
+      offTurn();
+      offExit();
+    };
+  }, [id, exitCode, ptyId]);
+
   return {
     ptyId,
     exitCode,
@@ -1210,6 +1251,7 @@ export function useTerminal(
     homeNotice,
     hasReceivedOutput,
     isActive,
+    agentStatus,
     fitNow,
     interrupt,
     dropLive,
