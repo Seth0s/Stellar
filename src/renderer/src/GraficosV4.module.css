@@ -1,0 +1,311 @@
+/* Graphs screen — measures from Graficos.dc.html */
+
+.shell {
+  width: 1440px; /* sd:allow: Graficos.dc.html artboard width */
+  height: 860px; /* sd:allow: Graficos.dc.html artboard height */
+  flex: none;
+  box-sizing: border-box;
+  background: #0b0d12; /* sd:allow: Graficos.dc.html shell background */
+  color: #e8eaf0; /* sd:allow: Graficos.dc.html text */
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 16px; /* sd:allow: Graficos.dc.html body default */
+  font-weight: 400;
+  line-height: normal;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px; /* sd:allow: Graficos.dc.html shell radius */
+  overflow: hidden;
+  border: 1px solid #1d2230; /* sd:allow: Graficos.dc.html shell border */
+}
+
+.header {
+  padding: 14px 18px; /* sd:allow: Graficos.dc.html header padding */
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px; /* sd:allow: Graficos.dc.html header gap */
+  border-bottom: 1px solid #1d2230; /* sd:allow: Graficos.dc.html header border */
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Graficos.dc.html back gap */
+  font-size: 13px; /* sd:allow: Graficos.dc.html back size */
+  color: #a9b8ff; /* sd:allow: Graficos.dc.html link */
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px; /* sd:allow: Graficos.dc.html back size */
+}
+
+.title {
+  margin: 0;
+  font-size: 17px; /* sd:allow: Graficos.dc.html title */
+  font-weight: 600;
+}
+
+.periods {
+  display: flex;
+  gap: 6px; /* sd:allow: Graficos.dc.html period gap */
+  margin-left: 8px; /* sd:allow: Graficos.dc.html period margin */
+}
+
+.chip {
+  height: 30px; /* sd:allow: Graficos.dc.html chip height */
+  padding: 0 12px; /* sd:allow: Graficos.dc.html chip padding */
+  border-radius: 8px; /* sd:allow: Graficos.dc.html chip radius */
+  border: 1px solid #2a2f3d; /* sd:allow: Graficos.dc.html chip border */
+  background: transparent;
+  color: #a3aabb; /* sd:allow: Graficos.dc.html chip text */
+  font: inherit;
+  font-size: 13px; /* sd:allow: Graficos.dc.html chip size */
+  cursor: pointer;
+}
+
+.chipOn {
+  height: 30px; /* sd:allow: Graficos.dc.html chip height */
+  padding: 0 12px; /* sd:allow: Graficos.dc.html chip padding */
+  border-radius: 8px; /* sd:allow: Graficos.dc.html chip radius */
+  border: 1px solid #3b4570; /* sd:allow: Graficos.dc.html chipOn border */
+  background: #1d2333; /* sd:allow: Graficos.dc.html chipOn background */
+  color: #e8eaf0; /* sd:allow: Graficos.dc.html chipOn text */
+  font: inherit;
+  font-size: 13px; /* sd:allow: Graficos.dc.html chip size */
+  cursor: pointer;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.scope {
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html scope size */
+  color: #8d94a6; /* sd:allow: Graficos.dc.html muted */
+  white-space: nowrap;
+}
+
+.kpis {
+  padding: 14px 18px 0; /* sd:allow: Graficos.dc.html kpi padding */
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px; /* sd:allow: Graficos.dc.html kpi gap */
+}
+
+.kpi {
+  border: 1px solid #1d2230; /* sd:allow: Graficos.dc.html panel border */
+  border-radius: 14px; /* sd:allow: Graficos.dc.html panel radius */
+  background: #0f1218; /* sd:allow: Graficos.dc.html panel background */
+  padding: 12px 14px; /* sd:allow: Graficos.dc.html kpi padding */
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* sd:allow: Graficos.dc.html kpi gap */
+  min-width: 0;
+}
+
+.k {
+  font-size: 12px; /* sd:allow: Graficos.dc.html k size */
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8d94a6; /* sd:allow: Graficos.dc.html k color */
+  margin: 0;
+  font-weight: 400;
+}
+
+.kpiValue {
+  font-size: 28px; /* sd:allow: Graficos.dc.html kpi value */
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html hint */
+  color: #a3aabb; /* sd:allow: Graficos.dc.html hint */
+}
+
+.hintUp {
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html hint up */
+  color: #8fdcc0; /* sd:allow: Graficos.dc.html hint up */
+}
+
+.grid {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 18px 18px; /* sd:allow: Graficos.dc.html grid padding */
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px; /* sd:allow: Graficos.dc.html grid gap */
+}
+
+.panel {
+  border: 1px solid #1d2230; /* sd:allow: Graficos.dc.html panel border */
+  border-radius: 14px; /* sd:allow: Graficos.dc.html panel radius */
+  background: #0f1218; /* sd:allow: Graficos.dc.html panel background */
+  padding: 16px; /* sd:allow: Graficos.dc.html panel padding */
+  display: flex;
+  flex-direction: column;
+  gap: 12px; /* sd:allow: Graficos.dc.html panel gap */
+  min-width: 0;
+}
+
+.legend {
+  display: flex;
+  gap: 14px; /* sd:allow: Graficos.dc.html legend gap */
+  font-size: 12px; /* sd:allow: Graficos.dc.html legend size */
+  color: #a3aabb; /* sd:allow: Graficos.dc.html legend */
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Graficos.dc.html legend item gap */
+}
+
+.swatch {
+  width: 10px; /* sd:allow: Graficos.dc.html swatch */
+  height: 10px; /* sd:allow: Graficos.dc.html swatch */
+  border-radius: 3px; /* sd:allow: Graficos.dc.html swatch radius */
+  flex: none;
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 12px; /* sd:allow: Graficos.dc.html bar stack gap */
+}
+
+.barBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* sd:allow: Graficos.dc.html bar block gap */
+}
+
+.barHead {
+  display: flex;
+  font-size: 13px; /* sd:allow: Graficos.dc.html bar label */
+}
+
+.barName {
+  flex: 1;
+}
+
+.mono {
+  font-family: "JetBrains Mono", monospace;
+  color: #a3aabb; /* sd:allow: Graficos.dc.html mono */
+}
+
+.track {
+  display: flex;
+  height: 12px; /* sd:allow: Graficos.dc.html track height */
+  border-radius: 4px; /* sd:allow: Graficos.dc.html track radius */
+  overflow: hidden;
+  background: #161a24; /* sd:allow: Graficos.dc.html track */
+}
+
+.note {
+  margin: auto 0 0;
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html note */
+  color: #8d94a6; /* sd:allow: Graficos.dc.html note */
+  line-height: 1.5;
+}
+
+.hist {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 14px; /* sd:allow: Graficos.dc.html hist gap */
+  padding: 8px 4px 0; /* sd:allow: Graficos.dc.html hist padding */
+  border-bottom: 1px solid #262b3a; /* sd:allow: Graficos.dc.html hist axis */
+  min-height: 220px; /* sd:allow: Graficos.dc.html tallest bar 200 plus label */
+}
+
+.col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px; /* sd:allow: Graficos.dc.html hist column gap */
+  justify-content: flex-end;
+  height: 100%;
+}
+
+.colCount {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px; /* sd:allow: Graficos.dc.html hist count */
+  color: #c9cede; /* sd:allow: Graficos.dc.html hist count */
+}
+
+.colBar {
+  width: 100%;
+  border-radius: 6px 6px 0 0; /* sd:allow: Graficos.dc.html hist bar radius */
+  background: #7d8cff; /* sd:allow: Graficos.dc.html hist bar */
+}
+
+.colBarHot {
+  width: 100%;
+  border-radius: 6px 6px 0 0; /* sd:allow: Graficos.dc.html hist hot radius */
+  background: #f0a43e; /* sd:allow: Graficos.dc.html 4+ bar */
+}
+
+.axis {
+  display: flex;
+  gap: 14px; /* sd:allow: Graficos.dc.html axis gap */
+  padding: 0 4px; /* sd:allow: Graficos.dc.html axis padding */
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html axis size */
+  color: #a3aabb; /* sd:allow: Graficos.dc.html axis */
+}
+
+.axis span {
+  flex: 1;
+  text-align: center;
+}
+
+.cycleBars {
+  display: flex;
+  flex-direction: column;
+  gap: 9px; /* sd:allow: Graficos.dc.html cycle row gap */
+}
+
+.cycleTrack {
+  display: flex;
+  height: 12px; /* sd:allow: Graficos.dc.html cycle track height */
+  border-radius: 4px; /* sd:allow: Graficos.dc.html track radius */
+  overflow: hidden;
+}
+
+.cycleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* sd:allow: Graficos.dc.html cycle gap */
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html cycle size */
+}
+
+.cycleId {
+  font-family: "JetBrains Mono", monospace;
+  width: 64px; /* sd:allow: Graficos.dc.html cycle id width */
+  color: #a3aabb; /* sd:allow: Graficos.dc.html cycle id */
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html cycle size */
+}
+
+.cycleDur {
+  font-family: "JetBrains Mono", monospace;
+  width: 44px; /* sd:allow: Graficos.dc.html duration width */
+  text-align: right;
+}
+
+.link {
+  color: #a9b8ff; /* sd:allow: Graficos.dc.html link */
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px; /* sd:allow: Graficos.dc.html note */
+}

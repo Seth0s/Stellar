@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveTaskPhase,
   implementerReportedFinalSinceDelivery,
+  latestConcludingReportAt,
   type TaskPhase,
   type TaskPhaseFacts,
 } from "../../src/main/task-phase-decision";
@@ -102,6 +103,19 @@ describe("implementerReportedFinalSinceDelivery — atribuição + estado", () =
         4_000,
       ),
     ).toBe("running");
+  });
+
+  it("the review clock starts at the latest concluding report of this task", () => {
+    const taskId = "task-1";
+    const reports = [
+      { at: 1_000, body: { ok: true, estado: "parcial", taskId } },
+      { at: 2_000, body: { ok: true, estado: "final", taskId } },
+      { at: 3_000, body: { ok: true, estado: "parcial", taskId } },
+      { at: 4_000, body: { ok: true, estado: "final", taskId } },
+      { at: 4_500, body: { ok: true, estado: "final", taskId: "other" } },
+    ];
+    expect(latestConcludingReportAt(taskId, reports)).toBe(4_000);
+    expect(latestConcludingReportAt(taskId, reports.slice(0, 1))).toBeNull();
   });
 
   it("`task` declarado vence `taskId` conflitante (mesma regra de atribuição)", () => {
