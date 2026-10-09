@@ -1,0 +1,47 @@
+{
+  "id": "superseded-v3",
+  "title": "Detalhe V3 — Superseded",
+  "specMd": "Fila-V3-SPEC.md",
+  "proto": "Superseded.dc.html",
+  "impl": "superseded-v3",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "superseded-v3",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "section[role='dialog']",
+    "impl": "[data-part='task-detail-v3'] [role='dialog']"
+  },
+  "pairs": [
+    {
+      "id": "dialog",
+      "proto": "section[role='dialog']",
+      "impl": "[data-part='task-detail-v3'] [role='dialog']"
+    },
+    {
+      "id": "title",
+      "proto": "#ttl",
+      "impl": "#task-detail-v3-title"
+    },
+    {
+      "id": "agora",
+      "proto": "section[role='dialog'] > div:nth-of-type(1)",
+      "impl": "[data-part='agora-banner']"
+    },
+    {
+      "id": "aside",
+      "proto": "aside",
+      "impl": "[data-part='task-detail-v3'] aside"
+    }
+  ],
+  "approvedDiffs": []
+}

@@ -8,7 +8,7 @@ const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_BASE = `http://127.0.0.1:${MCP_PORT}/mcp`;
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-report-notify-${CDP_PORT}`, import.meta.url).pathname;
-const POINTER_NEEDLE = "relatório disponível — chame read_report";
+const POINTER_NEEDLE = "report available";
 
 let mcpUrl = MCP_BASE;
 let nextRpcId = 1;

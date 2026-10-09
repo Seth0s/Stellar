@@ -962,27 +962,51 @@ export async function enableAutonomousMode(page) {
   }
   if (!modal) throw new Error("enableAutonomousMode: o modal de configurações não abriu (rail → engrenagem)");
 
-  await page.evalJs(`document.querySelector('[data-settings-page="maestro"]')?.click()`);
+  // Settings V7: autonomous lives under `mode` (legacy id was `maestro`).
+  await page.evalJs(`
+    (document.querySelector('[data-settings-page="mode"]')
+      ?? document.querySelector('[data-settings-page="maestro"]'))?.click()
+  `);
   let hasToggle = false;
   const toggleDeadline = Date.now() + 5000;
   while (Date.now() < toggleDeadline && !hasToggle) {
-    hasToggle = await page.evalJs(`!!document.querySelector('.autonomous-toggle-label input[type="checkbox"]')`);
+    hasToggle = await page.evalJs(`!!(
+      document.querySelector('.autonomous-toggle-label input[type="checkbox"]')
+      || document.querySelector('button[aria-label][aria-pressed]')
+    )`);
     if (!hasToggle) await delay(100);
   }
   if (!hasToggle) {
     const pages = await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-settings-page]')].map((b) => b.getAttribute('data-settings-page')))`);
-    throw new Error(`enableAutonomousMode: a página Maestro não tem checkbox de autonomia (nav: ${pages})`);
+    throw new Error(`enableAutonomousMode: a página de modo não tem controle de autonomia (nav: ${pages})`);
   }
 
-  await page.evalJs(`document.querySelector('.autonomous-toggle-label input[type="checkbox"]').click()`);
+  // V7 uses a Switch button (aria-pressed); older builds used a checkbox.
+  await page.evalJs(`
+    (() => {
+      const legacy = document.querySelector('.autonomous-toggle-label input[type="checkbox"]');
+      if (legacy) { legacy.click(); return; }
+      const sw = [...document.querySelectorAll('button[aria-pressed]')].find((b) => {
+        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+        return label.includes('autônom') || label.includes('autonom');
+      });
+      sw?.click();
+    })()
+  `);
   let checked = false;
   const checkedDeadline = Date.now() + 5000;
   while (Date.now() < checkedDeadline && !checked) {
-    checked = await page.evalJs(`document.querySelector('.autonomous-toggle-label input[type="checkbox"]').checked === true`);
+    checked = await page.evalJs(`!!(
+      document.querySelector('.autonomous-toggle-label input[type="checkbox"]')?.checked === true
+      || [...document.querySelectorAll('button[aria-pressed]')].some((b) => {
+        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+        return (label.includes('autônom') || label.includes('autonom')) && b.getAttribute('aria-pressed') === 'true';
+      })
+    )`);
     if (!checked) await delay(100);
   }
   await page.evalJs(`document.querySelector('[data-settings-close]')?.click()`);
   await delay(250);
-  if (!checked) throw new Error("enableAutonomousMode: o checkbox de autonomia não ficou marcado depois do clique real");
+  if (!checked) throw new Error("enableAutonomousMode: o controle de autonomia não ficou ligado depois do clique real");
 }
 

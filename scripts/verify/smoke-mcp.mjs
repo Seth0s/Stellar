@@ -76,6 +76,7 @@ try {
       "browser_network",
       "browser_navigate",
       "browser_query",
+      "browser_run",
       "browser_scroll",
       "browser_snapshot",
       "browser_type",

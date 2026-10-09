@@ -1,0 +1,52 @@
+{
+  "id": "fila-v3",
+  "title": "Fila V3 — card por fase",
+  "specMd": "Fila-V3-SPEC.md",
+  "proto": "Fila.dc.html",
+  "impl": "fila-v3",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "fila-v3",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "body > div",
+    "impl": "[data-fila-v3-shot='1']"
+  },
+  "pairs": [
+    {
+      "id": "tile",
+      "proto": ".tile",
+      "impl": "[data-part='queue-tile']"
+    },
+    {
+      "id": "column-head",
+      "proto": "section[aria-label='Esperando'] > div",
+      "impl": "[data-part='queue-column'][data-column='waiting'] [class*='columnHead']"
+    },
+    {
+      "id": "filter-chip-on",
+      "proto": "button.chipOn",
+      "impl": "[data-part='queue-toolbar'] button[aria-pressed='true']"
+    },
+    {
+      "id": "needs-strip-card",
+      "proto": "section[aria-label='Precisa de você'] > div",
+      "impl": "[data-part='needs-you-card']"
+    },
+    {
+      "id": "see-all-done",
+      "proto": "section[aria-label='Concluída'] a",
+      "impl": "[data-part='queue-see-all-done']"
+    }
+  ],
+  "approvedDiffs": []
+}

@@ -1,0 +1,60 @@
+{
+  "id": "configuracoes-v7",
+  "title": "Configurações V7 — modal",
+  "specMd": "SPEC-Configuracoes-V7.md",
+  "proto": "prototipo/Configuracoes.dc.html",
+  "impl": "settings-v7",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "settings-v7",
+  "tolerances": { "lengthPx": 1, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border",
+    "border-radius",
+    "width",
+    "height"
+  ],
+  "root": {
+    "proto": "section[role='dialog']",
+    "impl": "[data-settings-modal]"
+  },
+  "pairs": [
+    {
+      "id": "shell",
+      "proto": "section[role='dialog']",
+      "impl": "[data-settings-modal]"
+    },
+    {
+      "id": "nav",
+      "proto": "nav[aria-label='Seções']",
+      "impl": "[data-settings-modal] nav"
+    },
+    {
+      "id": "title",
+      "proto": "h1#cfg",
+      "impl": "[data-settings-modal] h1"
+    },
+    {
+      "id": "search",
+      "proto": "nav[aria-label='Seções'] > label",
+      "impl": "[data-settings-modal] label"
+    },
+    {
+      "id": "nav-account",
+      "proto": "nav[aria-label='Seções'] button.navOn",
+      "impl": "[data-settings-page='account']"
+    },
+    {
+      "id": "page-header-title",
+      "proto": "section[role='dialog'] header h2",
+      "impl": "[data-settings-modal] header h2"
+    }
+  ],
+  "approvedDiffs": []
+}
