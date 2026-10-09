@@ -150,6 +150,25 @@ export function latestAttributedReportAt(
   return at;
 }
 
+/**
+ * Start of the review interval: the latest report that concludes THIS task
+ * (`ok: true` and `estado: "final"`, declared task id). A parcial checkpoint
+ * and a report that names another task do not start it. An earlier concluding
+ * row is a previous round — the current interval begins at the newest one.
+ */
+export function latestConcludingReportAt(
+  taskId: string,
+  reports: readonly PhaseReportRow[],
+): number | null {
+  let at: number | null = null;
+  for (const row of reports) {
+    if (declaredTaskIdFromReportBody(row.body) !== taskId) continue;
+    if (!reportConcludesTask(row.body)) continue;
+    if (at === null || row.at >= at) at = row.at;
+  }
+  return at;
+}
+
 function latestAttributedInWindow(
   taskId: string,
   reports: readonly PhaseReportRow[],

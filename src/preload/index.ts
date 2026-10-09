@@ -1230,6 +1230,9 @@ export type TaskBoardItem = {
     orphan: boolean;
   }[];
   report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
+  /** Timestamp of the latest concluding implementer report for this task.
+   *  `null` when none exists. The charts turn it into the review segment. */
+  concludingReportAt?: number | null;
   /** RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
    * <id>". `deps` é o array cru de `tasks.deps_json`; `depStatuses` só
    * cobre os ids QUE APARECEM em `deps` (nunca o board inteiro), cada um

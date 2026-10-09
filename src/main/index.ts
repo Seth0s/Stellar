@@ -66,6 +66,7 @@ import {
   deriveBoardTaskPhase,
   implementerReportedFinalSinceDelivery,
   latestAttributedReportAt,
+  latestConcludingReportAt,
   type PhaseReportRow,
   type TaskPhase,
 } from "./task-phase-decision";
@@ -2247,6 +2248,7 @@ function createWindow() {
         lastActor: lastActorByTask.get(t.id) ?? null,
         cards: cardsByTask.get(t.id) ?? [],
         report: report ? { verdict: (report.verdict ?? null) as "aprovado" | "reprovado" | null, updatedAt: report.updated_at } : null,
+        concludingReportAt: latestConcludingReportAt(t.id, phaseReports),
         deps,
         depStatuses,
         purpose: normalizeTaskPurpose(t.purpose),

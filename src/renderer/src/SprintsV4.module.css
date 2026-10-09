@@ -1,0 +1,346 @@
+/* Sprints screen — measures from Sprints.dc.html */
+
+.shell {
+  width: 1000px; /* sd:allow: Sprints.dc.html artboard width */
+  height: 860px; /* sd:allow: Sprints.dc.html artboard height */
+  flex: none;
+  box-sizing: border-box;
+  background: #0b0d12; /* sd:allow: Sprints.dc.html shell background */
+  color: #e8eaf0; /* sd:allow: Sprints.dc.html text */
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 16px; /* sd:allow: Sprints.dc.html body default */
+  font-weight: 400;
+  line-height: normal;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px; /* sd:allow: Sprints.dc.html shell radius */
+  overflow: hidden;
+  border: 1px solid #1d2230; /* sd:allow: Sprints.dc.html shell border */
+  position: relative;
+}
+
+.header {
+  padding: 14px 18px; /* sd:allow: Sprints.dc.html header padding */
+  display: flex;
+  align-items: center;
+  gap: 12px; /* sd:allow: Sprints.dc.html header gap */
+  border-bottom: 1px solid #1d2230; /* sd:allow: Sprints.dc.html header border */
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Sprints.dc.html back gap */
+  color: #a9b8ff; /* sd:allow: Sprints.dc.html link */
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px; /* sd:allow: Sprints.dc.html back size */
+}
+
+.title {
+  margin: 0;
+  font-size: 17px; /* sd:allow: Sprints.dc.html title */
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.btn {
+  min-height: 34px; /* sd:allow: Sprints.dc.html button height */
+  padding: 0 12px; /* sd:allow: Sprints.dc.html button padding */
+  border-radius: 8px; /* sd:allow: Sprints.dc.html button radius */
+  border: 1px solid #2a2f3d; /* sd:allow: Sprints.dc.html button border */
+  background: #161a24; /* sd:allow: Sprints.dc.html button background */
+  color: #e8eaf0; /* sd:allow: Sprints.dc.html button text */
+  font: inherit;
+  font-size: 13px; /* sd:allow: Sprints.dc.html button size */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Sprints.dc.html button gap */
+  cursor: pointer;
+}
+
+.primary {
+  min-height: 34px; /* sd:allow: Sprints.dc.html primary height */
+  padding: 0 12px; /* sd:allow: Sprints.dc.html primary padding */
+  border-radius: 8px; /* sd:allow: Sprints.dc.html primary radius */
+  background: #4a5fe0; /* sd:allow: Sprints.dc.html primary */
+  border: 1px solid #4a5fe0; /* sd:allow: Sprints.dc.html primary border */
+  font-weight: 600;
+  color: #fff; /* sd:allow: Sprints.dc.html primary text */
+  font: inherit;
+  font-size: 13px; /* sd:allow: Sprints.dc.html button size */
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Sprints.dc.html button gap */
+  cursor: pointer;
+}
+
+.iconBtn {
+  width: 34px; /* sd:allow: Sprints.dc.html icon button */
+  height: 34px; /* sd:allow: Sprints.dc.html icon button */
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px; /* sd:allow: Sprints.dc.html button radius */
+  border: 1px solid #2a2f3d; /* sd:allow: Sprints.dc.html button border */
+  background: #161a24; /* sd:allow: Sprints.dc.html button background */
+  color: #e8eaf0; /* sd:allow: Sprints.dc.html button text */
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px; /* sd:allow: Sprints.dc.html body padding */
+  display: flex;
+  flex-direction: column;
+  gap: 16px; /* sd:allow: Sprints.dc.html body gap */
+}
+
+.current {
+  border: 1px solid #2b3460; /* sd:allow: Sprints.dc.html current border */
+  border-radius: 14px; /* sd:allow: Sprints.dc.html current radius */
+  background: #10142a; /* sd:allow: Sprints.dc.html current background */
+  padding: 16px; /* sd:allow: Sprints.dc.html current padding */
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* sd:allow: Sprints.dc.html current gap */
+}
+
+.currentHead {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* sd:allow: Sprints.dc.html current head gap */
+}
+
+.pill {
+  font-size: 11.5px; /* sd:allow: Sprints.dc.html atual pill */
+  font-weight: 600;
+  padding: 3px 8px; /* sd:allow: Sprints.dc.html atual pill padding */
+  border-radius: 999px; /* sd:allow: Sprints.dc.html atual pill radius */
+  background: #27305a; /* sd:allow: Sprints.dc.html atual pill background */
+  color: #c3cbff; /* sd:allow: Sprints.dc.html atual pill text */
+}
+
+.currentName {
+  margin: 0;
+  font-size: 18px; /* sd:allow: Sprints.dc.html current name */
+  font-weight: 600;
+}
+
+.meta {
+  font-size: 13px; /* sd:allow: Sprints.dc.html meta */
+  color: #a3aabb; /* sd:allow: Sprints.dc.html meta */
+}
+
+.bar {
+  display: flex;
+  height: 14px; /* sd:allow: Sprints.dc.html progress height */
+  border-radius: 5px; /* sd:allow: Sprints.dc.html progress radius */
+  overflow: hidden;
+  background: #161a24; /* sd:allow: Sprints.dc.html progress track */
+}
+
+.legend {
+  display: flex;
+  gap: 18px; /* sd:allow: Sprints.dc.html legend gap */
+  font-size: 13px; /* sd:allow: Sprints.dc.html legend size */
+  color: #c9cede; /* sd:allow: Sprints.dc.html legend */
+  flex-wrap: wrap;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: Sprints.dc.html legend item gap */
+}
+
+.dot {
+  width: 9px; /* sd:allow: Sprints.dc.html legend dot */
+  height: 9px; /* sd:allow: Sprints.dc.html legend dot */
+  border-radius: 2px; /* sd:allow: Sprints.dc.html legend dot radius */
+  flex: none;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px; /* sd:allow: Sprints.dc.html stats gap */
+}
+
+.stat {
+  border-radius: 10px; /* sd:allow: Sprints.dc.html stat radius */
+  background: #0b0f20; /* sd:allow: Sprints.dc.html stat background */
+  padding: 10px 12px; /* sd:allow: Sprints.dc.html stat padding */
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* sd:allow: Sprints.dc.html stat gap */
+}
+
+.statLabel {
+  font-size: 12px; /* sd:allow: Sprints.dc.html stat label */
+  color: #8d94a6; /* sd:allow: Sprints.dc.html stat label */
+}
+
+.statValue {
+  font-size: 18px; /* sd:allow: Sprints.dc.html stat value */
+  font-weight: 600;
+}
+
+.secTitle {
+  margin: 0;
+  font-size: 12px; /* sd:allow: Sprints.dc.html section title */
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8d94a6; /* sd:allow: Sprints.dc.html section title */
+  font-weight: 400;
+}
+
+.past {
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* sd:allow: Sprints.dc.html past gap */
+}
+
+.row {
+  border: 1px solid #1d2230; /* sd:allow: Sprints.dc.html row border */
+  border-radius: 12px; /* sd:allow: Sprints.dc.html row radius */
+  background: #0f1218; /* sd:allow: Sprints.dc.html row background */
+  padding: 12px 14px; /* sd:allow: Sprints.dc.html row padding */
+  display: flex;
+  align-items: center;
+  gap: 12px; /* sd:allow: Sprints.dc.html row gap */
+}
+
+.rowMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* sd:allow: Sprints.dc.html row text gap */
+  min-width: 0;
+}
+
+.rowName {
+  font-size: 14.5px; /* sd:allow: Sprints.dc.html row name */
+}
+
+.rowHint {
+  font-size: 12.5px; /* sd:allow: Sprints.dc.html row hint */
+  color: #a3aabb; /* sd:allow: Sprints.dc.html row hint */
+}
+
+.closed {
+  font-size: 12px; /* sd:allow: Sprints.dc.html closed label */
+  color: #8fdcc0; /* sd:allow: Sprints.dc.html closed label */
+}
+
+.see {
+  font-size: 13px; /* sd:allow: Sprints.dc.html see link */
+  color: #a9b8ff; /* sd:allow: Sprints.dc.html link */
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px; /* sd:allow: Sprints.dc.html see link */
+}
+
+.menu {
+  display: flex;
+  gap: 8px; /* sd:allow: Sprints.dc.html menu gap */
+}
+
+.rename {
+  min-height: 34px; /* sd:allow: Sprints.dc.html field height */
+  padding: 0 10px; /* sd:allow: Sprints.dc.html field padding */
+  border-radius: 8px; /* sd:allow: Sprints.dc.html field radius */
+  border: 1px solid #2a2f3d; /* sd:allow: Sprints.dc.html field border */
+  background: #0c0f15; /* sd:allow: Sprints.dc.html field background */
+  color: #e8eaf0; /* sd:allow: Sprints.dc.html field text */
+  font: inherit;
+  font-size: 14px; /* sd:allow: Sprints.dc.html field size */
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 4, 8, 0.72); /* sd:allow: Sprints.dc.html overlay */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  width: 520px; /* sd:allow: Sprints.dc.html dialog width */
+  max-width: calc(100% - 32px); /* sd:allow: Sprints.dc.html dialog inset */
+  border-radius: 16px; /* sd:allow: Sprints.dc.html dialog radius */
+  background: #12151d; /* sd:allow: Sprints.dc.html dialog background */
+  border: 1px solid #2a2f3d; /* sd:allow: Sprints.dc.html dialog border */
+  padding: 20px; /* sd:allow: Sprints.dc.html dialog padding */
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* sd:allow: Sprints.dc.html dialog gap */
+}
+
+.dialog h2 {
+  margin: 0;
+  font-size: 18px; /* sd:allow: Sprints.dc.html dialog title */
+  font-weight: 600;
+}
+
+.dialog p {
+  margin: 0;
+  font-size: 14px; /* sd:allow: Sprints.dc.html dialog body */
+  color: #c9cede; /* sd:allow: Sprints.dc.html dialog body */
+  line-height: 1.55;
+}
+
+.box {
+  border: 1px solid #1d2230; /* sd:allow: Sprints.dc.html dialog box border */
+  border-radius: 10px; /* sd:allow: Sprints.dc.html dialog box radius */
+  padding: 10px 12px; /* sd:allow: Sprints.dc.html dialog box padding */
+  display: flex;
+  flex-direction: column;
+  gap: 6px; /* sd:allow: Sprints.dc.html dialog box gap */
+  font-size: 13px; /* sd:allow: Sprints.dc.html dialog box size */
+  color: #c9cede; /* sd:allow: Sprints.dc.html dialog box */
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px; /* sd:allow: Sprints.dc.html field label gap */
+  font-size: 13px; /* sd:allow: Sprints.dc.html field label */
+  color: #a3aabb; /* sd:allow: Sprints.dc.html field label */
+}
+
+.select {
+  min-height: 40px; /* sd:allow: Sprints.dc.html select height */
+  padding: 0 10px; /* sd:allow: Sprints.dc.html select padding */
+  border-radius: 9px; /* sd:allow: Sprints.dc.html select radius */
+  border: 1px solid #2a2f3d; /* sd:allow: Sprints.dc.html select border */
+  background: #0f1218; /* sd:allow: Sprints.dc.html select background */
+  color: #e8eaf0; /* sd:allow: Sprints.dc.html select text */
+  font: inherit;
+  font-size: 14px; /* sd:allow: Sprints.dc.html select size */
+}
+
+.actions {
+  display: flex;
+  gap: 10px; /* sd:allow: Sprints.dc.html dialog actions gap */
+  justify-content: flex-end;
+}
+
+.error {
+  font-size: 12.5px; /* sd:allow: Sprints.dc.html error size */
+  color: #f2a093; /* sd:allow: Sprints.dc.html error */
+}

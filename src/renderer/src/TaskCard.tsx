@@ -22,7 +22,6 @@ import {
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
-  computeCycleTime,
   computeColumnDrop,
   isTaskCardLive,
   computeMetaPills,
@@ -35,17 +34,8 @@ import {
   blockedQuestionOf,
   describeBlockedAge,
   BLOCKED_TASK_STATUS,
-  msToHours,
-  cycleAxisMarks,
-  computeVerdictsByProvider,
-  computeRoundsToApprove,
-  roundsBarTone,
   isHumanCreatedTask,
   didHumanTaskGetClaimed,
-  shortSprintId,
-  formatSprintTimestamp,
-  formatSprintDuration,
-  describeSprintCounts,
   sprintLabel,
   snapshotTaskToBoardItem,
   deriveTaskPhaseForBoardItem,
@@ -59,9 +49,10 @@ import {
   type SprintView,
 } from "./task-board-model";
 import { TaskFilaV3Board, type QueueColumn } from "./TaskFilaV3Board";
+import { GraficosV4 } from "./GraficosV4";
+import { SprintsV4 } from "./SprintsV4";
 import { queueColumnToStatus, QUEUE_COLUMN_ORDER } from "./task-fila-v3-decision";
 import { TaskDetailV3 } from "./TaskDetailV3";
-import { computeWorkStats, formatCycleMinutes, MIN_COMPARE_N } from "./work-stats";
 import {
   decideTaskDiffPresentation,
   TASK_DIFF_KEYS,
@@ -970,571 +961,6 @@ function CreateTaskForm({ boardId, onCreated }: { boardId: string; onCreated: (t
   );
 }
 
-/** Gráfico 1 — reprovações por provider (barras empilhadas). */
-function VerdictsByProviderChart({ data }: { data: { provider: string; approved: number; rejected: number }[] }) {
-  const W = 280;
-  const ROW_H = 20;
-  const PAD = 6;
-  const LABEL_W = 72;
-  const VALUE_W = 40;
-  const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
-  const maxTotal = Math.max(1, ...data.map((d) => d.approved + d.rejected));
-  const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
-  return (
-    <div className={styles.chartBox} data-part="chart-verdicts">
-      <div className={styles.chartTitle}>{t("task.charts.rejections")}</div>
-      {data.length === 0 ? (
-        <div className={styles.chartEmpty}>{t("task.charts.rejectionsEmpty")}</div>
-      ) : (
-        <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.rejectionsAria")}>
-            {data.map((d, i) => {
-              const y = PAD + i * ROW_H;
-              const approvedW = (d.approved / maxTotal) * barAreaW;
-              const rejectedW = (d.rejected / maxTotal) * barAreaW;
-              return (
-                <g key={d.provider}>
-                  <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
-                    {d.provider}
-                  </text>
-                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, approvedW)} height={ROW_H - 8} fill="var(--good)" />
-                  <rect x={LABEL_W + approvedW} y={y + 3} width={Math.max(0, rejectedW)} height={ROW_H - 8} fill="var(--danger)" />
-                  <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
-                    {d.approved} / {d.rejected}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-          <div className={styles.chartLegend}>
-            <span>
-              <span className={styles.legendSwatchApproved} /> aprovado
-            </span>
-            <span>
-              <span className={styles.legendSwatchRejected} /> reprovado
-            </span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Gráfico 2 — rodadas até aprovar. */
-function RoundsToApproveChart({ data }: { data: { taskId: string; label: string; rounds: number }[] }) {
-  const W = 280;
-  const ROW_H = 20;
-  const PAD = 6;
-  const LABEL_W = 72;
-  const VALUE_W = 28;
-  const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
-  const maxRounds = Math.max(1, ...data.map((d) => d.rounds));
-  const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2 + 14;
-  const axisMid = maxRounds / 2;
-  return (
-    <div className={styles.chartBox} data-part="chart-rounds">
-      <div className={styles.chartTitle}>{t("task.charts.rounds")}</div>
-      {data.length === 0 ? (
-        <div className={styles.chartEmpty}>{t("task.charts.roundsEmpty")}</div>
-      ) : (
-        <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.roundsAria")}>
-            {data.map((d, i) => {
-              const y = PAD + i * ROW_H;
-              const w = (d.rounds / maxRounds) * barAreaW;
-              const fill = roundsBarTone(d.rounds) === "expensive" ? "var(--signal)" : "var(--foam)";
-              return (
-                <g key={d.taskId}>
-                  <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
-                    {d.label}
-                  </text>
-                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, w)} height={ROW_H - 8} fill={fill} />
-                  <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
-                    {d.rounds}
-                  </text>
-                </g>
-              );
-            })}
-            <text x={LABEL_W} y={height - 2} fontSize="9" fill="var(--muted)">
-              0
-            </text>
-            <text x={LABEL_W + barAreaW / 2} y={height - 2} fontSize="9" fill="var(--muted)" textAnchor="middle">
-              {axisMid % 1 === 0 ? axisMid : axisMid.toFixed(1)}
-            </text>
-            <text x={LABEL_W + barAreaW} y={height - 2} fontSize="9" fill="var(--muted)" textAnchor="end">
-              {maxRounds} rodadas
-            </text>
-          </svg>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Gráfico 3 — tempo em cada estado, barras empilhadas + eixo + legenda. */
-function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: number; runningHours: number }[]; loading: boolean }) {
-  const W = 280;
-  const ROW_H = 20;
-  const PAD = 6;
-  const LABEL_W = 46;
-  const VALUE_W = 40;
-  const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
-  const maxTotal = Math.max(1e-6, ...data.map((d) => d.queuedHours + d.runningHours));
-  const axis = cycleAxisMarks(maxTotal);
-  const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
-  return (
-    <div className={styles.chartBox} data-part="chart-cycle">
-      <div className={styles.chartTitle}>{t("task.charts.cycle")}</div>
-      {loading ? (
-        <div className={styles.chartEmpty}>{t("common.loading")}</div>
-      ) : data.length === 0 ? (
-        <div className={styles.chartEmpty}>{t("task.charts.cycleEmpty")}</div>
-      ) : (
-        <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.cycle")}>
-            {data.map((d, i) => {
-              const y = PAD + i * ROW_H;
-              const queuedW = (d.queuedHours / maxTotal) * barAreaW;
-              const runningW = (d.runningHours / maxTotal) * barAreaW;
-              return (
-                <g key={d.id}>
-                  <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
-                    {shortTaskId(d.id)}
-                  </text>
-                  <rect x={LABEL_W} y={y + 3} width={barAreaW} height={ROW_H - 8} fill="var(--surface)" />
-                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, queuedW)} height={ROW_H - 8} fill="var(--border)" />
-                  <rect x={LABEL_W + queuedW} y={y + 3} width={Math.max(0, runningW)} height={ROW_H - 8} fill="var(--foam)" />
-                  <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
-                    {(d.queuedHours + d.runningHours).toFixed(1)}h
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-          <div className={styles.chartAxis} data-part="chart-cycle-axis">
-            {axis.map((m) => (
-              <span key={m.label}>{m.label}</span>
-            ))}
-          </div>
-          <div className={styles.chartLegend}>
-            <span>
-              <span className={styles.legendSwatchQueued} /> parada na fila
-            </span>
-            <span>
-              <span className={styles.legendSwatchRunning} /> executando
-            </span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Painel "Como anda" — escondido por padrão. Agregados primeiro (ciclo,
- * rodadas, cobertura); gráficos por task ficam embaixo como detalhe.
- * Sem sujeito ("quem"): só provider/model/task — ver identidade-de-ator. */
-function ChartsPanel({ tasks }: { tasks: TaskBoardItem[] }) {
-  const stats = computeWorkStats(
-    tasks.map((t) => ({
-      id: t.id,
-      status: t.status,
-      verdicts: t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })),
-      cards: t.cards.map((c) => ({
-        cardId: c.cardId,
-        role: c.role,
-        provider: c.provider,
-        model: c.model,
-        orphan: c.orphan,
-      })),
-      statusTransitions: t.statusTransitions,
-    })),
-  );
-  const cov = stats.coverage;
-  const allVerdicts = tasks.flatMap((t) => t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })));
-  const verdictsByProvider = computeVerdictsByProvider(allVerdicts);
-  const roundsData = computeRoundsToApprove(
-    tasks.map((t) => ({
-      taskId: t.id,
-      label: shortTaskId(t.id),
-      verdicts: t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })),
-    })),
-  );
-  const now = Date.now();
-  // Outliers only — full wall of per-task bars is noise when n≳20.
-  const cycleData = tasks
-    .map((t) => {
-      const cycle = computeCycleTime(t.statusTransitions, now);
-      return { id: t.id, queuedHours: msToHours(cycle.queuedMs), runningHours: msToHours(cycle.runningMs) };
-    })
-    .filter((d) => d.queuedHours > 0 || d.runningHours > 0)
-    .sort((a, b) => b.queuedHours + b.runningHours - (a.queuedHours + a.runningHours))
-    .slice(0, 8);
-
-  const cycleLabel =
-    stats.medianCycleMs === null
-      ? t("task.stats.cycleEmpty")
-      : t("task.stats.cycleValue", { minutes: formatCycleMinutes(stats.medianCycleMs), n: String(cov.doneWithCycle) });
-  const roundsLabel =
-    stats.medianRounds === null
-      ? t("task.stats.roundsEmpty")
-      : t("task.stats.roundsValue", { rounds: String(stats.medianRounds), n: String(cov.doneWithRounds) });
-
-  return (
-    <div className={styles.chartsPanel} data-part="charts-panel">
-      <div className={styles.statsCoverage} data-part="stats-coverage">
-        {t("task.stats.coverage", {
-          tasks: String(cov.tasksInView),
-          cycle: String(cov.doneWithCycle),
-          reopened: String(cov.reopened),
-          verdicts: String(cov.verdictRows),
-          typed: String(cov.verdictTyped),
-          nulls: String(cov.verdictNull),
-          parts: String(cov.participations),
-          orphans: String(cov.orphanParticipations),
-          withProvider: String(cov.withProvider),
-        })}
-      </div>
-      <div className={styles.statsRow} data-part="stats-row">
-        <div className={styles.statCard} data-part="stat-cycle">
-          <div className={styles.chartTitle}>{t("task.stats.cycle")}</div>
-          <div className={styles.statValue}>{cycleLabel}</div>
-          {cov.reopened > 0 && (
-            <div className={styles.statNote} data-part="stat-reopened">
-              {t("task.stats.reopened", { n: String(cov.reopened) })}
-            </div>
-          )}
-        </div>
-        <div className={styles.statCard} data-part="stat-rounds">
-          <div className={styles.chartTitle}>{t("task.stats.rounds")}</div>
-          <div className={styles.statValue}>{roundsLabel}</div>
-          <div className={styles.statNote}>{t("task.stats.roundsNote")}</div>
-        </div>
-        <div className={styles.statCard} data-part="stat-provider">
-          <div className={styles.chartTitle}>{t("task.stats.provider")}</div>
-          {stats.providerRounds.length === 0 ? (
-            <div className={styles.chartEmpty}>{t("task.stats.providerEmpty", { withProvider: String(cov.withProvider), parts: String(cov.participations) })}</div>
-          ) : (
-            <ul className={styles.statsProviderList} data-part="stats-provider-list">
-              {stats.providerRounds.map((p) => (
-                <li key={p.key} data-insufficient={p.insufficient ? "true" : "false"}>
-                  <span className={styles.statsProviderKey}>{p.key}</span>
-                  <span className={styles.statsProviderMeta}>
-                    {p.insufficient
-                      ? t("task.stats.providerInsufficient", { n: String(p.tasks), min: String(MIN_COMPARE_N) })
-                      : t("task.stats.providerOk", { n: String(p.tasks), rounds: String(p.medianRounds ?? "—") })}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-      <div className={styles.chartsGrid}>
-        <VerdictsByProviderChart data={verdictsByProvider} />
-        <RoundsToApproveChart data={roundsData} />
-        <CycleTimeChart data={cycleData} loading={false} />
-      </div>
-    </div>
-  );
-}
-
-/** DESIGN-BACKLOG.md §2.0 — um painel só: ver, renomear, fechar, excluir.
- * Contagens de sprint FECHADO vêm do snapshot congelado (nunca recalculadas).
- * Fechar/excluir moram aqui (não no header) — peso destrutivo separado do toggle. */
-function SprintsPanel({
-  boardId,
-  reloadKey,
-  selectedId,
-  viewingFrozen,
-  onSelect,
-  onClosed,
-  onRenamed,
-  onDeleted,
-  closingSprint,
-  setClosingSprint,
-}: {
-  boardId: string;
-  reloadKey: number;
-  selectedId: string | null;
-  viewingFrozen: boolean;
-  onSelect: (sprint: SprintView) => void;
-  onClosed: () => void;
-  onRenamed: () => void;
-  onDeleted: () => void;
-  closingSprint: boolean;
-  setClosingSprint: (v: boolean) => void;
-}) {
-  const [sprints, setSprints] = useState<SprintView[] | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
-  const [renameError, setRenameError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<null | { kind: "close" | "delete"; sprintId: string }>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const skipRenameBlurRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSprints(null);
-    window.tasks.listSprints(boardId).then((rows) => {
-      if (cancelled) return;
-      setSprints(
-        rows.map((r) => ({
-          id: r.id,
-          number: r.number,
-          name: r.name,
-          startedAt: r.startedAt,
-          closedAt: r.closedAt,
-          countTodo: r.countTodo,
-          countDoing: r.countDoing,
-          countDone: r.countDone,
-          countFailed: r.countFailed,
-          migratedIn: r.migratedIn,
-          migratedOut: r.migratedOut,
-          hasSnapshot: r.hasSnapshot,
-        })),
-      );
-      setNow(Date.now());
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [boardId, reloadKey]);
-
-  async function commitRename(sprintId: string) {
-    setRenameError(null);
-    const res = await window.tasks.renameSprint(sprintId, editDraft);
-    if (!res.ok) {
-      setRenameError(res.error);
-      return;
-    }
-    setEditingId(null);
-    onRenamed();
-  }
-
-  async function confirmPending() {
-    if (!pendingAction || busy) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      if (pendingAction.kind === "close") {
-        setClosingSprint(true);
-        try {
-          const res = await window.tasks.closeSprint(boardId);
-          if (!res.ok) {
-            setActionError(res.error);
-            return;
-          }
-          setPendingAction(null);
-          onClosed();
-        } finally {
-          setClosingSprint(false);
-        }
-      } else {
-        const res = await window.tasks.deleteSprint(pendingAction.sprintId);
-        if (!res.ok) {
-          setActionError(res.error);
-          return;
-        }
-        setPendingAction(null);
-        onDeleted();
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const active = sprints?.find((s) => s.closedAt === null) ?? null;
-
-  return (
-    <div className={styles.sprintsPanel} data-part="sprints-panel">
-      <div className={styles.sprintsTitle}>{t("task.sprintsTitle")}</div>
-      {sprints === null ? (
-        <div className={styles.chartEmpty}>{t("common.loading")}</div>
-      ) : sprints.length === 0 ? (
-        <div className={styles.chartEmpty}>{t("task.sprintsEmpty")}</div>
-      ) : (
-        <ul className={styles.sprintsList} role="listbox" aria-label={t("task.sprints")}>
-          {sprints.map((s) => {
-            const open = s.closedAt === null;
-            const selected = selectedId === s.id || (selectedId === null && open);
-            const editing = editingId === s.id;
-            return (
-              <li key={s.id} className={styles.sprintItem}>
-                <button
-                  type="button"
-                  data-part="sprint-row"
-                  data-sprint-open={open ? "true" : "false"}
-                  data-sprint-selected={selected ? "true" : "false"}
-                  className={`${styles.sprintRow} ${selected ? styles.sprintRowSelected : ""}`}
-                  aria-pressed={selected}
-                  onClick={() => {
-                    if (editing) return;
-                    onSelect(s);
-                  }}
-                >
-                  <div className={styles.sprintHead}>
-                    {editing ? (
-                      <input
-                        data-part="sprint-rename-input"
-                        data-no-drag
-                        className={styles.sprintRenameInput}
-                        value={editDraft}
-                        autoFocus
-                        aria-label={t("task.sprintName")}
-                        placeholder={t("task.sprintDefault", { number: s.number })}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setEditDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          e.stopPropagation();
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void commitRename(s.id);
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            skipRenameBlurRef.current = true;
-                            setEditingId(null);
-                            setRenameError(null);
-                          }
-                        }}
-                        onBlur={() => {
-                          if (skipRenameBlurRef.current) {
-                            skipRenameBlurRef.current = false;
-                            return;
-                          }
-                          void commitRename(s.id);
-                        }}
-                      />
-                    ) : (
-                      <span className={styles.sprintId} data-part="sprint-id">
-                        {sprintLabel(s)}
-                      </span>
-                    )}
-                    <span className={styles.sprintState} data-part="sprint-state">
-                      {open ? "em curso" : "fechado"}
-                    </span>
-                    <span className={styles.sprintDuration} data-part="sprint-duration">
-                      {formatSprintDuration(s.startedAt, s.closedAt, now)}
-                    </span>
-                  </div>
-                  <div className={styles.sprintWhen} data-part="sprint-when">
-                    {formatSprintTimestamp(s.startedAt)}
-                    {" → "}
-                    {s.closedAt ? formatSprintTimestamp(s.closedAt) : "agora"}
-                    <span className={styles.sprintIdHint}> · {shortSprintId(s.id)}</span>
-                  </div>
-                  {!open && (
-                    <div className={styles.sprintCounts} data-part="sprint-counts">
-                      {describeSprintCounts(s)}
-                    </div>
-                  )}
-                  {open && s.migratedIn > 0 && (
-                    <div className={styles.sprintCounts} data-part="sprint-counts">
-                      veio migrado: {s.migratedIn}
-                    </div>
-                  )}
-                </button>
-                <div className={styles.sprintActions} data-part="sprint-actions">
-                  <button
-                    type="button"
-                    data-part="sprint-rename"
-                    data-no-drag
-                    className={styles.sprintActionBtn}
-                    title={t("common.rename")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingId(s.id);
-                      setEditDraft(s.name ?? "");
-                      setRenameError(null);
-                    }}
-                  >
-                    renomear
-                  </button>
-                  {open && (
-                    <>
-                      <button
-                        type="button"
-                        data-part="sprint-close-action"
-                        data-no-drag
-                        className={`${styles.sprintActionBtn} ${styles.sprintActionQuiet}`}
-                        title={t("task.sprintClose")}
-                        disabled={closingSprint || viewingFrozen || busy}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingAction({ kind: "close", sprintId: s.id });
-                          setActionError(null);
-                        }}
-                      >
-                        fechar
-                      </button>
-                      <button
-                        type="button"
-                        data-part="sprint-delete-action"
-                        data-no-drag
-                        className={`${styles.sprintActionBtn} ${styles.sprintActionDanger}`}
-                        title={t("task.sprintDelete")}
-                        disabled={busy || viewingFrozen}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingAction({ kind: "delete", sprintId: s.id });
-                          setActionError(null);
-                        }}
-                      >
-                        excluir
-                      </button>
-                    </>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {renameError && (
-        <div className={styles.sprintCloseError} data-part="sprint-rename-error" role="alert">
-          {renameError}
-        </div>
-      )}
-      {pendingAction && (
-        <div className={styles.sprintConfirm} data-part="sprint-confirm" role="alertdialog">
-          <p>
-            {pendingAction.kind === "close"
-              ? t("task.sprintCloseConfirm", { label: active ? sprintLabel(active) : t("task.sprintCurrent") })
-              : t("task.sprintDeleteConfirm", { label: active ? sprintLabel(active) : t("task.sprintCurrent") })}
-          </p>
-          <div className={styles.sprintConfirmActions}>
-            <button
-              type="button"
-              data-no-drag
-              className={styles.sprintActionBtn}
-              disabled={busy}
-              onClick={() => setPendingAction(null)}
-            >
-              {t("common.cancel").toLowerCase()}
-            </button>
-            <button
-              type="button"
-              data-no-drag
-              data-part="sprint-confirm-go"
-              className={`${styles.sprintActionBtn} ${styles.sprintActionDanger}`}
-              disabled={busy || closingSprint}
-              onClick={() => void confirmPending()}
-            >
-              {pendingAction.kind === "close" ? t("task.sprintCloseNow") : t("task.sprintDeleteNow")}
-            </button>
-          </div>
-        </div>
-      )}
-      {actionError && (
-        <div className={styles.sprintCloseError} data-part="sprint-action-error" role="alert">
-          {actionError}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function TaskCardInner({
   cardId,
   rect,
@@ -1623,11 +1049,11 @@ function TaskCardInner({
   const [chartsOpen, setChartsOpen] = useState(false);
   const [sprintsOpen, setSprintsOpen] = useState(false);
   const [sprintsReloadKey, setSprintsReloadKey] = useState(0);
-  const [closingSprint, setClosingSprint] = useState(false);
   /** null = live active sprint (default). Closed id → frozen snapshot board. */
   const [viewingSprintId, setViewingSprintId] = useState<string | null>(null);
   const [viewingSprintMeta, setViewingSprintMeta] = useState<SprintView | null>(null);
   const [activeSprintLabel, setActiveSprintLabel] = useState<string | null>(null);
+  const [activeSprint, setActiveSprint] = useState<{ name: string | null; startedAt: number } | null>(null);
   const [frozenTasks, setFrozenTasks] = useState<TaskBoardItem[] | null>(null);
 
   const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
@@ -1738,6 +1164,7 @@ function TaskCardInner({
     window.tasks.listSprints(activeBoardId).then((rows) => {
       if (cancelled) return;
       const active = rows.find((r) => r.closedAt === null);
+      setActiveSprint(active ? { name: active.name, startedAt: active.startedAt } : null);
       setActiveSprintLabel(active ? sprintLabel(active) : null);
     });
     return () => {
@@ -1781,29 +1208,6 @@ function TaskCardInner({
     };
   }, [viewingSprintId, activeBoardId, sprintsReloadKey]);
 
-  function onSelectSprint(s: SprintView) {
-    if (s.closedAt === null) {
-      setViewingSprintId(null);
-      setFrozenTasks(null);
-      setViewingSprintMeta(null);
-      return;
-    }
-    setViewingSprintId(s.id);
-  }
-
-  function onSprintClosed() {
-    setSprintsReloadKey((k) => k + 1);
-    setViewingSprintId(null);
-    setFrozenTasks(null);
-    setViewingSprintMeta(null);
-  }
-
-  function onSprintDeleted() {
-    setSprintsReloadKey((k) => k + 1);
-    setViewingSprintId(null);
-    setFrozenTasks(null);
-    setViewingSprintMeta(null);
-  }
   // RODADA 4 — aviso quando task criada por humano é pega (ganha card ou
   // vira running). Snapshot anterior × atual; também cobre tasks humanas
   // já no board ao montar (firstActor), não só as criadas nesta sessão.
@@ -2013,7 +1417,10 @@ function TaskCardInner({
               className={`${styles.chartsToggleBtn} ${sprintsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={sprintsOpen}
               title={t("task.sprintsManage")}
-              onClick={() => setSprintsOpen((v) => !v)}
+              onClick={() => {
+                setSprintsOpen((v) => !v);
+                setChartsOpen(false);
+              }}
             >
               <span>{activeSprintLabel ?? t("task.sprints")}</span>
             </button>
@@ -2022,11 +1429,14 @@ function TaskCardInner({
               data-part="charts-toggle"
               className={`${styles.chartsToggleBtn} ${chartsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={chartsOpen}
-              title={t("task.stats")}
-              onClick={() => setChartsOpen((v) => !v)}
+              title={t("task.charts")}
+              onClick={() => {
+                setChartsOpen((v) => !v);
+                setSprintsOpen(false);
+              }}
             >
               <Icon name="charts" size={12} />
-              <span>{t("task.stats")}</span>
+              <span>{t("task.charts")}</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
@@ -2068,6 +1478,26 @@ function TaskCardInner({
           ))}
         </div>
       )}
+      {chartsOpen ? (
+        <GraficosV4
+          tasks={boardTasks}
+          boardLabel={boardNames[activeBoardId] ?? activeBoardId}
+          sprint={activeSprint}
+          onBack={() => setChartsOpen(false)}
+          onOpenTask={(id) => {
+            setChartsOpen(false);
+            setOpenTaskId(id);
+          }}
+        />
+      ) : sprintsOpen ? (
+        <SprintsV4
+          boardId={activeBoardId}
+          tasks={boardTasks}
+          reloadKey={sprintsReloadKey}
+          onBack={() => setSprintsOpen(false)}
+          onChanged={() => setSprintsReloadKey((k) => k + 1)}
+        />
+      ) : (
       <TaskFilaV3Board
         tasks={boardTasks}
         now={now}
@@ -2079,11 +1509,15 @@ function TaskCardInner({
         dragOver={dragOver}
         columnBodyRefs={columnBodyRefs}
         viewingFrozen={viewingFrozen}
-        onOpenCharts={() => setChartsOpen(true)}
+        onOpenCharts={() => {
+          setChartsOpen(true);
+          setSprintsOpen(false);
+        }}
         onCreateTask={() => setCreatingTask(true)}
         totalDoneCount={groups.done.length}
       />
-      {creatingTask && !viewingFrozen && (
+      )}
+      {!chartsOpen && !sprintsOpen && creatingTask && !viewingFrozen && (
         <div data-part="create-task-inline" style={{ padding: "8px 18px" }}>
           <CreateTaskForm
             boardId={activeBoardId}
@@ -2093,22 +1527,9 @@ function TaskCardInner({
           />
         </div>
       )}
-      <TeamQueueSection boardId={activeBoardId} onOpenTask={(id) => setOpenTaskId(id)} />
-      {sprintsOpen && (
-        <SprintsPanel
-          boardId={activeBoardId}
-          reloadKey={sprintsReloadKey}
-          selectedId={viewingSprintId}
-          viewingFrozen={viewingFrozen}
-          onSelect={onSelectSprint}
-          onClosed={onSprintClosed}
-          onRenamed={() => setSprintsReloadKey((k) => k + 1)}
-          onDeleted={onSprintDeleted}
-          closingSprint={closingSprint}
-          setClosingSprint={setClosingSprint}
-        />
+      {!chartsOpen && !sprintsOpen && (
+        <TeamQueueSection boardId={activeBoardId} onOpenTask={(id) => setOpenTaskId(id)} />
       )}
-      {chartsOpen && <ChartsPanel tasks={boardTasks} />}
       {openTask && (
         <TaskDetailV3
           task={openTask}
