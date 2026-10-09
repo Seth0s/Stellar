@@ -532,6 +532,12 @@ export const PROJECT_CODE_EXTS: readonly string[] = [
   ".cmd",
   // Captured terminal screens kept as test fixtures (tests/unit/fixtures/**).
   ".txt",
+  // Native N-API addon for peer credentials (resources/peer-credentials):
+  // C++ source and node-gyp manifest.
+  ".cc",
+  ".gyp",
+  // Type declarations beside ESM verify scripts (scripts/verify/*.d.mts).
+  ".mts",
 ];
 const PROJECT_CODE_EXT_SET = new Set(PROJECT_CODE_EXTS);
 
