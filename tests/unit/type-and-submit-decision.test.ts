@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { providerCapacity } from "../../src/main/providers";
 
 const CLAUDE_PATTERN = /\b(Working|Thinking)\b/i;
 const CURSOR_PATTERN = /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i;
@@ -854,5 +855,80 @@ describe("mid-turn park ≠ delivered (cursor follow-ups)", () => {
         midTurnParkedPattern: CURSOR_PARKED,
       }),
     ).toBe("parked");
+  });
+});
+
+/**
+ * Cursor CLI 2026.10.01 queue banner (`queued-message-banner.tsx`): the footer
+ * is `enter steer`, `enter interrupt and send`, or `enter send now`, and the
+ * confirm loop only reads 8 lines — the `follow-ups` title often sits above
+ * that window. Samples below are the live composer chrome (read_card) plus
+ * that footer.
+ */
+const CURSOR_LIVE_PARKED = providerCapacity("cursor")!.delivery.midTurnQueue!.parkedPattern;
+
+const BUSY_NO_QUEUE = [
+  "  ⠰⠳ Grepping …",
+  "    Tip: Use /debug to instrument and debug complex problems.",
+  "",
+  "  → Add a follow-up                                                                 ctrl+c to stop",
+  "",
+  "  Grok 4.7 256K High · 43.9% · 13 files edited                                      Run Everything",
+  "  ~/Workplace/Projects/Stellar · main",
+].join("\n");
+
+const IDLE_COMPOSER = [
+  "  → Add a follow-up",
+  "",
+  "  Grok 4.7 256K High                                                                  Max mode: OFF",
+  "  ~/Workplace/Projects/Stellar · main",
+].join("\n");
+
+const PARKED_INTERRUPT = [
+  "│ ○ steer-marker-queued-row                                                          │",
+  "│ enter interrupt and send · ↑ select/edit · esc cancel                              │",
+  "└────────────────────────────────────────────────────────────────────────────────────┘",
+  "  ⠰⠳ Grepping …",
+  "  → Add a follow-up                                                                 ctrl+c to stop",
+  "",
+  "  Grok 4.7 256K High · 43.9% · 13 files edited                                      Run Everything",
+  "  ~/Workplace/Projects/Stellar · main",
+].join("\n");
+
+describe("cursor park chrome measured on the live CLI", () => {
+  const needle = "steer-marker-queued-row";
+
+  it("turno ocupado sem fila não é park", () => {
+    expect(CURSOR_LIVE_PARKED.test(BUSY_NO_QUEUE)).toBe(false);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: BUSY_NO_QUEUE,
+        screenText: BUSY_NO_QUEUE,
+        sentNeedle: needle,
+        hasNewActivitySinceWrite: true,
+        submitStartedPattern: CURSOR_PATTERN,
+        midTurnParkedPattern: CURSOR_LIVE_PARKED,
+      }),
+    ).not.toBe("parked");
+  });
+
+  it("ocioso (composer sem ctrl+c e sem rodapé da fila) não é park", () => {
+    expect(CURSOR_LIVE_PARKED.test(IDLE_COMPOSER)).toBe(false);
+  });
+
+  it("follow-up estacionado (enter interrupt and send, título fora das 8 linhas) => parked, e steer só se pedido", () => {
+    expect(CURSOR_LIVE_PARKED.test(PARKED_INTERRUPT)).toBe(true);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: BUSY_NO_QUEUE,
+        screenText: PARKED_INTERRUPT,
+        sentNeedle: needle,
+        hasNewActivitySinceWrite: true,
+        submitStartedPattern: CURSOR_PATTERN,
+        midTurnParkedPattern: CURSOR_LIVE_PARKED,
+      }),
+    ).toBe("parked");
+    expect(shouldSteerAfterPark({ result: "parked", steer: true, steerKey: "\r" })).toBe(true);
+    expect(shouldSteerAfterPark({ result: "parked", steer: false, steerKey: "\r" })).toBe(false);
   });
 });

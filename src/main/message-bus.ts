@@ -7402,7 +7402,7 @@ export function createMessageBus(
         for (;;) {
           const row = callbacks.getReport(implementerCardId, after);
           if (!row) break;
-          let body: unknown = null;
+          let body: unknown;
           try {
             body = decodeReportArgument(JSON.parse(row.report_json));
           } catch {
