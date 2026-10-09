@@ -27,10 +27,13 @@ function findDb(root) {
   return null;
 }
 
+/** Fixed clock for Fila V3 / V3.1 parity — elapsed tiles read Date.now(). */
+export const FILA_V3_CLOCK = Date.parse("2026-10-09T18:00:00.000Z");
+
 /** Seed the isolated DB with the prototype mock set (fixed ids → short #id). */
-function seedMockTasks(dbPath, boardId, sprintId) {
+function seedMockTasks(dbPath, boardId, sprintId, clock = FILA_V3_CLOCK) {
   const db = new Database(dbPath);
-  const now = Date.now();
+  const now = clock;
   const today = now - 3_600_000;
   const insert = db.prepare(`
     INSERT OR REPLACE INTO tasks (
@@ -101,7 +104,8 @@ function seedMockTasks(dbPath, boardId, sprintId) {
       result_json: null,
       deps_json: null,
       requested_status: "pending",
-      requested_reason: "aguardando liberação",
+      // Needs-you strip body (Fila.dc.html); tile title stays A5d.
+      requested_reason: "#70584525 A5c e mais 3 esperam liberação depois do commit do ciclo.",
       requested_by: "agent",
       requested_at: now - 2 * 3_600_000,
       superseded_by: null,
@@ -159,22 +163,41 @@ function seedMockTasks(dbPath, boardId, sprintId) {
     },
     {
       id: "511abcb2-aaaa-4000-8000-000000000007",
-      prompt: `Card que termina o turno sem report recebe o lembrete, também nos providers que não declaram turno
+      // First line is the tile/dialog title; headed sections feed the Resumo tab.
+      prompt: `Card que termina o turno sem report recebe o lembrete
 
-Cards ainda esquecem o report. Quando um implementador termina o turno e não reporta em alguns segundos, o próprio card recebe uma mensagem do Stellar pedindo o report; se continuar sem, o orquestrador é avisado uma vez.
+O que é
+Cards ainda esquecem o report. Quando um implementador termina o turno e não reporta, o próprio card recebe o lembrete; se continuar sem, o orquestrador é avisado uma vez.
 
-O aceite
-- Testes com amostras reais de tela por provider
-- Lembrete ao card, depois aviso ao orquestrador, uma vez cada
-- Smoke isolado com um card commandcode que termina sem report
-- Suíte sem regressão, check:types limpo, comentários em inglês
-
-FAZER
-1. Fim de turno pela TELA, declarado por provider como dado
-2. O watchdog usa esse fato como declaredIdle`,
+O que foi medido
+Os gates rodam quando o report chegar, numa worktree isolada.`,
       status: "running",
       purpose: "fix",
-      result_json: null,
+      result_json: JSON.stringify({
+        gateRun: {
+          ok: true,
+          commands: [{ cmd: "npm run check:types", exitCode: 0 }],
+          diff: {
+            gitRoot: "/tmp",
+            stat: "",
+            patch: "",
+            patchTruncated: false,
+            files: [
+              { path: "src/main/report-watchdog.ts", status: "M", inTerritory: true, territoryDeclared: true },
+              { path: "src/main/providers.ts", status: "M", inTerritory: true, territoryDeclared: true },
+              { path: "src/renderer/src/TerminalCard.tsx", status: "M", inTerritory: true, territoryDeclared: true },
+              { path: "scripts/verify/smoke-report-reminder.mjs", status: "A", inTerritory: true, territoryDeclared: true },
+              { path: "tests/unit/report-watchdog.test.ts", status: "A", inTerritory: true, territoryDeclared: true },
+              { path: "docs/ORCHESTRATION.md", status: "M", inTerritory: false, territoryDeclared: true },
+            ],
+            filesTruncated: false,
+            total: 6,
+            outsideTerritory: 1,
+            territoryDeclared: true,
+            note: "observed change, not authorship",
+          },
+        },
+      }),
       deps_json: null,
       requested_status: null,
       requested_reason: null,
@@ -373,6 +396,38 @@ Push: o desktop cifra o aviso (RFC 8291) e o servidor só assina com VAPID e env
       updated_at: now,
     },
     {
+      id: "b9b00004-aaaa-4000-8000-000000000019",
+      prompt: "R3 — Notificações no desktop",
+      status: "superseded",
+      purpose: "fix",
+      result_json: null,
+      deps_json: null,
+      requested_status: null,
+      requested_reason: null,
+      requested_by: null,
+      requested_at: null,
+      superseded_by: "878514a8-aaaa-4000-8000-000000000099",
+      review: null,
+      ord: 19,
+      updated_at: now,
+    },
+    {
+      id: "b9b00005-aaaa-4000-8000-000000000020",
+      prompt: "A5a — Lista de tasks do board",
+      status: "superseded",
+      purpose: "fix",
+      result_json: null,
+      deps_json: null,
+      requested_status: null,
+      requested_reason: null,
+      requested_by: null,
+      requested_at: null,
+      superseded_by: "ba68ddaa-aaaa-4000-8000-000000000011",
+      review: null,
+      ord: 20,
+      updated_at: now,
+    },
+    {
       id: "a550a7ae-aaaa-4000-8000-000000000015",
       prompt: "Detalhe da task no card Fila, mais organizado",
       status: "pending",
@@ -384,6 +439,7 @@ Push: o desktop cifra o aviso (RFC 8291) e o servidor só assina com VAPID e env
       requested_by: null,
       requested_at: null,
       superseded_by: null,
+      // Ready column + needs-you strip via review=wanted without a final report.
       review: "wanted",
       ord: 15,
       updated_at: now,
@@ -443,14 +499,15 @@ Push: o desktop cifra o aviso (RFC 8291) e o servidor só assina com VAPID e env
   });
   tx();
   db.close();
+  return now;
 }
 
 export { findDb, seedMockTasks };
 
 /** Wire live PTYs + reports so Rodando/Revisão match DADOS §3. */
-export function wireLiveLinks(dbPath) {
+export function wireLiveLinks(dbPath, clock = FILA_V3_CLOCK) {
   const db = new Database(dbPath);
-  const now = Date.now();
+  const now = clock;
   const runA = "511abcb2-aaaa-4000-8000-000000000007";
   const runB = "ad6787aa-aaaa-4000-8000-000000000008";
   const ready = "c5b6aeaa-aaaa-4000-8000-000000000004";
@@ -460,25 +517,94 @@ export function wireLiveLinks(dbPath) {
   const liveB = "fila-v3-live-gemini";
   const deadReview = "fila-v3-dead-review";
   const deadProto = "fila-v3-dead-proto";
-  db.prepare(`UPDATE tasks SET card_id = ?, status = 'pending', updated_at = ? WHERE id = ?`).run(liveA, now, runA);
-  db.prepare(`UPDATE tasks SET card_id = ?, status = 'pending', updated_at = ? WHERE id = ?`).run(liveB, now, runB);
-  db.prepare(`UPDATE tasks SET card_id = ?, updated_at = ? WHERE id = ?`).run(deadReview, now, review);
-  db.prepare(`UPDATE tasks SET card_id = ?, updated_at = ? WHERE id = ?`).run(deadProto, now, proto);
+  // Status stays pending — openStore normalizes legacy `running` rows; the
+  // running column comes from a live implementer card (cardAlive).
+  db.prepare(`UPDATE tasks SET card_id = ?, status = 'pending', updated_at = ? WHERE id = ?`).run(
+    liveA,
+    now - 38 * 60_000,
+    runA,
+  );
+  db.prepare(`UPDATE tasks SET card_id = ?, status = 'pending', updated_at = ? WHERE id = ?`).run(
+    liveB,
+    now - 12 * 60_000,
+    runB,
+  );
+  db.prepare(`UPDATE tasks SET card_id = ?, updated_at = ? WHERE id = ?`).run(deadReview, now - 6 * 60_000, review);
+  // Keep a550 in ready: no live card and no final report; strip uses review=wanted.
+  db.prepare(`UPDATE tasks SET card_id = NULL, updated_at = ? WHERE id = ?`).run(now - 60_000, proto);
   const link = db.prepare(
     `INSERT OR REPLACE INTO task_cards
        (task_id, card_id, role, linked_at, provider, reservation_state, reserved_order, released_at)
      VALUES (?, ?, 'implementer', ?, ?, ?, ?, ?)`,
   );
   link.run(runA, liveA, now, "claude", null, null, null);
-  link.run(runB, liveB, now, "claude", null, null, null);
+  link.run(runB, liveB, now, "antigravity", null, null, null);
   link.run(ready, liveA, now, "claude", "reserved", 1, null);
   link.run(review, deadReview, now, "claude", null, null, now - 5 * 60_000);
-  link.run(proto, deadProto, now, "claude", null, null, now - 5 * 60_000);
+  // Elapsed on running tiles uses the latest statusTransitions→running.
+  const tr = db.prepare(
+    `INSERT OR REPLACE INTO task_transitions
+       (id, task_id, kind, from_value, to_value, actor, card_id, user_id, at)
+     VALUES (?, ?, 'status', ?, ?, 'app', ?, NULL, ?)`,
+  );
+  tr.run("fila-v3-tr-run-b", runB, "pending", "running", liveB, now - 12 * 60_000);
+  // Nine status transitions on 511abcb2 (trail tab); last →running stamps 38 min.
+  const trailSteps = [
+    ["pending", "ready"],
+    ["ready", "running"],
+    ["running", "pending"],
+    ["pending", "ready"],
+    ["ready", "running"],
+    ["running", "pending"],
+    ["pending", "ready"],
+    ["ready", "pending"],
+    ["pending", "running"],
+  ];
+  for (let i = 0; i < trailSteps.length; i++) {
+    const [from, to] = trailSteps[i];
+    const at = i === trailSteps.length - 1 ? now - 38 * 60_000 : now - (120 - i * 8) * 60_000;
+    tr.run(`fila-v3-tr-trail-${i}`, runA, from, to, liveA, at);
+  }
+  const verdict = db.prepare(
+    `INSERT OR REPLACE INTO task_verdicts (id, task_id, card_id, role, verdict, at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  // Two reviewer verdicts so the review tile shows the second-pass meta label.
+  verdict.run("fila-v3-vd-1", review, deadReview, "reviewer", "changes_requested", now - 20 * 60_000);
+  verdict.run("fila-v3-vd-2", review, deadReview, "reviewer", "changes_requested", now - 10 * 60_000);
+  // Done-column phrases: reviewer x2, Master x4, Master x1.
+  const doneRev = "d97be5aa-aaaa-4000-8000-000000000010";
+  const doneMaster4 = "ba68ddaa-aaaa-4000-8000-000000000011";
+  const doneMaster1 = "9012e6aa-aaaa-4000-8000-000000000012";
+  verdict.run("fila-v3-vd-done-r1", doneRev, deadReview, "reviewer", "changes_requested", now - 40 * 60_000);
+  verdict.run("fila-v3-vd-done-r2", doneRev, deadReview, "reviewer", "aprovado", now - 30 * 60_000);
+  for (let i = 0; i < 4; i++) {
+    verdict.run(
+      `fila-v3-vd-done-m4-${i}`,
+      doneMaster4,
+      deadReview,
+      "implementer",
+      "changes_requested",
+      now - (50 - i * 5) * 60_000,
+    );
+  }
+  verdict.run("fila-v3-vd-done-m1", doneMaster1, deadReview, "implementer", "aprovado", now - 15 * 60_000);
   const report = db.prepare(
     `INSERT INTO reports (seq, card_id, report_json, verdict, role, channel, updated_at)
      VALUES (?, ?, ?, NULL, 'implementer', 'mcp', ?)`,
   );
-  report.run(900001, deadReview, JSON.stringify({ summary: "gate vermelho fora do território", ok: false }), now - 6 * 60_000);
-  report.run(900002, deadProto, JSON.stringify({ summary: "protótipo pronto para aprovar", ok: true }), now - 60_000);
+  // ok:true + estado final + declared taskId — awaiting_review only after a
+  // final implementer report for THIS task (phase fix).
+  report.run(
+    900001,
+    deadReview,
+    JSON.stringify({
+      summary: "gate vermelho fora do território",
+      ok: true,
+      estado: "final",
+      taskId: review,
+    }),
+    now - 6 * 60_000,
+  );
   db.close();
 }

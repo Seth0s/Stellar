@@ -1,0 +1,135 @@
+{
+  "id": "main-v31",
+  "title": "Detalhe V3.1 — modal sobre o card Fila",
+  "specMd": "Fila-v3.1-NOTAS.md",
+  "proto": "Main-v3.1.dc.html",
+  "impl": "main-v31",
+  "viewport": { "width": 1760, "height": 980 },
+  "fixture": "main-v31",
+  "protoQuery": "cena=aberto",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "section[role='dialog']",
+    "impl": "[data-part='task-detail-v3'] [role='dialog']"
+  },
+  "pairs": [
+    {
+      "id": "dialog",
+      "proto": "section[role='dialog']",
+      "impl": "[data-part='task-detail-v3'] [role='dialog']",
+      "props": ["background-color", "border-radius", "border-color", "width", "height"]
+    },
+    {
+      "id": "veil",
+      "proto": ".veil",
+      "impl": "[data-part='task-detail-veil']",
+      "props": ["background-color", "border-radius"]
+    },
+    {
+      "id": "head",
+      "proto": "section[role='dialog'] > header",
+      "impl": "[data-part='task-detail-v3'] [role='dialog'] > header",
+      "props": ["padding", "gap"]
+    },
+    {
+      "id": "task-id",
+      "proto": "section[role='dialog'] > header .mono",
+      "impl": "[data-part='task-detail-id']",
+      "props": ["font-size", "color", "text"]
+    },
+    {
+      "id": "title",
+      "proto": "#ttl",
+      "impl": "#task-detail-v3-title",
+      "props": ["font-size", "font-weight", "line-height", "text"]
+    },
+    {
+      "id": "agora",
+      "proto": "section[role='dialog'] > div:nth-of-type(1)",
+      "impl": "[data-part='agora-banner']",
+      "props": ["background-color", "border-radius", "padding", "gap"]
+    },
+    {
+      "id": "tabs",
+      "proto": "section[role='dialog'] nav[aria-label='Seções']",
+      "impl": "[data-part='task-detail-tabs']",
+      "props": ["gap", "padding"]
+    },
+    {
+      "id": "tab-on",
+      "proto": "button.tab.on",
+      "impl": "[data-part='task-detail-v3'] nav button[class*='tabOn']",
+      "props": ["font-size", "color", "border-bottom-color", "padding"]
+    },
+    {
+      "id": "panel",
+      "proto": "section[role='dialog'] main",
+      "impl": "[data-part='task-detail-v3'] main",
+      "props": ["padding", "gap", "background-color"]
+    },
+    {
+      "id": "what-is",
+      "proto": "section[role='dialog'] main section:nth-of-type(1) p",
+      "impl": "[data-part='task-detail-prompt-original']",
+      "props": ["text", "font-size"]
+    },
+    {
+      "id": "measured",
+      "proto": "section[role='dialog'] main section:nth-of-type(2) > div",
+      "impl": "[data-part='task-detail-measured-blurb']",
+      "props": ["text", "font-size"]
+    },
+    {
+      "id": "tab-changes-count",
+      "proto": "section[role='dialog'] nav button:nth-of-type(4) span",
+      "impl": "[data-part='task-detail-tabs'] button:nth-of-type(4) span",
+      "props": ["text"]
+    },
+    {
+      "id": "tab-trail-count",
+      "proto": "section[role='dialog'] nav button:nth-of-type(5) span",
+      "impl": "[data-part='task-detail-tabs'] button:nth-of-type(5) span",
+      "props": ["text"]
+    }
+  ],
+  "scenes": [
+    {
+      "id": "aberto",
+      "protoQuery": "cena=aberto",
+      "fixtureScene": "aberto"
+    }
+  ],
+  "approvedDiffs": [
+    {
+      "pairId": "head",
+      "prop": "padding",
+      "approvedBy": "dono",
+      "date": "2026-10-09",
+      "reason": "Owner keeps phase stepper + sprint pill (TaskDetailV3.tsx @ 14434d7:243 and :263-290); Main-v3.1 omits both so the header padding box is taller"
+    },
+    {
+      "pairId": "head",
+      "prop": "gap",
+      "approvedBy": "dono",
+      "date": "2026-10-09",
+      "reason": "Owner keeps stepper, sprint pill, briefing edit, Pedir status, Bloqueia/Detalhes — header stack gap may differ from the slim Main-v3.1 mock"
+    },
+    {
+      "pairId": "task-id",
+      "prop": "text",
+      "approvedBy": "dono",
+      "date": "2026-10-09",
+      "reason": "Short task id stays 8 characters (#511abcb2)"
+    }
+  ]
+}

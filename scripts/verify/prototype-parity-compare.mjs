@@ -155,7 +155,15 @@ export function compareStyleProp(prop, protoValue, implValue, tolerances = DEFAU
     return { prop, proto: p, impl: i, kind: "font-weight" };
   }
 
-  if (prop === "font-size" || prop === "width" || prop === "height" || prop === "gap" || prop === "line-height" || prop === "left") {
+  if (
+    prop === "font-size" ||
+    prop === "width" ||
+    prop === "height" ||
+    prop === "gap" ||
+    prop === "line-height" ||
+    prop === "left" ||
+    prop === "top"
+  ) {
     // line-height may be unitless; compare px when both parse, else string equality.
     if (prop === "line-height") {
       const pa = parseCssPx(p);
@@ -277,19 +285,32 @@ function escCell(v) {
 /**
  * Validate machine spec shape. Throws on hard contract errors.
  */
+function validatePairs(pairs, label) {
+  if (!Array.isArray(pairs) || pairs.length === 0) {
+    throw new Error(`${label} pairs must be a non-empty array`);
+  }
+  for (const pair of pairs) {
+    if (!pair.id || !pair.proto || !pair.impl) {
+      throw new Error(`pair requires id/proto/impl: ${JSON.stringify(pair)}`);
+    }
+  }
+}
+
 export function validateParitySpec(spec) {
   if (!spec || typeof spec !== "object") throw new Error("parity spec must be an object");
   if (!spec.id) throw new Error("parity spec.id is required");
   if (!spec.viewport || !spec.viewport.width || !spec.viewport.height) {
     throw new Error("parity spec.viewport.{width,height} is required");
   }
-  if (!Array.isArray(spec.pairs) || spec.pairs.length === 0) {
-    throw new Error("parity spec.pairs must be a non-empty array");
-  }
-  for (const pair of spec.pairs) {
-    if (!pair.id || !pair.proto || !pair.impl) {
-      throw new Error(`pair requires id/proto/impl: ${JSON.stringify(pair)}`);
+  const scenes = Array.isArray(spec.scenes) ? spec.scenes : null;
+  if (scenes && scenes.length > 0) {
+    for (const scene of scenes) {
+      if (!scene.id) throw new Error(`scene requires id: ${JSON.stringify(scene)}`);
+      const pairs = scene.pairs || spec.pairs;
+      validatePairs(pairs, `scene ${scene.id}`);
     }
+  } else {
+    validatePairs(spec.pairs, "spec");
   }
   if (spec.approvedDiffs) {
     for (const a of spec.approvedDiffs) {
@@ -301,4 +322,26 @@ export function validateParitySpec(spec) {
     }
   }
   return true;
+}
+
+/** Expand a SPEC that may declare `scenes[]` into one runnable snapshot each. */
+export function expandParityScenes(spec) {
+  const scenes = Array.isArray(spec.scenes) ? spec.scenes : null;
+  if (!scenes || scenes.length === 0) {
+    return [{ ...spec, _sceneId: null }];
+  }
+  return scenes.map((scene) => ({
+    ...spec,
+    ...scene,
+    id: scene.id ? `${spec.id}-${scene.id}` : spec.id,
+    pairs: scene.pairs || spec.pairs,
+    root: scene.root || spec.root,
+    viewport: scene.viewport || spec.viewport,
+    protoQuery: scene.protoQuery || spec.protoQuery,
+    fixtureScene: scene.fixtureScene || scene.id || null,
+    approvedDiffs: scene.approvedDiffs || spec.approvedDiffs || [],
+    _sceneId: scene.id || null,
+    _baseId: spec.id,
+    _path: spec._path,
+  }));
 }
