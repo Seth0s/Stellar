@@ -244,6 +244,10 @@ type Entry = {
    * device emulation so media queries return to the card's real box.
    */
   lastLayoutSize: { w: number; h: number } | null;
+  /** Density applied to both content size and page zoom. Starts at 1 until
+   * the first `resize` — a document commit restores the origin zoom and
+   * would otherwise leave the layout viewport at the device size. */
+  layoutFactor: number;
   /** Ephemeral (default) or persist: partition — see decideBrowserPartition. */
   profileKind: BrowserProfileKind;
   /** Active CSS display-mode emulation (standalone for PWA/iOS branches). */
@@ -951,7 +955,15 @@ export function createBrowserRegistry(callbacks: {
     wc.on("did-navigate-in-page", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     wc.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));
     wc.on("did-start-loading", () => callbacks.onLoading(id, true));
-    wc.on("did-stop-loading", () => callbacks.onLoading(id, false));
+    wc.on("did-finish-load", () => {
+      const entry = entries.get(id);
+      if (entry) reapplyLayoutZoom(entry);
+    });
+    wc.on("did-stop-loading", () => {
+      callbacks.onLoading(id, false);
+      const entry = entries.get(id);
+      if (entry) reapplyLayoutZoom(entry);
+    });
     wc.on("console-message", (details) => {
       const entry = entries.get(id);
       if (entry) {
@@ -992,6 +1004,7 @@ export function createBrowserRegistry(callbacks: {
       routeHandlersInstalled: false,
       emulation: null,
       lastLayoutSize: null,
+      layoutFactor: 1,
       profileKind,
       displayMode: "browser",
     };
@@ -1433,6 +1446,15 @@ export function createBrowserRegistry(callbacks: {
     return { ok: true, emulation: entry.emulation };
   }
 
+  /** Puts back the density zoom after a document commit. Chromium restores
+   * the origin's saved zoom (1) when the load finishes, which drops a
+   * factor `resize` already applied and leaves `innerWidth` equal to the
+   * device buffer. No-op while device emulation owns the viewport. */
+  function reapplyLayoutZoom(entry: Entry): void {
+    if (entry.emulation) return;
+    entry.win.webContents.setZoomFactor(entry.layoutFactor);
+  }
+
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
   // A do navegador" note, executada 2026-08-31) originalmente também
   // multiplicava a resolução offscreen pelo zoom do board, mesma ideia do
@@ -1501,8 +1523,13 @@ export function createBrowserRegistry(callbacks: {
     // fator TOTAL (não só o supersample) — quanto maior o `scaleFactor`
     // real do monitor, menos supersample extra fica por cima dele.
     const factor = Math.min(entry.scaleFactor * BROWSER_SUPERSAMPLE, maxDensityOverride ?? BROWSER_MAX_DENSITY);
-    entry.win.webContents.setZoomFactor(factor);
+    entry.layoutFactor = factor;
+    // Size first. Setting the zoom before the content size lets the
+    // resize land on the origin zoom (1), so the page lays out at the
+    // device buffer — twice the card — and the rest of a shorter
+    // document is the blank window.
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
+    entry.win.webContents.setZoomFactor(factor);
     // docs/PERF.md §9.4, risco 1 — o canvas do renderer muda de tamanho
     // junto (BrowserCard.tsx), então o conteúdo que já estava desenhado
     // não vale mais nada; o próximo paint tem que vir cheio.
@@ -1514,11 +1541,11 @@ export function createBrowserRegistry(callbacks: {
    * Electron itself. Used to prove `resize`'s scaleFactor scaling actually
    * happened, the same "read the real instance, don't infer it" spirit
    * as `terminal-registry.ts`'s `getTerminalFontSize`. */
-  function getContentSize(id: string): { w: number; h: number; scaleFactor: number } | null {
+  function getContentSize(id: string): { w: number; h: number; scaleFactor: number; zoomFactor: number } | null {
     const entry = entries.get(id);
     if (!entry) return null;
     const [w, h] = entry.win.getContentSize();
-    return { w, h, scaleFactor: entry.scaleFactor };
+    return { w, h, scaleFactor: entry.scaleFactor, zoomFactor: entry.win.webContents.getZoomFactor() };
   }
 
   /** Achado ao vivo (2026-09-02, pedido explícito do usuário: "não apenas

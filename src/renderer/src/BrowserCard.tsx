@@ -35,6 +35,17 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
 const BROWSER_SUPERSAMPLE = 3;
 const BROWSER_MAX_DENSITY = 2;
 
+/** Layout size the footer shows. `content` is the device buffer
+ * (`logical × factor`); dividing by the supersample constant alone
+ * ignores the density cap, so a 2× buffer was labeled as 2/3 of the card. */
+function logicalViewport(content: { w: number; h: number }, scaleFactor: number): { width: number; height: number } {
+  const factor = Math.min(scaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
+  return {
+    width: Math.round(content.w / factor),
+    height: Math.round(content.h / factor),
+  };
+}
+
 /** Instantes (ms) em que a altura do corpo é RE-MEDIDA depois de um resize
  * de rect — ver `resyncBodySize` em `BrowserCardInner`. BOUNDADO de
  * propósito (para em 1,2s): a caixa assenta ~114ms depois do mount (medido),
@@ -1164,10 +1175,7 @@ function BrowserCardInner({
   const consoleBadgeCount = consoleCounts.error + consoleCounts.warning;
   const browserFooter = decideBrowserFooter({
     httpStatusCode,
-    viewport: emulatedFrame ?? {
-      width: Math.round(contentSizeRef.current.w / (scaleFactorRef.current * BROWSER_SUPERSAMPLE)),
-      height: Math.round(contentSizeRef.current.h / (scaleFactorRef.current * BROWSER_SUPERSAMPLE)),
-    },
+    viewport: emulatedFrame ?? logicalViewport(contentSizeRef.current, scaleFactorRef.current),
     zoom: readZoom,
     consoleErrors: consoleCounts.error,
     consoleWarnings: consoleCounts.warning,
