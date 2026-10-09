@@ -16,8 +16,7 @@ const facts = (over: Partial<BoardTaskPhaseFactsInput> = {}): BoardTaskPhaseFact
   status: "pending",
   depStatuses: [],
   liveImplementers: [],
-  implementerReportAt: null,
-  implementerWorkGrantedAt: null,
+  implementerReportedSinceLastDelivery: false,
   reviewerChangesRequested: false,
   ...over,
 });
@@ -31,13 +30,12 @@ describe("deriveBoardTaskPhase — the phase the payload carries", () => {
     expect(deriveBoardTaskPhase(facts({ liveImplementers: [{ reservation_state: null }] }))).toBe("running");
   });
 
-  it("awaiting_review: the implementer reported after the last work grant", () => {
+  it("awaiting_review: the caller already decided this task was delivered", () => {
     expect(
       deriveBoardTaskPhase(
         facts({
           liveImplementers: [{ reservation_state: null }],
-          implementerReportAt: 5_000,
-          implementerWorkGrantedAt: 4_000,
+          implementerReportedSinceLastDelivery: true,
         }),
       ),
     ).toBe("awaiting_review");
@@ -49,20 +47,18 @@ describe("deriveBoardTaskPhase — the phase the payload carries", () => {
         facts({
           status: "done",
           liveImplementers: [{ reservation_state: null }],
-          implementerReportAt: 9_999,
-          implementerWorkGrantedAt: 1,
+          implementerReportedSinceLastDelivery: true,
         }),
       ),
     ).toBe("done");
   });
 
-  it("a report older than the last work grant does NOT mean awaiting_review", () => {
+  it("a delivery the caller did not accept stays running", () => {
     expect(
       deriveBoardTaskPhase(
         facts({
           liveImplementers: [{ reservation_state: null }],
-          implementerReportAt: 3_000,
-          implementerWorkGrantedAt: 4_000,
+          implementerReportedSinceLastDelivery: false,
         }),
       ),
     ).toBe("running");
@@ -78,7 +74,7 @@ describe("deriveBoardTaskPhase — the phase the payload carries", () => {
   it("changes_requested when a reviewer asked after the report", () => {
     expect(
       deriveBoardTaskPhase(
-        facts({ liveImplementers: [{ reservation_state: null }], implementerReportAt: 5_000, reviewerChangesRequested: true }),
+        facts({ liveImplementers: [{ reservation_state: null }], implementerReportedSinceLastDelivery: true, reviewerChangesRequested: true }),
       ),
     ).toBe("changes_requested");
   });
@@ -93,8 +89,8 @@ describe("boardTaskPhaseFacts — shaping", () => {
     expect(shaped.hasReservedCard).toBe(true);
   });
 
-  it("no work-grant instant means any report counts as this delivery", () => {
-    expect(boardTaskPhaseFacts(facts({ implementerReportAt: 1 })).implementerReportedSinceLastDelivery).toBe(true);
-    expect(boardTaskPhaseFacts(facts({ implementerReportAt: null })).implementerReportedSinceLastDelivery).toBe(false);
+  it("passes the caller's delivery bit through unchanged", () => {
+    expect(boardTaskPhaseFacts(facts({ implementerReportedSinceLastDelivery: true })).implementerReportedSinceLastDelivery).toBe(true);
+    expect(boardTaskPhaseFacts(facts({ implementerReportedSinceLastDelivery: false })).implementerReportedSinceLastDelivery).toBe(false);
   });
 });

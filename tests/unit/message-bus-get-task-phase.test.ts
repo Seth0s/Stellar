@@ -48,7 +48,11 @@ describe("task 6266d3e7 — get_task: id curto + phase", () => {
     ctx = null;
   });
 
-  function rig(rows: TaskRow[], implementers: Array<{ card_id: string; reservation_state: string | null }>, report?: { updated_at: number }) {
+  function rig(
+    rows: TaskRow[],
+    implementers: Array<{ card_id: string; reservation_state: string | null }>,
+    report?: { seq: number; updated_at: number; report_json: string },
+  ) {
     const dir = mkdtempSync(join(tmpdir(), "stellar-get-task-phase-"));
     const byId = new Map(rows.map((t) => [t.id, t]));
     const callbacks = new Proxy(
@@ -56,7 +60,11 @@ describe("task 6266d3e7 — get_task: id curto + phase", () => {
         listTasks: () => rows,
         getTask: (id: string) => byId.get(id),
         listLiveImplementersForTask: () => implementers,
-        getReport: () => report,
+        getReport: (_cardId: string, afterSeq?: number) => {
+          if (!report) return undefined;
+          if (afterSeq !== undefined && afterSeq >= report.seq) return undefined;
+          return report;
+        },
         getTaskVerdicts: () => [],
         getTaskTransitions: () => [],
         listTaskCardsForTask: () => [],
@@ -90,8 +98,12 @@ describe("task 6266d3e7 — get_task: id curto + phase", () => {
     expect(res.task.phase).toBe("running");
   });
 
-  it("report do implementer depois da entrega → phase awaiting_review", async () => {
-    const bus = rig([task(A)], [{ card_id: "c1", reservation_state: null }], { updated_at: 10 });
+  it("report final desta task → phase awaiting_review", async () => {
+    const bus = rig([task(A)], [{ card_id: "c1", reservation_state: null }], {
+      seq: 1,
+      updated_at: 10,
+      report_json: JSON.stringify({ ok: true, taskId: A, estado: "final" }),
+    });
     const res = (await bus.handleRequest({ cmd: "get_task", taskId: A } as BusRequest)) as unknown as { task: { phase?: string } };
     expect(res.task.phase).toBe("awaiting_review");
   });

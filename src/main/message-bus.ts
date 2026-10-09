@@ -131,7 +131,12 @@ import {
 } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
 import { decideCardBusyForReservation, decideLinkMode, decideReservationDelivery, firstReadyReservation, reorderReservations, RESERVATION_STUCK_MS } from "./task-reservation-decision";
-import { deriveTaskPhase, type TaskPhaseFacts } from "./task-phase-decision";
+import {
+  deriveTaskPhase,
+  implementerReportedFinalSinceDelivery,
+  latestAttributedReportAt,
+  type TaskPhaseFacts,
+} from "./task-phase-decision";
 import { resolveTaskIdPrefix, shortTaskId } from "./task-id-prefix-decision";
 import { projectTransitionForOutput } from "./task-transition-output";
 import { runLockedCommand } from "./gate-locked-run";
@@ -7391,9 +7396,29 @@ export function createMessageBus(
       const hasReservedCard = implementers.some((l) => l.reservation_state === "reserved");
       const implementerCardId = task.card_id ?? implementers.find((l) => l.reservation_state == null)?.card_id ?? null;
       const startedAt = implementerCardId ? implementerStartedAt.get(implementerCardId) : undefined;
-      const report = implementerCardId && typeof callbacks.getReport === "function" ? callbacks.getReport(implementerCardId) : undefined;
-      const reportAt = report?.updated_at ?? null;
-      const implementerReportedSinceLastDelivery = reportAt !== null && (startedAt === undefined || reportAt >= startedAt);
+      const phaseReports: { body: unknown; at: number }[] = [];
+      if (implementerCardId && typeof callbacks.getReport === "function") {
+        let after = 0;
+        for (;;) {
+          const row = callbacks.getReport(implementerCardId, after);
+          if (!row) break;
+          let body: unknown = null;
+          try {
+            body = decodeReportArgument(JSON.parse(row.report_json));
+          } catch {
+            body = null;
+          }
+          phaseReports.push({ body, at: row.updated_at });
+          if (typeof row.seq !== "number" || row.seq <= after) break;
+          after = row.seq;
+        }
+      }
+      const implementerReportedSinceLastDelivery = implementerReportedFinalSinceDelivery({
+        taskId: task.id,
+        reports: phaseReports,
+        lastDeliveryAt: startedAt ?? null,
+      });
+      const reportAt = latestAttributedReportAt(task.id, phaseReports);
       const verdicts = callbacks.getTaskVerdicts?.(task.id) ?? [];
       const last = verdicts[verdicts.length - 1];
       const reviewerChangesRequested = !!last && last.verdict === "reprovado" && (reportAt === null || last.at >= reportAt);
