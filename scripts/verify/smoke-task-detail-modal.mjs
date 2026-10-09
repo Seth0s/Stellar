@@ -2,7 +2,13 @@
 // via window.tasks.updatePrompt (default), parseTaskPrompt splits original
 // vs dated additions, creator + divergence surfaces are in the dialog.
 // Isolated Electron (never the user's live session). No .thin-scroll.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, spawnCard } from "./cdp-client.mjs";
+
+const SHOT_DIR = join(fileURLToPath(new URL("../..", import.meta.url)), ".verify-tmp/task-detail-modal");
+mkdirSync(SHOT_DIR, { recursive: true });
 
 const CDP_PORT = await pickFreePort();
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-task-detail-modal-${CDP_PORT}`, import.meta.url).pathname;
@@ -114,6 +120,91 @@ try {
 
   await page.click(itemPt.x, itemPt.y);
   check("click abre o modal de detalhe", await waitFor(page, `document.querySelector('[data-part="task-detail-v3"]')`), true);
+
+  const hit = JSON.parse(
+    await page.evalJs(`(() => {
+      const root = document.querySelector('[data-part="task-detail-v3"]');
+      const dialog = root?.querySelector('[role="dialog"]');
+      const backdrop = root?.querySelector(".modal-backdrop");
+      if (!dialog || !backdrop) return JSON.stringify({ inside: false, isBackdrop: false });
+      const r = dialog.getBoundingClientRect();
+      const x = r.x + r.width / 2;
+      const y = r.y + 36;
+      const el = document.elementFromPoint(x, y);
+      return JSON.stringify({
+        inside: dialog.contains(el),
+        isBackdrop: el === backdrop,
+        dialogPosition: getComputedStyle(dialog).position,
+        backdropPosition: getComputedStyle(backdrop).position,
+        rootPosition: getComputedStyle(root).position,
+        rootZ: getComputedStyle(root).zIndex,
+      });
+    })()`),
+  );
+  console.log("HIT", JSON.stringify(hit));
+  check("elementFromPoint no centro do modal cai dentro do dialog", hit.inside === true && hit.isBackdrop === false, true);
+
+  const openShot = await page.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+  const openShotPath = join(SHOT_DIR, "modal-open.png");
+  writeFileSync(openShotPath, Buffer.from(openShot.data, "base64"));
+  console.log("SHOT", openShotPath);
+
+  const draftPt = JSON.parse(
+    await page.evalJs(`(() => {
+      const el = document.querySelector('[data-part="task-detail-prompt-draft"]');
+      if (!el) return "null";
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + Math.min(24, r.width / 2), y: r.y + r.height / 2 });
+    })()`),
+  );
+  if (draftPt) await page.click(draftPt.x, draftPt.y);
+  await page.send("Input.insertText", { text: "nota pelo teclado" });
+  await delay(80);
+  check(
+    "digitar no acrescentar chega no campo",
+    await page.evalJs(`document.querySelector('[data-part="task-detail-prompt-draft"]')?.value.includes("nota pelo teclado")`),
+    true,
+  );
+  await page.evalJs(`(() => {
+    const ta = document.querySelector('[data-part="task-detail-prompt-draft"]');
+    if (!ta) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    setter.call(ta, "");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+
+  const tabPt = JSON.parse(
+    await page.evalJs(`(() => {
+      const btn = [...document.querySelectorAll('[data-part="task-detail-v3"] button')]
+        .find((b) => /^(Contrato|Contract)$/.test((b.textContent || "").trim()));
+      if (!btn) return "null";
+      const r = btn.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`),
+  );
+  if (tabPt) await page.click(tabPt.x, tabPt.y);
+  await delay(150);
+  check(
+    "clique na aba Contrato troca a aba e o modal continua aberto",
+    await page.evalJs(`(() => {
+      const open = !!document.querySelector('[data-part="task-detail-v3"]');
+      const onContract = [...document.querySelectorAll('[data-part="task-detail-v3"] h2, [data-part="task-detail-v3"] span')]
+        .some((el) => (el.textContent || "").trim() === "Território" || (el.textContent || "").trim() === "Territory");
+      return open && onContract;
+    })()`),
+    true,
+  );
+  const resumoPt = JSON.parse(
+    await page.evalJs(`(() => {
+      const btn = [...document.querySelectorAll('[data-part="task-detail-v3"] button')]
+        .find((b) => /^(Resumo|Summary)$/.test((b.textContent || "").trim()));
+      if (!btn) return "null";
+      const r = btn.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`),
+  );
+  if (resumoPt) await page.click(resumoPt.x, resumoPt.y);
   check(
     "briefing completo termina de carregar",
     await waitFor(
@@ -203,6 +294,34 @@ try {
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
   check(
     "Escape fecha o modal",
+    await waitFor(page, `!document.querySelector('[data-part="task-detail-v3"]')`, 3000),
+    true,
+  );
+
+  await page.click(itemPt.x, itemPt.y);
+  check("reabre o detalhe para o clique fora", await waitFor(page, `document.querySelector('[data-part="task-detail-v3"]')`), true);
+  const outside = JSON.parse(
+    await page.evalJs(`(() => {
+      const root = document.querySelector('[data-part="task-detail-v3"]');
+      const dialog = root?.querySelector('[role="dialog"]');
+      const backdrop = root?.querySelector(".modal-backdrop");
+      if (!dialog || !backdrop) return "null";
+      const r = dialog.getBoundingClientRect();
+      const candidates = [
+        { x: r.x - 8, y: r.y + r.height / 2 },
+        { x: r.right + 8, y: r.y + r.height / 2 },
+        { x: r.x + 24, y: r.y - 8 },
+      ];
+      for (const p of candidates) {
+        if (p.x < 2 || p.y < 2) continue;
+        if (document.elementFromPoint(p.x, p.y) === backdrop) return JSON.stringify(p);
+      }
+      return "null";
+    })()`),
+  );
+  if (outside) await page.click(outside.x, outside.y);
+  check(
+    "clique fora fecha o modal",
     await waitFor(page, `!document.querySelector('[data-part="task-detail-v3"]')`, 3000),
     true,
   );

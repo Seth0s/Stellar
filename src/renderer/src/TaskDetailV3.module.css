@@ -6,6 +6,10 @@
 }
 
 .dialog {
+  /* The veil is position:absolute, so it paints after in-flow content and
+     takes the hit. position:relative stacks the dialog above it, same as
+     the shared `.modal`. */
+  position: relative;
   width: min(1120px, calc(100vw - 48px));
   height: min(736px, calc(100vh - 64px));
   box-sizing: border-box;
