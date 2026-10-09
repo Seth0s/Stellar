@@ -265,6 +265,16 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
+  /* Border box is the flex remainder. A column flex with a clip makes
+     `.code-editor`'s `height: 100%` resolve here, so `.cm-scroller` is the
+     scrollport. Without that, the editor grows with the file. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorPane :global(.code-editor) {
+  height: 100%;
 }
 
 .diffPane {
