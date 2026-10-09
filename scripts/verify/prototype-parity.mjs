@@ -36,12 +36,13 @@ import {
 import {
   DEFAULT_STYLE_PROPS,
   validateParitySpec,
+  expandParityScenes,
   comparePairStyles,
   applyAllowlist,
   formatDiffTable,
 } from "./prototype-parity-compare.mjs";
 import { createRequire } from "node:module";
-import { findDb, seedMockTasks, wireLiveLinks } from "./fila-v3-fixture.mjs";
+import { findDb, seedMockTasks, wireLiveLinks, FILA_V3_CLOCK } from "./fila-v3-fixture.mjs";
 import { seedGraficosSprintsMock } from "./graficos-sprints-v4-fixture.mjs";
 
 const require = createRequire(import.meta.url);
@@ -180,6 +181,11 @@ async function readStyles(page, selector, props) {
           const parent = el.parentElement;
           const base = parent ? parent.getBoundingClientRect().left : 0;
           out.left = Math.round((r.left - base) * 1000) / 1000 + "px";
+        }
+        if (${propList}.includes("top")) {
+          const parent = el.parentElement;
+          const base = parent ? parent.getBoundingClientRect().top : 0;
+          out.top = Math.round((r.top - base) * 1000) / 1000 + "px";
         }
         if (${propList}.includes("text")) out.text = (el.textContent || "").replace(/\\s+/g, " ").trim();
         return JSON.stringify(out);
@@ -584,7 +590,8 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null, boardNa
     if (ids.bootTaskId) db.prepare("DELETE FROM tasks WHERE id = ?").run(ids.bootTaskId);
     db.close();
   }
-  seedMockTasks(dbPath, ids.boardId, ids.sprintId);
+  const clock = seedMockTasks(dbPath, ids.boardId, ids.sprintId, FILA_V3_CLOCK);
+  await page.evalJs(`Date.now = () => ${clock}`);
   await page.evalJs(`
     (async () => {
       const boardId = ${JSON.stringify(ids.boardId)};
@@ -594,15 +601,19 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null, boardNa
           id, board_id: boardId, kind: "terminal", provider, cwd,
           x, y: 900, w: 420, h: 280,
           resume_id: null, model: null, effort: null, system_prompt: null,
-          group_id: null, label, updated_at: Date.now(),
+          group_id: null, label, updated_at: ${clock},
         });
         await window.pty.spawn(id, provider, cwd, 80, 24);
       };
       await mk("fila-v3-live-claude", "bash", "IMPL · Claude", 40);
       await mk("fila-v3-live-gemini", "bash", "EXPLORER · Gemini", 480);
+      // Seed recentAction lines (index.ts summarizes from the live PTY tail).
+      await window.pty.write("fila-v3-live-claude", "printf '%s\\n' '● escrevendo testes'\\r", "human");
+      await window.pty.write("fila-v3-live-gemini", "printf '%s\\n' '● lendo useTerminal.ts'\\r", "human");
     })()
   `);
-  wireLiveLinks(dbPath);
+  await delay(400);
+  wireLiveLinks(dbPath, clock);
   const poke = JSON.parse(
     await page.evalJs(`
       (async () => {
@@ -674,7 +685,238 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null, boardNa
   }
 }
 
-async function applyFixture(page, fixtureId, scratchDir, userDataDir) {
+const FILA_V31_CARD_W = {
+  abertas: 1700,
+  vazias: 1700,
+  usuario: 1700,
+  media: 1200,
+  estreita: 800,
+  aberto: 1040,
+};
+
+async function resizeFilaCard(page, boardName, width, height = 860) {
+  await page.evalJs(`
+    (async () => {
+      const boards = await window.store.boards.list();
+      const board = boards.find((b) => b.name === ${JSON.stringify(boardName)}) ?? boards[0];
+      const cards = await window.store.list(board.id);
+      for (const c of cards) {
+        if (c.kind === "task") {
+          await window.store.upsert({
+            ...c,
+            x: 16,
+            y: 48,
+            w: ${JSON.stringify(width)},
+            h: ${JSON.stringify(height)},
+            label: "Fila",
+            updated_at: ${FILA_V3_CLOCK},
+          });
+        }
+      }
+    })()
+  `);
+  await delay(500);
+}
+
+/**
+ * Frame the Fila card like frameV4Shell: no app chrome/rail/zoom, card at 0,0,
+ * CardFrame head hidden so the shot matches the prototype card shell (toolbar→foot).
+ */
+async function frameFilaV31Shell(page, width, height, boardName = "Board 64") {
+  let last = null;
+  for (let i = 0; i < 4; i++) {
+    await page.evalJs(`
+      (() => {
+        let style = document.getElementById("fila-v31-hide-chrome");
+        if (!style) {
+          style = document.createElement("style");
+          style.id = "fila-v31-hide-chrome";
+          document.head.appendChild(style);
+        }
+        style.textContent = [
+          ".titlebar, .topbar, .topbar-home, .rail-container, .compass-strip, .zoom-pill { display: none !important; }",
+          '.card-frame[data-kind="task"] .card-head { display: none !important; }',
+        ].join("\\n");
+        Date.now = () => ${FILA_V3_CLOCK};
+      })()
+    `);
+    last = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const shell = document.querySelector('[data-fila-v3-shot="1"]')
+            || document.querySelector('.card-frame[data-kind="task"]');
+          if (!shell) return "null";
+          const r = shell.getBoundingClientRect();
+          return JSON.stringify({ dx: 0 - r.x, dy: 0 - r.y, w: r.width, h: r.height });
+        })()
+      `),
+    );
+    if (!last) throw new Error("fila-v31 shell missing while framing");
+    if (
+      Math.abs(last.dx) < 1 &&
+      Math.abs(last.dy) < 1 &&
+      Math.abs(last.w - width) <= 2 &&
+      Math.abs(last.h - height) <= 2
+    ) {
+      return;
+    }
+    await page.evalJs(`
+      (async () => {
+        const boards = await window.store.boards.list();
+        const board = boards.find((b) => b.name === ${JSON.stringify(boardName)}) ?? boards[0];
+        const cards = await window.store.list(board.id);
+        for (const c of cards) {
+          if (c.kind === "task") {
+            await window.store.upsert({
+              ...c,
+              x: c.x + ${last.dx},
+              y: c.y + ${last.dy},
+              w: ${JSON.stringify(width)},
+              h: ${JSON.stringify(height)},
+              label: "Fila",
+              updated_at: ${FILA_V3_CLOCK},
+            });
+          } else {
+            await window.store.upsert({ ...c, x: 4000, y: 4000, updated_at: ${FILA_V3_CLOCK} });
+          }
+        }
+      })()
+    `);
+    await remountFilaBoard(page, boardName);
+    await page.evalJs(`Date.now = () => ${FILA_V3_CLOCK}`);
+    await page.evalJs(`
+      (() => {
+        const el = document.querySelector('.card-frame[data-kind="task"]') || document.querySelector('[data-kind="task"]');
+        if (el) el.setAttribute("data-fila-v3-shot", "1");
+      })()
+    `);
+    await delay(400);
+  }
+  throw new Error(`fila-v31 shell not framed at ${width}x${height}: ${JSON.stringify(last)}`);
+}
+
+async function clearFilaCollapsedPrefs(page) {
+  await page.evalJs(`
+    (() => {
+      try {
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith("stellar.fila.collapsed.")) localStorage.removeItem(key);
+        }
+      } catch {
+        /* data: pages have no localStorage */
+      }
+    })()
+  `);
+}
+
+async function ensureFilaBoardVisible(page, boardName = "Board 64") {
+  if (await page.evalJs(`!!document.querySelector('[data-part="queue-board"]')`)) return;
+  await page.evalJs(`document.querySelector(".topbar-home")?.click()`);
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector(".home-session-card")`)) break;
+    await delay(100);
+  }
+  await page.evalJs(`
+    (() => {
+      const name = [...document.querySelectorAll(".home-session-name")]
+        .find((item) => item.textContent.includes(${JSON.stringify(boardName)}));
+      (name?.closest("button")
+        ?? [...document.querySelectorAll(".home-session-card")]
+          .find((item) => item.innerText.includes(${JSON.stringify(boardName)})))?.click();
+    })()
+  `);
+  await delay(1200);
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector('[data-part="queue-board"]')`)) return;
+    await delay(100);
+  }
+  throw new Error(`Fila board not visible for ${boardName}`);
+}
+
+async function remountFilaBoard(page, boardName = "Board 64") {
+  // Drop in-memory userExpanded/userCollapsed by remounting the task card tree.
+  await page.evalJs(`document.querySelector(".topbar-home")?.click()`);
+  await delay(400);
+  await ensureFilaBoardVisible(page, boardName);
+}
+
+async function applyFilaV31Scene(page, userDataDir, scene, boardName = "Board 64") {
+  await clearFilaCollapsedPrefs(page);
+  const width = FILA_V31_CARD_W[scene] ?? 1700;
+  if (scene === "vazias") {
+    const dbPath = findDb(userDataDir);
+    if (dbPath) {
+      const db = new Database(dbPath);
+      // Drop running + review rows so those columns start collapsed as rails.
+      db.prepare(
+        `DELETE FROM tasks WHERE id LIKE '511abcb2%' OR id LIKE 'ad6787aa%' OR id LIKE 'e0b6b86a%' OR id LIKE 'a550a7ae%'`,
+      ).run();
+      db.close();
+    }
+    await page.evalJs(`
+      (async () => {
+        const boards = await window.store.boards.list();
+        const board = boards.find((b) => b.name === ${JSON.stringify(boardName)}) ?? boards[0];
+        return JSON.stringify(await window.tasks.create(board.id, "__fila_v31_vazias_poke__"));
+      })()
+    `);
+    const dbPath2 = findDb(userDataDir);
+    if (dbPath2) {
+      const db = new Database(dbPath2);
+      db.prepare(`DELETE FROM tasks WHERE prompt = '__fila_v31_vazias_poke__'`).run();
+      db.close();
+    }
+    await delay(400);
+  }
+  // Resize in the store first, then remount so the card mounts at the scene width
+  // and empty-column userExpanded state is cleared.
+  await resizeFilaCard(page, boardName, width);
+  await remountFilaBoard(page, boardName);
+  await delay(500);
+  const targetBoardMax = width - 20;
+  for (let i = 0; i < 50; i++) {
+    const w = Number(
+      await page.evalJs(`Number(document.querySelector('[data-part="queue-board"]')?.getAttribute("data-board-width") || 0)`),
+    );
+    if (w > 100 && w <= targetBoardMax) break;
+    await delay(100);
+  }
+  if (scene === "usuario") {
+    let clicked = false;
+    for (let i = 0; i < 30; i++) {
+      clicked = await page.evalJs(`
+        (() => {
+          const btn = document.querySelector('[data-part="queue-collapse"][data-column="ready"]');
+          if (!btn) return false;
+          btn.click();
+          return true;
+        })()
+      `);
+      if (clicked) break;
+      await page.evalJs(`document.querySelector('[data-part="queue-rail-ready"]')?.click()`);
+      await delay(150);
+    }
+    if (!clicked) throw new Error("usuario scene: ready collapse button missing");
+    await delay(400);
+    if (!(await page.evalJs(`!!document.querySelector('[data-part="queue-rail-ready"]')`))) {
+      throw new Error("usuario scene: ready rail did not appear after collapse");
+    }
+  }
+  await page.evalJs(`
+    (() => {
+      const el = document.querySelector('.card-frame[data-kind="task"]') || document.querySelector('[data-kind="task"]');
+      if (el) el.setAttribute("data-fila-v3-shot", "1");
+    })()
+  `);
+  for (let i = 0; i < 30; i++) {
+    if (await page.evalJs(`!!document.querySelector('[data-part="queue-board"]')`)) break;
+    await delay(100);
+  }
+  const shellH = scene === "aberto" ? 800 : 860;
+  await frameFilaV31Shell(page, width, shellH, boardName);
+}
+
+async function applyFixture(page, fixtureId, scratchDir, userDataDir, fixtureScene = null) {
   if (fixtureId === "cards-v2" || fixtureId === "v2") return fixtureCardsV2(page, scratchDir);
   if (fixtureId === "cards-v21" || fixtureId === "v21") return fixtureCardsV21(page, scratchDir);
   if (fixtureId === "codigo-v6" || fixtureId === "v6") return fixtureCodigoV6(page, scratchDir);
@@ -685,6 +927,37 @@ async function applyFixture(page, fixtureId, scratchDir, userDataDir) {
   if (fixtureId === "superseded-v3") return fixtureFilaV3(page, userDataDir, "ae3e0fe2");
   if (fixtureId === "graficos-v4") return fixtureGraficosV4(page, userDataDir);
   if (fixtureId === "sprints-v4") return fixtureSprintsV4(page, userDataDir);
+  if (fixtureId === "fila-v31") {
+    await fixtureFilaV3(page, userDataDir, null, "Board 64");
+    await applyFilaV31Scene(page, userDataDir, fixtureScene || "abertas", "Board 64");
+    return;
+  }
+  if (fixtureId === "main-v31") {
+    await fixtureFilaV3(page, userDataDir, null, "Board 64");
+    await applyFilaV31Scene(page, userDataDir, "aberto", "Board 64");
+    await page.evalJs(`Date.now = () => ${FILA_V3_CLOCK}`);
+    await delay(300);
+    if (!(await page.evalJs(`!!document.querySelector("[data-part='task-detail-v3']")`))) {
+      await page.evalJs(`
+        [...document.querySelectorAll("[data-task-item-id]")].find((el) =>
+          el.getAttribute("data-task-item-id")?.startsWith("511abcb2"))?.click()
+      `);
+      await delay(700);
+    }
+    if (!(await page.evalJs(`!!document.querySelector("[data-part='task-detail-v3']")`))) {
+      throw new Error("main-v31: detail modal missing for 511abcb2");
+    }
+    for (let i = 0; i < 40; i++) {
+      const ready = await page.evalJs(`(() => {
+        const p = document.querySelector("[data-part='task-detail-prompt-original']");
+        const t = (p?.textContent || "").trim();
+        return t.includes("Cards ainda esquecem") || t.includes("esquecem o report");
+      })()`);
+      if (ready) break;
+      await delay(100);
+    }
+    return;
+  }
   throw new Error(`unknown fixture/impl: ${fixtureId}`);
 }
 
@@ -897,182 +1170,218 @@ ${sideBySide ? `\`${sideBySide}\`` : "_não gerado_"}
   return { mdPath, jsonPath };
 }
 
+async function waitProtoReady(page) {
+  let ready = false;
+  let bootErr = "";
+  for (let i = 0; i < 100; i++) {
+    try {
+      const st = JSON.parse(
+        await page.evalJs(`JSON.stringify({
+          ready: document.documentElement?.getAttribute("data-dc-ready"),
+          err: document.documentElement?.getAttribute("data-dc-error"),
+          href: location.href
+        })`),
+      );
+      if (st.ready === "1") {
+        ready = true;
+        break;
+      }
+      if (st.err) {
+        bootErr = st.err;
+        break;
+      }
+    } catch {
+      // Document mid-navigation — retry.
+    }
+    await delay(100);
+  }
+  if (!ready) throw new Error(`prototype data-dc-ready failed: ${bootErr || "timeout"}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.spec) {
     console.log(`Usage: npm run parity:prototype -- --spec <SPEC.md|json> [--proto file.dc.html] [--impl id]
-Impl ids: cards-v2 | cards-v21 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | superseded-v3 | graficos-v4 | sprints-v4`);
+Impl ids: cards-v2 | cards-v21 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | superseded-v3 | graficos-v4 | sprints-v4 | fila-v31 | main-v31`);
     process.exit(args.help ? 0 : 2);
   }
 
   const specPath = resolveSpecPath(args.spec);
-  const spec = JSON.parse(readFileSync(specPath, "utf8"));
-  spec._path = specPath;
-  validateParitySpec(spec);
-  const protoPath = resolveProtoPath(args.proto, spec);
-  const implId = args.impl || spec.impl || spec.fixture;
-  const props = spec.props || DEFAULT_STYLE_PROPS;
-  const tolerances = spec.tolerances || {};
-  const outDir = args.out ? resolve(ROOT, args.out) : join(OUT_ROOT, spec.id);
-  mkdirSync(outDir, { recursive: true });
+  const baseSpec = JSON.parse(readFileSync(specPath, "utf8"));
+  baseSpec._path = specPath;
+  validateParitySpec(baseSpec);
+  const scenes = expandParityScenes(baseSpec);
+  const protoPath = resolveProtoPath(args.proto, baseSpec);
+  const implId = args.impl || baseSpec.impl || baseSpec.fixture;
+  const outRoot = args.out ? resolve(ROOT, args.out) : join(OUT_ROOT, baseSpec.id);
+  mkdirSync(outRoot, { recursive: true });
 
   const protoHttp = await startProtoServer();
-  const protoQuery = spec.protoQuery ? `?${String(spec.protoQuery).replace(/^\?/, "")}` : "";
-  const protoUrl = `${protoHttp.origin}/${basename(protoPath)}${protoQuery}`;
   const CDP_PORT = await pickFreePort();
-  const USER_DATA_DIR = mkdtempSync(join(tmpdir(), `stellar-parity-${spec.id}-`));
+  const USER_DATA_DIR = mkdtempSync(join(tmpdir(), `stellar-parity-${baseSpec.id}-`));
   const scratchDir = mkdtempSync(join(tmpdir(), "stellar-parity-repo-"));
   seedScratchRepo(scratchDir);
 
-  // Settings prototype copy is pt-BR. Seed locale.json before Electron boots
-  // so the first i18n.get() resolves pt-BR and title widths match the HTML.
   const needsPtBr =
     implId === "settings-v7" ||
     implId === "v7" ||
-    spec.id === "configuracoes-v7" ||
+    baseSpec.id === "configuracoes-v7" ||
     String(implId).endsWith("-v3") ||
-    String(spec.id).endsWith("-v3") ||
+    String(implId).endsWith("-v31") ||
+    String(baseSpec.id).endsWith("-v3") ||
+    String(baseSpec.id).endsWith("-v31") ||
     implId === "graficos-v4" ||
     implId === "sprints-v4" ||
     implId === "cards-v21" ||
-    spec.id === "graficos-v4" ||
-    spec.id === "sprints-v4" ||
-    spec.id === "cards-v21";
+    baseSpec.id === "graficos-v4" ||
+    baseSpec.id === "sprints-v4" ||
+    baseSpec.id === "cards-v21";
   if (needsPtBr) {
     writeFileSync(join(USER_DATA_DIR, "locale.json"), JSON.stringify({ override: "pt-BR" }));
   }
 
   let app;
   let exitCode = 0;
-  const missing = [];
+  let fixtured = false;
 
   try {
+    const firstVp = scenes[0].viewport;
     app = await startApp({
       cdpPort: CDP_PORT,
       userDataDir: USER_DATA_DIR,
-      // Keep seeded locale.json (startApp wipes userData unless preserved).
       preserveUserData: needsPtBr,
       extraEnv: {
         AGENT_CANVAS_TEST_WINDOW_BOUNDS: JSON.stringify({
           x: 40,
           y: 40,
-          width: spec.viewport.width,
-          height: spec.viewport.height,
+          width: firstVp.width,
+          height: firstVp.height,
         }),
       },
     });
     const page = await connectPage(CDP_PORT);
     await page.send("Page.enable");
-    await page.send("Emulation.setDeviceMetricsOverride", {
-      width: spec.viewport.width,
-      height: spec.viewport.height,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
     await delay(800);
     const appUrl = await page.evalJs(`location.href`);
 
-    // Prototype (same CDP page, then return to the app URL)
-    await page.send("Page.navigate", { url: protoUrl });
-    let ready = false;
-    let bootErr = "";
-    for (let i = 0; i < 100; i++) {
-      try {
-        const st = JSON.parse(
-          await page.evalJs(`JSON.stringify({
-            ready: document.documentElement?.getAttribute("data-dc-ready"),
-            err: document.documentElement?.getAttribute("data-dc-error"),
-            href: location.href
-          })`),
-        );
-        if (st.ready === "1") {
-          ready = true;
-          break;
-        }
-        if (st.err) {
-          bootErr = st.err;
-          break;
-        }
-      } catch {
-        // Document mid-navigation — retry.
-      }
-      await delay(100);
-    }
-    if (!ready) {
-      throw new Error(`prototype data-dc-ready failed: ${bootErr || "timeout"}`);
-    }
-    await delay(400);
-    const leftover = await page.evalJs(`
-      (() => {
-        const t = document.body?.innerText || "";
-        const m = t.match(/\\{\\{[^}]+\\}\\}/g);
-        return m ? m.slice(0, 8).join(", ") : "";
-      })()
-    `);
-    if (leftover) throw new Error(`unfilled placeholders: ${leftover}`);
+    // Capture every prototype scene first — navigating away from the app
+    // destroys the seeded board, so fixtures run only after all proto shots.
+    const protoCaptures = [];
+    for (const spec of scenes) {
+      const props = spec.props || DEFAULT_STYLE_PROPS;
+      const outDir = scenes.length > 1 ? join(outRoot, spec._sceneId || "default") : outRoot;
+      mkdirSync(outDir, { recursive: true });
+      const missing = [];
+      const protoQuery = spec.protoQuery ? `?${String(spec.protoQuery).replace(/^\?/, "")}` : "";
+      const protoUrl = `${protoHttp.origin}/${basename(protoPath)}${protoQuery}`;
 
-    const protoStyles = {};
-    for (const pair of spec.pairs) {
-      const pairProps = pair.props || props;
-      const st = await readStyles(page, pair.proto, pairProps);
-      if (st.missing) missing.push({ pairId: pair.id, side: "proto", selector: pair.proto });
-      else protoStyles[pair.id] = st;
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: spec.viewport.width,
+        height: spec.viewport.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await page.send("Page.navigate", { url: protoUrl });
+      await waitProtoReady(page);
+      await delay(400);
+      const leftover = await page.evalJs(`
+        (() => {
+          const t = document.body?.innerText || "";
+          const m = t.match(/\\{\\{[^}]+\\}\\}/g);
+          return m ? m.slice(0, 8).join(", ") : "";
+        })()
+      `);
+      if (leftover) throw new Error(`unfilled placeholders (${spec.id}): ${leftover}`);
+
+      const protoStyles = {};
+      for (const pair of spec.pairs) {
+        const pairProps = pair.props || props;
+        const st = await readStyles(page, pair.proto, pairProps);
+        if (st.missing) missing.push({ pairId: pair.id, side: "proto", selector: pair.proto });
+        else protoStyles[pair.id] = st;
+      }
+      const protoRootSel = spec.root?.proto || spec.pairs[0].proto;
+      const protoClip = join(outDir, "proto-root.png");
+      await clipRoot(page, protoRootSel, protoClip);
+      protoCaptures.push({ spec, outDir, props, missing, protoStyles, protoClip });
     }
-    const protoRootSel = spec.root?.proto || spec.pairs[0].proto;
-    const protoClip = join(outDir, "proto-root.png");
-    await clipRoot(page, protoRootSel, protoClip);
 
     await page.send("Page.navigate", { url: appUrl });
     await delay(1500);
-    await applyFixture(page, implId, scratchDir, USER_DATA_DIR);
-    await delay(500);
 
-    const implStyles = {};
-    for (const pair of spec.pairs) {
-      const pairProps = pair.props || props;
-      const st = await readStyles(page, pair.impl, pairProps);
-      if (st.missing) missing.push({ pairId: pair.id, side: "impl", selector: pair.impl });
-      else implStyles[pair.id] = st;
-    }
-    const implRootSel = spec.root?.impl || spec.pairs[0].impl;
-    const implClip = join(outDir, "impl-root.png");
-    await clipRoot(page, implRootSel, implClip);
+    for (let i = 0; i < protoCaptures.length; i++) {
+      const { spec, outDir, props, missing, protoStyles, protoClip } = protoCaptures[i];
+      const tolerances = spec.tolerances || {};
 
-    const allDiffs = [];
-    for (const pair of spec.pairs) {
-      if (!protoStyles[pair.id] || !implStyles[pair.id]) continue;
-      const pairProps = pair.props || props;
-      const { diffs } = comparePairStyles(
-        pair.id,
-        protoStyles[pair.id],
-        implStyles[pair.id],
-        pairProps,
-        tolerances,
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: spec.viewport.width,
+        height: spec.viewport.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+
+      if (!fixtured) {
+        await applyFixture(page, implId, scratchDir, USER_DATA_DIR, spec.fixtureScene || null);
+        fixtured = true;
+      } else if (implId === "fila-v31" && spec.fixtureScene) {
+        await applyFilaV31Scene(page, USER_DATA_DIR, spec.fixtureScene, "Board 64");
+      } else if (implId === "main-v31") {
+        await applyFixture(page, implId, scratchDir, USER_DATA_DIR, spec.fixtureScene || null);
+      }
+      await delay(500);
+
+      const implStyles = {};
+      for (const pair of spec.pairs) {
+        const pairProps = pair.props || props;
+        const st = await readStyles(page, pair.impl, pairProps);
+        if (st.missing) missing.push({ pairId: pair.id, side: "impl", selector: pair.impl });
+        else implStyles[pair.id] = st;
+      }
+      const implRootSel = spec.root?.impl || spec.pairs[0].impl;
+      const implClip = join(outDir, "impl-root.png");
+      await clipRoot(page, implRootSel, implClip);
+
+      const allDiffs = [];
+      for (const pair of spec.pairs) {
+        if (!protoStyles[pair.id] || !implStyles[pair.id]) continue;
+        const pairProps = pair.props || props;
+        const { diffs } = comparePairStyles(
+          pair.id,
+          protoStyles[pair.id],
+          implStyles[pair.id],
+          pairProps,
+          tolerances,
+        );
+        allDiffs.push(...diffs);
+      }
+      const { failing, approved } = applyAllowlist(allDiffs, spec.approvedDiffs || []);
+      if (missing.length || failing.length) exitCode = 1;
+
+      const sideBySide = join(outDir, "side-by-side.png");
+      await writeSideBySide(page, protoClip, implClip, sideBySide, spec.id);
+      // writeSideBySide navigates to a data: URL — restore the app before the next scene.
+      if (i < protoCaptures.length - 1) {
+        await page.send("Page.navigate", { url: appUrl });
+        await delay(1200);
+      }
+
+      const report = writeReport({
+        spec,
+        outDir,
+        failing,
+        approved,
+        missing,
+        sideBySide: existsSync(sideBySide) ? sideBySide : null,
+        exitCode: missing.length || failing.length ? 1 : 0,
+      });
+
+      console.log(
+        `parity ${spec.id}: failing=${failing.length} approved=${approved.length} missing=${missing.length}`,
       );
-      allDiffs.push(...diffs);
+      console.log(formatDiffTable(failing));
+      console.log(`report: ${report.mdPath}`);
+      console.log(`artifacts: ${outDir}`);
     }
-    const { failing, approved } = applyAllowlist(allDiffs, spec.approvedDiffs || []);
-    if (missing.length || failing.length) exitCode = 1;
-
-    const sideBySide = join(outDir, "side-by-side.png");
-    await writeSideBySide(page, protoClip, implClip, sideBySide, spec.id);
-
-    const report = writeReport({
-      spec,
-      outDir,
-      failing,
-      approved,
-      missing,
-      sideBySide: existsSync(sideBySide) ? sideBySide : null,
-      exitCode,
-    });
-
-    console.log(
-      `parity ${spec.id}: failing=${failing.length} approved=${approved.length} missing=${missing.length}`,
-    );
-    console.log(formatDiffTable(failing));
-    console.log(`report: ${report.mdPath}`);
-    console.log(`artifacts: ${outDir}`);
     process.exitCode = exitCode;
   } finally {
     if (app) {

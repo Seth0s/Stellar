@@ -1,0 +1,262 @@
+{
+  "id": "fila-v31",
+  "title": "Fila V3.1 — colunas recolhíveis, larguras, header",
+  "specMd": "Fila-v3.1-NOTAS.md",
+  "proto": "Fila-v3.1.dc.html",
+  "impl": "fila-v31",
+  "viewport": {
+    "width": 1760,
+    "height": 980
+  },
+  "fixture": "fila-v31",
+  "tolerances": {
+    "lengthPx": 2,
+    "colorDeltaE": 2.5
+  },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "[data-cena='abertas']",
+    "impl": "[data-fila-v3-shot='1']"
+  },
+  "pairs": [
+    {
+      "id": "toolbar",
+      "proto": "header.head",
+      "impl": "[data-part='queue-toolbar']"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "abertas",
+      "protoQuery": "cena=abertas",
+      "fixtureScene": "abertas",
+      "root": {
+        "proto": "[data-cena='abertas']",
+        "impl": "[data-fila-v3-shot='1']"
+      },
+      "pairs": [
+        {
+          "id": "toolbar",
+          "proto": "[data-cena='abertas'] header.head",
+          "impl": "[data-part='queue-toolbar']",
+          "props": ["font-size", "padding", "gap", "top", "left", "width"]
+        },
+        {
+          "id": "fila-title",
+          "proto": "[data-cena='abertas'] header.head h1",
+          "impl": "[data-part='queue-title']",
+          "props": ["font-size", "font-weight"]
+        },
+        {
+          "id": "sprint-link",
+          "proto": "[data-cena='abertas'] a.sprint",
+          "impl": "[data-part='sprints-toggle']",
+          "props": ["font-size", "white-space", "color"]
+        },
+        {
+          "id": "filter-all-count",
+          "proto": "[data-cena='abertas'] header.head .filters button:nth-child(1) span",
+          "impl": "[data-part='queue-filter-all-count']",
+          "props": ["text", "color", "font-size"]
+        },
+        {
+          "id": "filter-needs-count",
+          "proto": "[data-cena='abertas'] header.head .filters button:nth-child(2) span",
+          "impl": "[data-part='queue-filter-needsYou-count']",
+          "props": ["text", "color", "font-size"]
+        },
+        {
+          "id": "needs-strip",
+          "proto": "[data-cena='abertas'] section[aria-label='Precisa de você']",
+          "impl": "[data-part='needs-you-strip']",
+          "props": ["padding", "gap", "top", "left"]
+        },
+        {
+          "id": "needs-head-1",
+          "proto": "[data-cena='abertas'] section[aria-label='Precisa de você'] > div:nth-child(1) > div:nth-child(1)",
+          "impl": "[data-part='needs-you-card']:nth-of-type(1) [data-part='needs-you-head']",
+          "props": ["font-size", "color", "text"]
+        },
+        {
+          "id": "needs-head-3",
+          "proto": "[data-cena='abertas'] section[aria-label='Precisa de você'] > div:nth-child(3) > div:nth-child(1)",
+          "impl": "[data-part='needs-you-card']:nth-of-type(3) [data-part='needs-you-head']",
+          "props": ["font-size", "color", "text"]
+        },
+        {
+          "id": "column-waiting",
+          "proto": "[data-cena='abertas'] section[aria-label='Esperando']",
+          "impl": "[data-part='queue-column'][data-column='waiting']",
+          "props": ["min-width", "gap", "top"]
+        },
+        {
+          "id": "column-waiting-head",
+          "proto": "[data-cena='abertas'] section[aria-label='Esperando'] > div:first-child",
+          "impl": "[data-part='queue-column'][data-column='waiting'] [data-part='queue-column-head']",
+          "props": ["font-size", "gap", "padding"]
+        },
+        {
+          "id": "tile",
+          "proto": "[data-cena='abertas'] .tile",
+          "impl": "[data-part='queue-tile']",
+          "props": ["font-size", "padding", "gap", "border-radius", "background-color"]
+        },
+        {
+          "id": "tile-running-meta",
+          "proto": "[data-cena='abertas'] section[aria-label='Rodando'] .tile > div:first-child > .mono:last-child",
+          "impl": "[data-part='queue-column'][data-column='running'] [data-part='queue-tile'] [data-part='queue-tile-meta']",
+          "props": ["text", "font-size"]
+        },
+        {
+          "id": "tile-running-title",
+          "proto": "[data-cena='abertas'] section[aria-label='Rodando'] .tile > span",
+          "impl": "[data-part='queue-column'][data-column='running'] [data-part='queue-tile'] [data-part='queue-tile-title']",
+          "props": ["text", "font-size", "line-height"]
+        },
+        {
+          "id": "footer",
+          "proto": "[data-cena='abertas'] footer",
+          "impl": ".card-frame[data-kind='task'] .card-foot",
+          "props": ["font-size", "padding", "gap", "color"]
+        }
+      ]
+    },
+    {
+      "id": "usuario",
+      "protoQuery": "cena=usuario",
+      "fixtureScene": "usuario",
+      "root": {
+        "proto": "[data-cena='usuario']",
+        "impl": "[data-fila-v3-shot='1']"
+      },
+      "pairs": [
+        {
+          "id": "rail-pronta",
+          "proto": "[data-cena='usuario'] button.rail[aria-label='Mostrar Pronta']",
+          "impl": "[data-part='queue-rail-ready']",
+          "props": ["width", "border-radius", "background-color"]
+        },
+        {
+          "id": "column-waiting",
+          "proto": "[data-cena='usuario'] section[aria-label='Esperando']",
+          "impl": "[data-part='queue-column'][data-column='waiting']"
+        },
+        {
+          "id": "toolbar",
+          "proto": "[data-cena='usuario'] header.head",
+          "impl": "[data-part='queue-toolbar']",
+          "props": ["padding", "gap"]
+        }
+      ]
+    },
+    {
+      "id": "media",
+      "protoQuery": "cena=media",
+      "fixtureScene": "media",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "root": {
+        "proto": "[data-cena='media']",
+        "impl": "[data-fila-v3-shot='1']"
+      },
+      "pairs": [
+        {
+          "id": "rail-concluida",
+          "proto": "[data-cena='media'] button.rail[aria-label='Mostrar Concluída']",
+          "impl": "[data-part='queue-rail-done']",
+          "props": ["width", "border-radius"]
+        },
+        {
+          "id": "rail-falhas",
+          "proto": "[data-cena='media'] button.rail[aria-label='Mostrar Falhas']",
+          "impl": "[data-part='queue-rail-failed']",
+          "props": ["width", "border-radius"]
+        },
+        {
+          "id": "rail-sup",
+          "proto": "[data-cena='media'] button.rail[aria-label='Mostrar Substituídas']",
+          "impl": "[data-part='queue-rail-superseded']",
+          "props": ["width", "border-radius"]
+        },
+        {
+          "id": "toolbar",
+          "proto": "[data-cena='media'] header.head",
+          "impl": "[data-part='queue-toolbar']",
+          "props": ["flex-wrap", "gap", "padding"]
+        }
+      ]
+    },
+    {
+      "id": "estreita",
+      "protoQuery": "cena=estreita",
+      "fixtureScene": "estreita",
+      "viewport": {
+        "width": 900,
+        "height": 900
+      },
+      "root": {
+        "proto": "[data-cena='estreita']",
+        "impl": "[data-fila-v3-shot='1']"
+      },
+      "pairs": [
+        {
+          "id": "column-waiting",
+          "proto": "[data-cena='estreita'] section[aria-label='Esperando']",
+          "impl": "[data-part='queue-column'][data-column='waiting']"
+        },
+        {
+          "id": "rail-rodando",
+          "proto": "[data-cena='estreita'] button.rail[aria-label='Mostrar Rodando']",
+          "impl": "[data-part='queue-rail-running']",
+          "props": ["width"]
+        },
+        {
+          "id": "toolbar",
+          "proto": "[data-cena='estreita'] header.head",
+          "impl": "[data-part='queue-toolbar']",
+          "props": ["flex-wrap", "padding"]
+        }
+      ]
+    },
+    {
+      "id": "vazias",
+      "protoQuery": "cena=vazias",
+      "fixtureScene": "vazias",
+      "root": {
+        "proto": "[data-cena='vazias']",
+        "impl": "[data-fila-v3-shot='1']"
+      },
+      "pairs": [
+        {
+          "id": "rail-rodando",
+          "proto": "[data-cena='vazias'] button.rail[aria-label='Mostrar Rodando']",
+          "impl": "[data-part='queue-rail-running']",
+          "props": ["width", "border-radius", "background-color"]
+        },
+        {
+          "id": "rail-revisao",
+          "proto": "[data-cena='vazias'] button.rail[aria-label='Mostrar Revisão']",
+          "impl": "[data-part='queue-rail-review']",
+          "props": ["width", "border-radius", "background-color"]
+        },
+        {
+          "id": "column-waiting",
+          "proto": "[data-cena='vazias'] section[aria-label='Esperando']",
+          "impl": "[data-part='queue-column'][data-column='waiting']"
+        }
+      ]
+    }
+  ],
+  "approvedDiffs": []
+}
