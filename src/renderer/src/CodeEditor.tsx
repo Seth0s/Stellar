@@ -383,6 +383,7 @@ export function CodeEditor({
   onCursorChange,
   agentLineMarks,
   onAgentGutterAction,
+  plain,
 }: {
   /** Initial content only — read once when the editor mounts (or when
    * `filename` changes, forcing a remount). Typing updates CodeMirror's
@@ -417,6 +418,10 @@ export function CodeEditor({
   /** Lines attributed to a live card/task (from declared diffs only). */
   agentLineMarks?: Map<number, AgentLineMark>;
   onAgentGutterAction?: (action: "diff" | "open-card", mark: AgentLineMark) => void;
+  /** Large-buffer mode: skip language parse, indent guides, fold gutter
+   * and syntax highlighting so opening / board pan stay on the frame
+   * budget. Line numbers and editing still work. */
+  plain?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -439,6 +444,16 @@ export function CodeEditor({
     let cancelled = false;
     const languageCompartment = new Compartment();
 
+    const heavyExtensions = plain
+      ? []
+      : [
+          indentOnInput(),
+          bracketMatching(),
+          foldGutter(),
+          indentationMarkers({ hideFirstIndent: true }),
+          syntaxHighlighting(highlightStyle, { fallback: true }),
+        ];
+
     const view = new EditorView({
       state: EditorState.create({
         doc: value,
@@ -448,11 +463,7 @@ export function CodeEditor({
           highlightActiveLine(),
           history(),
           drawSelection(),
-          indentOnInput(),
-          bracketMatching(),
-          foldGutter(),
-          indentationMarkers({ hideFirstIndent: true }),
-          syntaxHighlighting(highlightStyle, { fallback: true }),
+          ...heavyExtensions,
           editorTheme,
           agentMarksField.init(() => agentLineMarks ?? new Map()),
           hoverAgentField,
@@ -491,7 +502,11 @@ export function CodeEditor({
           ...(onToggleBreakpoint
             ? [breakpointLinesField.init(() => breakpointLines ?? new Set()), breakpointGutter((line) => onToggleBreakpointRef.current?.(line))]
             : []),
-          keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
+          keymap.of(
+            plain
+              ? [...defaultKeymap, ...historyKeymap, indentWithTab]
+              : [...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab],
+          ),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
@@ -519,19 +534,21 @@ export function CodeEditor({
       view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
     }
 
-    loadLanguage(filename).then((lang) => {
-      if (cancelled || !lang) return;
-      view.dispatch({ effects: languageCompartment.reconfigure(lang) });
-    });
+    if (!plain) {
+      loadLanguage(filename).then((lang) => {
+        if (cancelled || !lang) return;
+        view.dispatch({ effects: languageCompartment.reconfigure(lang) });
+      });
+    }
 
     return () => {
       cancelled = true;
       view.destroy();
       viewRef.current = null;
     };
-    // Deliberately just `filename` — see the `value` prop doc above.
+    // Deliberately `filename` + `plain` — see the `value` prop doc above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filename]);
+  }, [filename, plain]);
 
   // Sincroniza o gutter de breakpoint SEM remontar o editor (perderia
   // scroll/cursor a cada toggle) — React continua a fonte de verdade,

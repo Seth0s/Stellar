@@ -233,6 +233,21 @@
   gap: var(--space-3);
 }
 
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.plainBanner {
+  flex: none;
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--card-divider);
+  background: color-mix(in srgb, var(--warn, #e6b84d) 12%, transparent);
+  color: var(--card-name);
+  font-size: var(--text-4);
+}
+
 .btn:hover {
   border-color: #3a4258; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
 }
