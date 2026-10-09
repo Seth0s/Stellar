@@ -34,3 +34,20 @@ Relatório de agente é afirmação, não evidência. Confira por amostragem as 
 ## Identidade
 
 Um subagente do tipo "fork" herda a identidade MCP do card pai: o Stellar ainda não os distingue. Não conte com o board para saber quem reportou o quê — nomeie o card no `spawn_agent` (`label`) e rastreie pelo id que ele devolve.
+
+## Armadilhas
+
+Detalhe (sintoma / porquê / o que fazer): docs do site —
+[Orquestrar na prática](https://stellar.idyplatform.com/pt/docs/orquestrar-na-pratica/)
+([EN](https://stellar.idyplatform.com/en/docs/orchestrating-in-practice/)). Em resumo:
+
+- **a.** `deps` em board autônomo disparam o filho no `done` do pai — crie o filho antes; ao pausar, marque dependentes `blocked` com pergunta.
+- **b.** `send_to_card` só enfileira — veredito em `get_delivery` (`unconfirmed` comum); confirme com `read_card`.
+- **c.** Mensagem com opção de recusar: leia o card depois; não conte como ativo sem ver.
+- **d.** `read_report` mira o **card**; rodadas seguintes usam `afterSeq`; `ambiguous` → confira `taskId` no payload.
+- **e.** `review: "wanted"`: só reviewer grava done/failed — reuse com `send_to_card` + `linkTaskId`/`linkRole: "reviewer"`.
+- **f.** Gate na árvore compartilhada mente; pesado seu vai em `run_locked` / `gate-lock`; tool fora do repo em `gateToolPaths`.
+- **g.** Território multi-repo: caminho absoluto; arquivo a dois cards = `shared:… (nota)`; `overrideTerritory` fica na trilha.
+- **h.** Reuse card só com folga de contexto; perto do teto, card novo.
+- **i.** Pós-crash/relogin: confira banner e scrollback (sessão/modelo podem ter trocado).
+- **j.** Provider sem report confiável: receba por mensagem e feche a task como reviewer.

@@ -464,7 +464,21 @@ git diff -U3 -- <arquivo>   # inspecione hunk a hunk
 git apply --cached /tmp/<entrega>.patch
 ```
 
-3. **Verifique em worktree isolado, ANTES do push:**
+3. **Preflight no índice (antes de verificar/commitar):** o detector de
+   artefato untracked do bus não vê debug em arquivo **rastreado**. Depois de
+   montar a fatia, rode:
+
+```bash
+npm run preflight:staged
+```
+
+   Ele lê só as **adições** de `git diff --cached -U0` sob `src/` e falha
+   (exit ≠ 0) se achar `window.__*`, `debugger`, `console.log`/`console.debug`,
+   `// DEBUG` ou `TODO remove`. Escape explícito na mesma linha:
+   `// preflight:allow <motivo>`. O detector de untracked no report do card
+   continua cobrindo arquivos novos fora do índice.
+
+4. **Verifique em worktree isolado, ANTES do push:**
 
 ```bash
 git diff --cached > /tmp/staged.patch
@@ -474,9 +488,9 @@ git apply /tmp/staged.patch
 rtk proxy npx tsc --noEmit && npx vitest run
 ```
 
-4. Só então commit e push.
+5. Só então commit e push.
 
-### Por que o passo 3 é obrigatório
+### Por que o passo 4 é obrigatório
 
 Já foi pulado duas vezes, com o mesmo resultado: o filtro deixou passar hunks que
 **referenciavam símbolos cujas definições ficaram de fora**, o `tsc` local passou porque os
@@ -700,6 +714,7 @@ zero, o recurso nunca existiu de verdade.
 
 - [ ] hunks classificados por entrega
 - [ ] `git apply --cached` só com os hunks certos
+- [ ] `npm run preflight:staged` limpo no índice montado
 - [ ] **worktree isolado**: `tsc` + suíte, antes do push
 - [ ] mensagem explica decisão, alternativa rejeitada e prova
 - [ ] push
