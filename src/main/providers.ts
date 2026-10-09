@@ -1270,14 +1270,15 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i,
-        // Live 2026-09-14 (card 513): mid-turn send → box `follow-ups` with
-        // footer `enter steer · ↑ select/edit · esc cancel`. First Enter
-        // parks; second Enter steers into the live turn. get_delivery used
-        // to call that park `delivered` (Running neighborhood shifted when
-        // the box appeared). Antigravity/claude measured same day: no
-        // equivalent box — do not copy this declaration without measuring.
+        // Queue banner footer, from the CLI (`queued-message-banner.tsx`):
+        // `enter ${steer|interrupt and send|send now} · ↑ select/edit · esc cancel`.
+        // The confirm loop reads 8 lines, which often crops the `follow-ups`
+        // title and keeps only that footer. A busy composer is
+        // `→ Add a follow-up` + `ctrl+c to stop` and must not match.
+        // First Enter parks; the declared steerKey is the second Enter.
         midTurnQueue: {
-          parkedPattern: /\bfollow-ups\b[\s\S]*?\benter\s+steer\b/i,
+          parkedPattern:
+            /(?:\bfollow-ups\b[\s\S]*?\benter\s+steer\b)|(?:\benter\s+(?:steer|interrupt and send|send now)\s+·)/i,
           steerKey: "\r",
         },
       },
