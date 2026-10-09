@@ -1,0 +1,106 @@
+{
+  "id": "sprints-v4",
+  "title": "Sprints V4",
+  "specMd": "Sprints.dc.html",
+  "proto": "Sprints.dc.html",
+  "impl": "sprints-v4",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "sprints-v4",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius"
+  ],
+  "root": {
+    "proto": "[data-dc-root] > div",
+    "impl": "[data-part='sprints-v4']"
+  },
+  "pairs": [
+    {
+      "id": "title",
+      "proto": "h1",
+      "impl": "[data-part='sprints-title']"
+    },
+    {
+      "id": "back",
+      "proto": "header a",
+      "impl": "[data-part='sprints-back']"
+    },
+    {
+      "id": "primary",
+      "proto": "button.primary",
+      "impl": "[data-part='sprints-new']"
+    },
+    {
+      "id": "current",
+      "proto": "section[aria-label='Sprint atual']",
+      "impl": "[data-part='sprints-current']"
+    },
+    {
+      "id": "pill",
+      "proto": "section[aria-label='Sprint atual'] span",
+      "impl": "[data-part='sprints-pill']"
+    },
+    {
+      "id": "row",
+      "proto": ".row",
+      "impl": "[data-part='sprints-row']"
+    },
+    {
+      "id": "screen",
+      "proto": "[data-dc-root] > div",
+      "impl": "[data-part='sprints-v4']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "current-size",
+      "proto": "section[aria-label='Sprint atual']",
+      "impl": "[data-part='sprints-current']",
+      "props": ["height"]
+    },
+    {
+      "id": "past",
+      "proto": "section[aria-label='Sprints anteriores']",
+      "impl": "[data-part='sprints-past']",
+      "props": ["height"]
+    },
+    {
+      "id": "row-size",
+      "proto": ".row",
+      "impl": "[data-part='sprints-row']",
+      "props": ["width", "height"]
+    },
+    {
+      "id": "phase-bar",
+      "proto": "section[aria-label='Sprint atual'] div[role='img'] > span",
+      "impl": "[data-part='sprints-bar-seg']",
+      "props": ["width", "height"]
+    }
+  ],
+  "approvedDiffs": [
+    {
+      "pairId": "close-dest",
+      "prop": "content",
+      "proto": "Sem sprint",
+      "impl": "absent",
+      "approvedBy": "dono",
+      "date": "2026-10-09",
+      "reason": "Close always moves open tasks to the next sprint"
+    },
+    {
+      "pairId": "past-delete",
+      "prop": "content",
+      "proto": "Excluir",
+      "impl": "absent",
+      "approvedBy": "dono",
+      "date": "2026-10-09",
+      "reason": "Deleting a closed sprint stays refused; the menu only renames"
+    }
+  ]
+}

@@ -42,6 +42,7 @@ import {
 } from "./prototype-parity-compare.mjs";
 import { createRequire } from "node:module";
 import { findDb, seedMockTasks, wireLiveLinks } from "./fila-v3-fixture.mjs";
+import { seedGraficosSprintsMock } from "./graficos-sprints-v4-fixture.mjs";
 
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
@@ -175,6 +176,12 @@ async function readStyles(page, selector, props) {
         const r = el.getBoundingClientRect();
         out.width = Math.round(r.width * 1000) / 1000 + "px";
         out.height = Math.round(r.height * 1000) / 1000 + "px";
+        if (${propList}.includes("left")) {
+          const parent = el.parentElement;
+          const base = parent ? parent.getBoundingClientRect().left : 0;
+          out.left = Math.round((r.left - base) * 1000) / 1000 + "px";
+        }
+        if (${propList}.includes("text")) out.text = (el.textContent || "").replace(/\\s+/g, " ").trim();
         return JSON.stringify(out);
       })()
     `),
@@ -251,6 +258,80 @@ function seedScratchRepo(root) {
     join(root, "src/renderer/src/useTerminal.ts"),
     `${readFileSync(join(root, "src/renderer/src/useTerminal.ts"), "utf8")}\n// dirty\n`,
   );
+}
+
+async function fixtureCardsV21(page, scratchDir) {
+  await bootIntoFreshSession(page, "Parity Cards V21", { spawnTerminal: false });
+  await delay(400);
+  const boardId = JSON.parse(
+    await page.evalJs(`window.store.boards.list().then((boards) => {
+      const board = boards.find((b) => b.name === "Parity Cards V21") ?? boards[0];
+      return JSON.stringify(board.id);
+    })`),
+  );
+  const now = Date.now();
+  const resumeId = "f1ada3c4-4709-4e80-a5b9-cdc1f6826ae0";
+  await page.evalJs(
+    `(async () => {
+      await window.store.upsert({
+        id: "v21-agent",
+        board_id: ${JSON.stringify(boardId)},
+        kind: "terminal",
+        provider: "bash",
+        cwd: ${JSON.stringify(scratchDir)},
+        x: 80, y: 80, w: 900, h: 420,
+        resume_id: ${JSON.stringify(resumeId)},
+        model: "Sonnet 5.5",
+        effort: null,
+        system_prompt: null,
+        group_id: null,
+        label: "IMPL · Claude",
+        updated_at: ${now},
+        messages_json: null,
+        archived_at: null,
+      });
+      return true;
+    })()`,
+  );
+  await page.evalJs(`document.querySelector(".topbar-home")?.click()`);
+  for (let i = 0; i < 50; i++) {
+    if (await page.evalJs(`!!document.querySelector(".home-session-card")`)) break;
+    await delay(100);
+  }
+  await page.evalJs(`
+    [...document.querySelectorAll(".home-session-name")]
+      .find((e) => e.textContent.trim().includes("Parity Cards V21"))?.click()
+  `);
+  await delay(1500);
+  for (let i = 0; i < 80; i++) {
+    const pending = await page.evalJs(`document.querySelectorAll('[data-role="card-skeleton"]').length`);
+    if (Number(pending) === 0) break;
+    await delay(100);
+  }
+  await page.evalJs(`
+    (() => {
+      document.querySelectorAll(".card-frame.spawning").forEach((el) => el.classList.remove("spawning"));
+    })()
+  `);
+  // Force the working pill for layout parity with cena=largo (bash alone
+  // would honestly show "processo vivo"; the owner-approved scene is working).
+  await page.evalJs(`
+    (() => {
+      const pill = document.querySelector("[data-card-id='v21-agent'] [data-role='terminal-status-pill']");
+      const host = pill?.closest(".card-head-status");
+      if (!pill || !host) return;
+      pill.dataset.kind = "working";
+      pill.dataset.status = "running";
+      const live = pill.querySelector(".card-head-status-live") || document.createElement("span");
+      live.className = "card-head-status-live";
+      live.setAttribute("aria-hidden", "true");
+      pill.textContent = "";
+      pill.appendChild(live);
+      pill.appendChild(document.createTextNode("trabalhando"));
+      host.style.background = "#1a2040";
+      host.style.color = "#c3cbff";
+    })()
+  `);
 }
 
 async function fixtureCardsV2(page, scratchDir) {
@@ -465,15 +546,15 @@ async function fixtureSettingsV7(page) {
   await delay(200);
 }
 
-async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
+async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null, boardName = "Parity Fila V3") {
   const { spawnCard } = await import("./cdp-client.mjs");
-  await bootIntoFreshSession(page, "Parity Fila V3", { spawnTerminal: false });
+  await bootIntoFreshSession(page, boardName, { spawnTerminal: false });
   await delay(400);
   const ids = JSON.parse(
     await page.evalJs(`
       (async () => {
         const boards = await window.store.boards.list();
-        const board = boards.find((b) => b.name === "Parity Fila V3") ?? boards[0];
+        const board = boards.find((b) => b.name === ${JSON.stringify(boardName)}) ?? boards[0];
         const created = await window.tasks.create(board.id, "__fila_v3_boot__");
         let active = null;
         for (let i = 0; i < 20; i++) {
@@ -549,7 +630,7 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
   await page.evalJs(`
     (async () => {
       const boards = await window.store.boards.list();
-      const board = boards.find((b) => b.name === "Parity Fila V3") ?? boards[0];
+      const board = boards.find((b) => b.name === ${JSON.stringify(boardName)}) ?? boards[0];
       const cards = await window.store.list(board.id);
       for (const c of cards) {
         if (c.kind === "task") {
@@ -568,10 +649,10 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
   await page.evalJs(`
     (() => {
       const name = [...document.querySelectorAll(".home-session-name")]
-        .find((item) => item.textContent.includes("Parity Fila V3"));
+        .find((item) => item.textContent.includes(${JSON.stringify(boardName)}));
       (name?.closest("button")
         ?? [...document.querySelectorAll(".home-session-card")]
-          .find((item) => item.innerText.includes("Parity Fila V3")))?.click();
+          .find((item) => item.innerText.includes(${JSON.stringify(boardName)})))?.click();
     })()
   `);
   await delay(1500);
@@ -595,13 +676,181 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
 
 async function applyFixture(page, fixtureId, scratchDir, userDataDir) {
   if (fixtureId === "cards-v2" || fixtureId === "v2") return fixtureCardsV2(page, scratchDir);
+  if (fixtureId === "cards-v21" || fixtureId === "v21") return fixtureCardsV21(page, scratchDir);
   if (fixtureId === "codigo-v6" || fixtureId === "v6") return fixtureCodigoV6(page, scratchDir);
   if (fixtureId === "settings-v7" || fixtureId === "v7") return fixtureSettingsV7(page);
   if (fixtureId === "fila-v3") return fixtureFilaV3(page, userDataDir, null);
   if (fixtureId === "main-v3") return fixtureFilaV3(page, userDataDir, "511abcb2");
   if (fixtureId === "review-v3") return fixtureFilaV3(page, userDataDir, "e0b6b86a");
   if (fixtureId === "superseded-v3") return fixtureFilaV3(page, userDataDir, "ae3e0fe2");
+  if (fixtureId === "graficos-v4") return fixtureGraficosV4(page, userDataDir);
+  if (fixtureId === "sprints-v4") return fixtureSprintsV4(page, userDataDir);
   throw new Error(`unknown fixture/impl: ${fixtureId}`);
+}
+
+async function waitForPart(page, part) {
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector(${JSON.stringify(`[data-part="${part}"]`)})`)) return;
+    await delay(100);
+  }
+  throw new Error(`missing [data-part="${part}"]`);
+}
+
+async function fixtureGraficosV4(page, userDataDir) {
+  await fixtureFilaV3(page, userDataDir, null, "Board 64");
+  const seeded = await seedV4Mock(page, userDataDir);
+  await refreshV4Board(page, seeded);
+  await delay(400);
+  await openV4Screen(page, "charts-toggle", ["graficos-provider-bar", "graficos-hist-bar", "graficos-cycle-bar"]);
+  await frameV4Shell(page, seeded, "graficos-v4", 1440, 860, "charts-toggle", ["graficos-provider-bar"]);
+}
+
+async function fixtureSprintsV4(page, userDataDir) {
+  await fixtureFilaV3(page, userDataDir, null, "Board 64");
+  const seeded = await seedV4Mock(page, userDataDir);
+  await refreshV4Board(page, seeded);
+  await delay(400);
+  await openV4Screen(page, "sprints-toggle", ["sprints-row", "sprints-unsprinted"]);
+  await frameV4Shell(page, seeded, "sprints-v4", 1000, 860, "sprints-toggle", ["sprints-row"]);
+}
+
+async function seedV4Mock(page, userDataDir) {
+  const dbPath = findDb(userDataDir);
+  if (!dbPath) throw new Error("agent-canvas.db missing for v4 fixture");
+  const db = new Database(dbPath);
+  const active = db
+    .prepare(`SELECT id AS sprintId, board_id AS boardId FROM sprints WHERE closed_at IS NULL ORDER BY started_at DESC LIMIT 1`)
+    .get();
+  db.close();
+  if (!active?.sprintId) throw new Error("no active sprint for v4 fixture");
+  const clock = seedGraficosSprintsMock(dbPath, active.boardId, active.sprintId);
+  return { dbPath, ...clock, ...active };
+}
+
+async function refreshV4Board(page, seeded) {
+  await page.evalJs(`Date.now = () => ${seeded.now}`);
+  const poke = JSON.parse(
+    await page.evalJs(`
+      (async () => {
+        const boards = await window.store.boards.list();
+        const board = boards.find((b) => b.name === "Board 64") ?? boards[0];
+        const r = await window.tasks.create(board.id, "__v4_poke__");
+        return JSON.stringify({ boardId: board.id, poke: r });
+      })()
+    `),
+  );
+  if (poke.poke?.ok && poke.poke.taskId) {
+    const db = new Database(seeded.dbPath);
+    db.prepare("DELETE FROM task_transitions WHERE task_id = ?").run(poke.poke.taskId);
+    db.prepare("DELETE FROM task_cards WHERE task_id = ?").run(poke.poke.taskId);
+    db.prepare("DELETE FROM task_verdicts WHERE task_id = ?").run(poke.poke.taskId);
+    db.prepare("DELETE FROM tasks WHERE id = ?").run(poke.poke.taskId);
+    db.close();
+  }
+  await page.evalJs(`
+    (async () => {
+      const tasks = await window.tasks.listByBoard(${JSON.stringify(poke.boardId)});
+      const one = tasks.find((t) => t.id.startsWith("d97be5"));
+      if (one) await window.tasks.updatePrompt(one.id, one.promptPreview || "ciclo", "replace");
+      await window.tasks.renameSprint(${JSON.stringify(seeded.sprintId)}, "Ciclo 2");
+    })()
+  `);
+  for (let i = 0; i < 40; i++) {
+    const ready = await page.evalJs(`(() => {
+      const text = document.body?.innerText || "";
+      return text.includes("Ciclo 2") && !text.includes("Sprint Ciclo 2");
+    })()`);
+    if (ready) return;
+    await delay(100);
+  }
+  throw new Error("sprint label did not refresh to Ciclo 2");
+}
+
+async function openV4Screen(page, toggle, parts) {
+  await page.evalJs(`document.querySelector(${JSON.stringify(`[data-part="${toggle}"]`)})?.click()`);
+  for (const part of parts) await waitForPart(page, part);
+}
+
+async function reenterBoard(page, boardName) {
+  await page.evalJs(`document.querySelector(".topbar-home")?.click()`);
+  for (let i = 0; i < 50; i++) {
+    if (await page.evalJs(`!!document.querySelector(".home-session-card")`)) break;
+    await delay(100);
+  }
+  await page.evalJs(`
+    (() => {
+      const name = [...document.querySelectorAll(".home-session-name")]
+        .find((item) => item.textContent.includes(${JSON.stringify(boardName)}));
+      (name?.closest("button")
+        ?? [...document.querySelectorAll(".home-session-card")]
+          .find((item) => item.innerText.includes(${JSON.stringify(boardName)})))?.click();
+    })()
+  `);
+  await delay(1200);
+}
+
+async function frameV4Shell(page, seeded, part, width, height, toggle, parts) {
+  let last = null;
+  for (let i = 0; i < 4; i++) {
+    await page.evalJs(`
+      (() => {
+        let style = document.getElementById("v4-hide-chrome");
+        if (!style) {
+          style = document.createElement("style");
+          style.id = "v4-hide-chrome";
+          document.head.appendChild(style);
+        }
+        style.textContent = ".titlebar, .topbar, .topbar-home, .rail-container, .compass-strip, .zoom-pill { display: none !important; }";
+      })()
+    `);
+    last = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const shell = document.querySelector(${JSON.stringify(`[data-part="${part}"]`)});
+          if (!shell) return "null";
+          const r = shell.getBoundingClientRect();
+          return JSON.stringify({ dx: 0 - r.x, dy: 0 - r.y, w: r.width, h: r.height });
+        })()
+      `),
+    );
+    if (!last) throw new Error(`shell ${part} missing while framing`);
+    if (Math.abs(last.dx) < 1 && Math.abs(last.dy) < 1 && Math.abs(last.w - width) <= 2 && Math.abs(last.h - height) <= 2) {
+      return;
+    }
+    await page.evalJs(`
+      (async () => {
+        const boards = await window.store.boards.list();
+        const board = boards.find((b) => b.name === "Board 64") ?? boards[0];
+        const cards = await window.store.list(board.id);
+        for (const c of cards) {
+          if (c.kind === "task") {
+            await window.store.upsert({
+              ...c,
+              x: c.x + ${last.dx},
+              y: c.y + ${last.dy},
+              w: 1800,
+              h: 1600,
+              updated_at: Date.now(),
+            });
+          } else {
+            await window.store.upsert({ ...c, x: 4000, y: 4000, updated_at: Date.now() });
+          }
+        }
+      })()
+    `);
+    await reenterBoard(page, "Board 64");
+    await page.evalJs(`Date.now = () => ${seeded.now}`);
+    for (let n = 0; n < 40; n++) {
+      const ready = await page.evalJs(`(() => {
+        const text = document.body?.innerText || "";
+        return text.includes("Ciclo 2") && !text.includes("Sprint Ciclo 2");
+      })()`);
+      if (ready) break;
+      await delay(100);
+    }
+    await openV4Screen(page, toggle, parts);
+  }
+  throw new Error(`shell ${part} not framed at ${width}x${height}: ${JSON.stringify(last)}`);
 }
 
 function writeReport({ spec, outDir, failing, approved, missing, sideBySide, exitCode }) {
@@ -652,7 +901,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.spec) {
     console.log(`Usage: npm run parity:prototype -- --spec <SPEC.md|json> [--proto file.dc.html] [--impl id]
-Impl ids: cards-v2 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | superseded-v3`);
+Impl ids: cards-v2 | cards-v21 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | superseded-v3 | graficos-v4 | sprints-v4`);
     process.exit(args.help ? 0 : 2);
   }
 
@@ -668,7 +917,8 @@ Impl ids: cards-v2 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | s
   mkdirSync(outDir, { recursive: true });
 
   const protoHttp = await startProtoServer();
-  const protoUrl = `${protoHttp.origin}/${basename(protoPath)}`;
+  const protoQuery = spec.protoQuery ? `?${String(spec.protoQuery).replace(/^\?/, "")}` : "";
+  const protoUrl = `${protoHttp.origin}/${basename(protoPath)}${protoQuery}`;
   const CDP_PORT = await pickFreePort();
   const USER_DATA_DIR = mkdtempSync(join(tmpdir(), `stellar-parity-${spec.id}-`));
   const scratchDir = mkdtempSync(join(tmpdir(), "stellar-parity-repo-"));
@@ -681,7 +931,13 @@ Impl ids: cards-v2 | codigo-v6 | settings-v7 | fila-v3 | main-v3 | review-v3 | s
     implId === "v7" ||
     spec.id === "configuracoes-v7" ||
     String(implId).endsWith("-v3") ||
-    String(spec.id).endsWith("-v3");
+    String(spec.id).endsWith("-v3") ||
+    implId === "graficos-v4" ||
+    implId === "sprints-v4" ||
+    implId === "cards-v21" ||
+    spec.id === "graficos-v4" ||
+    spec.id === "sprints-v4" ||
+    spec.id === "cards-v21";
   if (needsPtBr) {
     writeFileSync(join(USER_DATA_DIR, "locale.json"), JSON.stringify({ override: "pt-BR" }));
   }

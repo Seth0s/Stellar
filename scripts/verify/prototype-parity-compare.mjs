@@ -155,7 +155,7 @@ export function compareStyleProp(prop, protoValue, implValue, tolerances = DEFAU
     return { prop, proto: p, impl: i, kind: "font-weight" };
   }
 
-  if (prop === "font-size" || prop === "width" || prop === "height" || prop === "gap" || prop === "line-height") {
+  if (prop === "font-size" || prop === "width" || prop === "height" || prop === "gap" || prop === "line-height" || prop === "left") {
     // line-height may be unitless; compare px when both parse, else string equality.
     if (prop === "line-height") {
       const pa = parseCssPx(p);

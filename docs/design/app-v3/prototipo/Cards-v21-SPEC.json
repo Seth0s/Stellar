@@ -1,0 +1,54 @@
+{
+  "id": "cards-v21",
+  "title": "Cards v2.1 — header do agente (estados + resume_id)",
+  "specMd": "Cards-v2.1-NOTAS.md",
+  "proto": "Cards-v2.1.dc.html",
+  "impl": "cards-v21",
+  "viewport": { "width": 1760, "height": 980 },
+  "fixture": "cards-v21",
+  "protoQuery": "cena=largo",
+  "tolerances": { "lengthPx": 2, "colorDeltaE": 3.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border-radius",
+    "height"
+  ],
+  "root": {
+    "proto": "section[aria-label='Card de agente']",
+    "impl": "[data-card-id='v21-agent']"
+  },
+  "pairs": [
+    {
+      "id": "agent-shell",
+      "proto": "section[aria-label='Card de agente']",
+      "impl": "[data-card-id='v21-agent']"
+    },
+    {
+      "id": "agent-head",
+      "proto": "section[aria-label='Card de agente'] > header.hd",
+      "impl": "[data-card-id='v21-agent'] .card-head"
+    },
+    {
+      "id": "agent-name",
+      "proto": "section[aria-label='Card de agente'] .nm",
+      "impl": "[data-card-id='v21-agent'] .card-head-name"
+    },
+    {
+      "id": "agent-pill",
+      "proto": "section[aria-label='Card de agente'] .pill",
+      "impl": "[data-card-id='v21-agent'] .card-head-status"
+    },
+    {
+      "id": "agent-foot",
+      "proto": "section[aria-label='Card de agente'] > footer.ft",
+      "impl": "[data-card-id='v21-agent'] .card-foot"
+    }
+  ],
+  "approvedDiffs": []
+}
