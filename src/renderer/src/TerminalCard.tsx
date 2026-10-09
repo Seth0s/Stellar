@@ -3,7 +3,7 @@ import { t } from "../../shared/i18n";
 import { ReservationDrawer } from "./ReservationDrawer";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
-import { decideTerminalFooter } from "./card-footer-decision";
+import { decideAgentStatusPill, decideTerminalFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
@@ -14,12 +14,13 @@ import {
   type ShortcutOverrides,
 } from "./shortcut-registry";
 import { getEffectiveCombo } from "./shortcut-config";
-import type { IdentifySessionResult } from "../../preload/index";
+import type { IdentifySessionResult, TaskBoardItem } from "../../preload/index";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { describeCardRole } from "./TaskCard";
-import { shortTaskId } from "./task-board-model";
+import { PHASE_LABEL_KEY, shortTaskId } from "./task-board-model";
 import { SHELL_PROVIDER_ID } from "./attachments";
 import type { TurnEndProjection } from "../../main/agent-availability-projection";
+
 import {
   STELLAR_PATHS_MIME,
   decideTerminalDropHighlight,
@@ -28,6 +29,9 @@ import {
 } from "./terminal-drop-decision";
 import { toast } from "./useToast";
 import { estimatePtyGeometryFromRect } from "./pty-geometry-from-rect";
+
+/** Below this world width, bell and fullscreen move into the More menu. */
+const NARROW_CARD_W = 520;
 
 export type { Rect };
 
@@ -335,6 +339,7 @@ function TerminalCardInner({
     homeNotice,
     hasReceivedOutput,
     isActive,
+    agentStatus,
     fitNow,
     interrupt,
     dropLive,
@@ -363,8 +368,15 @@ function TerminalCardInner({
   const [dropActive, setDropActive] = useState(false);
   const [dropRefuseNotice, setDropRefuseNotice] = useState<string | null>(null);
   const [health, setHealth] = useState<Awaited<ReturnType<typeof window.pty.health>>>(null);
-  const [healthClock, setHealthClock] = useState(Date.now());
+  const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
+  const [drawerTask, setDrawerTask] = useState<TaskBoardItem | null>(null);
   const dropDepthRef = useRef(0);
+  const narrow = rect.w < NARROW_CARD_W;
+  const statusPill = decideAgentStatusPill({
+    status: agentStatus,
+    spawnError: spawnError !== null,
+    processAlive: exitCode === null && spawnError === null,
+  });
 
   async function fileToBase64(file: File): Promise<string> {
     const buf = await file.arrayBuffer();
@@ -669,10 +681,9 @@ function TerminalCardInner({
   }, [isActive, displayName]);
 
   const terminalFooter = decideTerminalFooter({
-    lastActivityAt: health?.lastActivityAt ?? null,
     context: health?.context ?? null,
     quota: health?.quota ?? null,
-  }, healthClock);
+  });
   useEffect(() => {
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -688,21 +699,58 @@ function TerminalCardInner({
     };
     refresh();
     const poll = window.setInterval(refresh, 4000);
-    const clock = window.setInterval(() => setHealthClock(Date.now()), 1000);
     return () => {
       mounted = false;
       window.clearInterval(poll);
-      window.clearInterval(clock);
     };
   }, [id]);
+  // Task drawer — board list carries phase + last report for the chip's task.
+  useEffect(() => {
+    if (!drawerTaskId) {
+      setDrawerTask(null);
+      return;
+    }
+    let alive = true;
+    const load = async () => {
+      const boards = await window.store?.boards?.list?.().catch(() => null);
+      if (!boards || !alive) return;
+      for (const board of boards) {
+        const tasks = await window.tasks?.listByBoard?.(board.id).catch(() => null);
+        const hit = tasks?.find((task) => task.id === drawerTaskId) ?? null;
+        if (hit) {
+          if (alive) setDrawerTask(hit);
+          return;
+        }
+      }
+      if (alive) setDrawerTask(null);
+    };
+    void load();
+    const off = window.tasks?.onChanged?.((_boardId, tasks) => {
+      const hit = tasks.find((task) => task.id === drawerTaskId) ?? null;
+      if (alive) setDrawerTask(hit);
+    });
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [drawerTaskId]);
   const effectiveResumeId = resumeId || discoveredResumeId;
   const canIdentify = !effectiveResumeId && providerSupportsSessionIdentify(providerId);
-  // Header already carries model + cwd; the V2 foot only keeps session
-  // extras that are not measured pulse fields.
-  const footerParts = [
-    effectiveResumeId ? `resume:${effectiveResumeId}` : null,
-    !resumeId && continueLast ? "--continue" : null,
-  ].filter(Boolean);
+  const showContinue = !resumeId && continueLast;
+
+  function toggleTaskDrawer(taskId: string) {
+    setDrawerTaskId((cur) => (cur === taskId ? null : taskId));
+  }
+
+  async function copyResumeId() {
+    if (!effectiveResumeId) return;
+    try {
+      await navigator.clipboard.writeText(effectiveResumeId);
+      toast(t("terminal.copiedClipboard"));
+    } catch {
+      toast(t("terminal.copyFail"));
+    }
+  }
   // Achado ao vivo (2026-08-27): a tira antiga era `position: absolute`
   // por CIMA das linhas do terminal, sem limite/expiração — qualquer
   // sessão que imprimisse alguns links (docs, npm, git remote…) acabava
@@ -745,7 +793,7 @@ function TerminalCardInner({
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
-      onFocus={onFocus}
+      onFocus={narrow ? undefined : onFocus}
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
@@ -773,20 +821,21 @@ function TerminalCardInner({
       }
       headerContext={<>{model ? `${model} · ` : ""}{cwd}</>}
       headerStatus={
-        <span data-tone={spawnError !== null ? "danger" : isActive ? "good" : undefined}>
-          {spawnError !== null
-            ? "erro"
-            : exitCode !== null
-              ? `saiu ${exitCode}`
-              : isActive
-                ? "trabalhando"
-                : "rodando"}
-          {isActive && <span className="card-head-status-live" aria-hidden="true" />}
+        <span
+          data-role="terminal-status-pill"
+          data-kind={statusPill.kind}
+          data-status={agentStatus ?? (statusPill.kind === "error" ? "error" : statusPill.kind === "exited" ? "exited" : "unknown")}
+          className={styles.terminalStatusPill}
+          data-tone={statusPill.kind === "error" ? "danger" : statusPill.kind === "waiting" ? "warn" : statusPill.kind === "working" ? "good" : undefined}
+        >
+          {statusPill.live && <span className="card-head-status-live" aria-hidden="true" />}
+          {!statusPill.live && <span className={styles.terminalStatusDot} aria-hidden="true" />}
+          {statusPill.label}
         </span>
       }
       headerTask={taskLinks.length > 0 ? (
         <span
-          className="card-head-tasks"
+          className={`card-head-tasks ${styles.terminalTaskChips}`}
           data-role="terminal-task-links"
           aria-label={t("terminal.taskLinks.aria", { list: taskLinksLabel })}
           title={taskLinksLabel}
@@ -795,10 +844,12 @@ function TerminalCardInner({
             <button
               type="button"
               data-no-drag
-              className="card-head-task"
+              className={`card-head-task${drawerTaskId === link.taskId ? ` ${styles.terminalTaskChipOn}` : ""}`}
+              data-role="terminal-task-chip"
+              aria-expanded={drawerTaskId === link.taskId}
               key={`${link.taskId}-${link.role}`}
               title={t("terminal.taskLinks.open", { label: `${describeCardRole(link.role)} ${shortTaskId(link.taskId)}` })}
-              onClick={() => onOpenTask?.(link.taskId)}
+              onClick={() => toggleTaskDrawer(link.taskId)}
             >
               #{shortTaskId(link.taskId)}
             </button>
@@ -810,7 +861,7 @@ function TerminalCardInner({
               className="card-head-task-more"
               data-role="terminal-task-links-more"
               title={taskLinksLabel}
-              onClick={() => onOpenTask?.(taskLinks[MAX_INLINE_TASK_LINKS]!.taskId)}
+              onClick={() => toggleTaskDrawer(taskLinks[MAX_INLINE_TASK_LINKS]!.taskId)}
             >
               +{taskLinks.length - MAX_INLINE_TASK_LINKS}
             </button>
@@ -820,15 +871,28 @@ function TerminalCardInner({
       headerContent={
         <>
           <span className="card-head-actions">
-            <button
-              className={`${styles.terminalCardBell}${bellEnabled ? ` ${styles.on}` : ""}`}
-              data-no-drag
-              title={bellEnabled ? t("terminal.bellOn") : t("terminal.bellOff")}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => setBellEnabled((v) => !v)}
-            >
-              <Icon name="bell" size={12} />
-            </button>
+            {!narrow && (
+              <button
+                className={`${styles.terminalCardBell}${bellEnabled ? ` ${styles.on}` : ""}`}
+                data-no-drag
+                data-role="terminal-bell"
+                title={bellEnabled ? t("terminal.bellOn") : t("terminal.bellOff")}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setBellEnabled((v) => !v)}
+              >
+                <Icon name="bell" size={12} />
+              </button>
+            )}
+            {statusPill.showStop && (
+              <button
+                title={t("terminal.sigint")}
+                data-role="terminal-stop"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={interrupt}
+              >
+                <Icon name="interrupt" size={10} fill="currentColor" />
+              </button>
+            )}
             <button
               ref={menuBtnRef}
               data-no-drag
@@ -840,14 +904,7 @@ function TerminalCardInner({
             >
               <Icon name="moreVertical" size={12} />
             </button>
-            <button
-              title={t("terminal.sigint")}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={interrupt}
-            >
-              <Icon name="interrupt" size={10} fill="currentColor" />
-            </button>
-            <button onClick={onClose}>
+            <button onClick={onClose} data-role="terminal-close">
               <Icon name="close" size={12} />
             </button>
           </span>
@@ -855,16 +912,25 @@ function TerminalCardInner({
       }
       footerContent={
         <span className={`card-foot-row ${styles.terminalCardFootRow}`}>
-          {terminalFooter.activitySeconds != null && (
-            <span data-role="terminal-last-activity">
-              <span className="card-head-status-live" aria-hidden="true" />
-              {" "}ativo há {terminalFooter.activitySeconds} s
-            </span>
-          )}
           {terminalFooter.contextPercent != null && (
             <span data-role="terminal-context-fill">contexto {terminalFooter.contextPercent}%</span>
           )}
           {terminalFooter.quotaLabel && <span data-role="terminal-quota" title={health?.quota?.text}>{terminalFooter.quotaLabel}</span>}
+          {effectiveResumeId && (
+            <button
+              type="button"
+              className={styles.terminalCardResumeId}
+              data-role="terminal-resume-id"
+              title={effectiveResumeId}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => void copyResumeId()}
+            >
+              resume:{effectiveResumeId}
+            </button>
+          )}
+          {showContinue && (
+            <span className={styles.terminalCardContinue} data-role="terminal-continue">--continue</span>
+          )}
           {/* DESIGN-BACKLOG.md, achado 2 (2026-09-11) — DOM de verdade, não
            * bytes no pty (review adversarial provou que uma TUI em tela
            * cheia apaga/corrompe qualquer coisa escrita ali antes do boot
@@ -899,9 +965,6 @@ function TerminalCardInner({
             <span className={styles.terminalCardResumeWarning} data-role="terminal-home-notice">
               ⚠ {t("terminal.homeUnsupported")}
             </span>
-          )}
-          {footerParts.length > 0 && (
-            <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
           )}
           {canIdentify && (
             <span className={styles.terminalCardIdentifySlot}>
@@ -988,11 +1051,6 @@ function TerminalCardInner({
           >
             <Icon name="keyboard" size={11} />
           </button>
-          {taskLinks[0] && (
-            <span data-role="terminal-task-role">
-              {describeCardRole(taskLinks[0].role)} · #{shortTaskId(taskLinks[0].taskId)}
-            </span>
-          )}
         </span>
       }
     >
@@ -1041,6 +1099,32 @@ function TerminalCardInner({
         className={styles.terminalCardMenu}
         dataRole="terminal-card-menu-popover"
       >
+        {narrow && (
+          <button
+            data-role="terminal-menu-bell"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setBellEnabled((v) => !v);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="bell" size={14} />
+            {bellEnabled ? t("terminal.bellOn") : t("terminal.bellOff")}
+          </button>
+        )}
+        {narrow && onFocus && (
+          <button
+            data-role="terminal-menu-focus"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setMenuOpen(false);
+              onFocus();
+            }}
+          >
+            <Icon name="fit" size={14} />
+            {t("card.focus")}
+          </button>
+        )}
         {canIdentify && (
           <button
             data-role="terminal-identify-menu-item"
@@ -1079,6 +1163,43 @@ function TerminalCardInner({
           </button>
         )}
       </Popover>
+      {drawerTaskId && (
+        <aside
+          className={styles.terminalTaskDrawer}
+          data-role="terminal-task-drawer"
+          aria-label={t("terminal.taskDrawer.aria")}
+        >
+          <span className={styles.terminalTaskDrawerId}>#{shortTaskId(drawerTaskId)}</span>
+          <span className={styles.terminalTaskDrawerTitle}>
+            {drawerTask?.promptPreview?.trim() || t("terminal.taskDrawer.untitled")}
+          </span>
+          <span className={styles.terminalTaskDrawerPhase}>
+            {t("terminal.taskDrawer.phase", {
+              phase: drawerTask ? t(PHASE_LABEL_KEY[drawerTask.phase]) : "…",
+            })}
+          </span>
+          <span className={styles.terminalTaskDrawerReport}>
+            {drawerTask?.report
+              ? t("terminal.taskDrawer.reportVerdict", {
+                  verdict: drawerTask.report.verdict ?? t("terminal.taskDrawer.reportNone"),
+                })
+              : t("terminal.taskDrawer.reportEmpty")}
+          </span>
+          <button
+            type="button"
+            className={styles.terminalTaskDrawerOpen}
+            data-role="terminal-task-drawer-open"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              const openId = drawerTaskId;
+              setDrawerTaskId(null);
+              onOpenTask?.(openId);
+            }}
+          >
+            {t("terminal.taskDrawer.openDetail")}
+          </button>
+        </aside>
+      )}
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={styles.terminalCardUrlPopover}>
         {[...seenUrls].reverse().map((url) => {
           const feedback = copyFeedback?.url === url ? copyFeedback : null;

@@ -12,19 +12,17 @@ import {
 
 describe("card footer decisions", () => {
   it("keeps unknown terminal health measurements absent", () => {
-    expect(decideTerminalFooter({ lastActivityAt: null, context: null, quota: null }, 10_000)).toEqual({
-      activitySeconds: null,
+    expect(decideTerminalFooter({ context: null, quota: null })).toEqual({
       contextPercent: null,
       quotaLabel: null,
     });
   });
 
-  it("shows measured terminal age, context window percentage, and quota", () => {
+  it("shows measured context window percentage and quota (no activity age)", () => {
     expect(decideTerminalFooter({
-      lastActivityAt: 7_500,
       context: { usedTokens: 340_000, windowTokens: 1_000_000 },
       quota: { text: "Plan: 77% used", percent: 77 },
-    }, 10_000)).toEqual({ activitySeconds: 2, contextPercent: 34, quotaLabel: "cota 77%" });
+    })).toEqual({ contextPercent: 34, quotaLabel: "cota 77%" });
   });
 
   it("shows the browser status, viewport, console counts, and offscreen pause", () => {

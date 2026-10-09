@@ -2,15 +2,11 @@
  * stay absent; this module does not infer values from a card's kind. */
 
 export type TerminalFooterInput = {
-  lastActivityAt: number | null;
   context: { usedTokens: number; windowTokens?: number } | null;
   quota: { text: string; percent?: number } | null;
 };
 
-export function decideTerminalFooter(input: TerminalFooterInput, now: number) {
-  const activitySeconds = input.lastActivityAt == null
-    ? null
-    : Math.max(0, Math.floor((now - input.lastActivityAt) / 1000));
+export function decideTerminalFooter(input: TerminalFooterInput, _now?: number) {
   const contextPercent = input.context?.windowTokens && input.context.windowTokens > 0
     ? Math.round((input.context.usedTokens / input.context.windowTokens) * 100)
     : null;
@@ -19,7 +15,58 @@ export function decideTerminalFooter(input: TerminalFooterInput, now: number) {
     : input.quota.percent == null
       ? input.quota.text
       : `cota ${input.quota.percent}%`;
-  return { activitySeconds, contextPercent, quotaLabel };
+  return { contextPercent, quotaLabel };
+}
+
+/**
+ * Header pill for an agent terminal — same vocabulary as `card_status`
+ * (`decideCardStatus` in main). Labels match Cards v2.1. Never invent
+ * "trabalhando" from PTY byte activity.
+ */
+export type AgentCardStatus =
+  | "running"
+  | "idle"
+  | "at-prompt"
+  | "unknown"
+  | "waiting"
+  | "exited"
+  | "no-output";
+
+export type AgentStatusPill = {
+  label: string;
+  /** CSS data-kind for prototype colors. */
+  kind: "working" | "waiting" | "idle" | "error" | "exited" | "alive";
+  live: boolean;
+  showStop: boolean;
+};
+
+export function decideAgentStatusPill(input: {
+  status: AgentCardStatus | null;
+  spawnError: boolean;
+  processAlive: boolean;
+}): AgentStatusPill {
+  if (input.spawnError) {
+    return { label: "erro", kind: "error", live: false, showStop: false };
+  }
+  if (!input.processAlive || input.status === "exited") {
+    return { label: "saiu", kind: "exited", live: false, showStop: false };
+  }
+  switch (input.status) {
+    case "running":
+      return { label: "trabalhando", kind: "working", live: true, showStop: true };
+    case "waiting":
+      return { label: "esperando você", kind: "waiting", live: false, showStop: true };
+    case "idle":
+      return { label: "ocioso", kind: "idle", live: false, showStop: true };
+    case "at-prompt":
+    case "unknown":
+    case "no-output":
+    case null:
+      // Honest: process is up; turn state is unknown or N/A (bash).
+      return { label: "processo vivo", kind: "alive", live: false, showStop: true };
+    default:
+      return { label: "processo vivo", kind: "alive", live: false, showStop: true };
+  }
 }
 
 export type BrowserFooterInput = {

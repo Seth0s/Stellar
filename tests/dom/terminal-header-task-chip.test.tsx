@@ -33,8 +33,11 @@ vi.mock("@renderer/useTerminal", () => ({
     resumeInvalidNotice: null,
     hasReceivedOutput: true,
     isActive: false,
+    agentStatus: "idle",
     fitNow: vi.fn(),
     interrupt: vi.fn(),
+    dropLive: true,
+    writeDroppedPaths: () => [],
   }),
 }));
 
@@ -72,8 +75,14 @@ beforeEach(() => {
   (window as unknown as { store: Record<string, unknown> }).store = {
     ...((window as unknown as { store?: Record<string, unknown> }).store ?? {}),
     cardAgentRoles,
+    boards: { list: async () => [{ id: "b1", name: "t" }] },
   };
   (window as unknown as { tasks: Record<string, unknown> }).tasks = {
+    listByBoard: async () => [
+      { id: T1, promptPreview: "PROMPT UM", phase: "running", report: null },
+      { id: T2, promptPreview: "PROMPT DOIS", phase: "ready", report: null },
+      { id: T3, promptPreview: "PROMPT TRÊS", phase: "ready", report: null },
+    ],
     listSprints: async () => [],
     sprintSnapshot: async () => ({ ok: true }),
     transitionsByBoard: async () => [],
@@ -130,8 +139,8 @@ function terminalStub(overrides: Partial<ComponentProps<typeof TerminalCard>> = 
   );
 }
 
-describe("metade 1 (produtor) — o chip entrega o id do VÍNCULO clicado", () => {
-  it("3 vínculos: 2 chips inline + o indicador '+1', e cada um abre o SEU vínculo", async () => {
+describe("metade 1 (produtor) — o chip abre a gaveta; Abrir detalhe entrega o id", () => {
+  it("3 vínculos: 2 chips inline + '+1'; chip abre gaveta; Abrir detalhe chama onOpenTask", async () => {
     const onOpenTask = vi.fn();
     render(terminalStub({ onOpenTask }));
 
@@ -144,12 +153,24 @@ describe("metade 1 (produtor) — o chip entrega o id do VÍNCULO clicado", () =
 
     const chips = document.querySelectorAll(".card-head-task");
     fireEvent.click(chips[0]!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-role="terminal-task-drawer"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-role="terminal-task-drawer-open"]')!);
     expect(onOpenTask).toHaveBeenLastCalledWith(T1);
+
     fireEvent.click(chips[1]!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-role="terminal-task-drawer"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-role="terminal-task-drawer-open"]')!);
     expect(onOpenTask).toHaveBeenLastCalledWith(T2);
 
-    // O indicador não é só um aviso: ele abre o PRIMEIRO que não coube.
     fireEvent.click(more);
+    await waitFor(() => {
+      expect(document.querySelector('[data-role="terminal-task-drawer"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-role="terminal-task-drawer-open"]')!);
     expect(onOpenTask).toHaveBeenLastCalledWith(T3);
     expect(onOpenTask).toHaveBeenCalledTimes(3);
   });

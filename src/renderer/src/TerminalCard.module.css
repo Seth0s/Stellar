@@ -145,6 +145,10 @@
   margin: 0;
   width: 100%;
   height: 100%;
+  /* FitAddon floors to whole rows; leftover 0..cellH px is still this
+     element. xterm.css defaults both shells to #000 — that seam reads as
+     a black strip above the footer unless it matches the theme panel. */
+  background: var(--panel);
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
@@ -170,6 +174,9 @@
   overflow-y: auto !important;
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
+  /* Measured: viewport is body-tall while .xterm-screen is rows×cellH.
+     Library CSS paints the remainder #000; keep the theme panel instead. */
+  background-color: var(--panel) !important;
 }
 
 .terminalCardBody :global(.xterm-viewport)::-webkit-scrollbar {
@@ -552,4 +559,148 @@
 .terminalCardMenu button:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* Cards v2.1 — status pill colors from the approved prototype. */
+.terminalCard :global(.card-head-status):has([data-role="terminal-status-pill"]) {
+  line-height: normal;
+}
+.terminalCard :global(.card-head-status):has([data-kind="working"]) {
+  background: var(--card-pill-terminal);
+  color: var(--card-pill-terminal-text);
+}
+.terminalCard :global(.card-head-status):has([data-kind="waiting"]) {
+  background: #2a1d10; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  color: var(--card-pill-change-text);
+}
+.terminalCard :global(.card-head-status):has([data-kind="idle"]),
+.terminalCard :global(.card-head-status):has([data-kind="exited"]) {
+  background: var(--card-pill-browser);
+  color: var(--card-pill-browser-text);
+}
+.terminalCard :global(.card-head-status):has([data-kind="error"]) {
+  background: #3a1c18; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  color: #f2a093; /* sd:allow: Cards-v2.1.dc.html approved measure */
+}
+.terminalCard :global(.card-head-status):has([data-kind="alive"]) {
+  background: #14223a; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  color: var(--card-icon-browser-fg);
+}
+
+.terminalStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--card-status-gap);
+}
+
+.terminalStatusDot {
+  width: var(--card-live-size);
+  height: var(--card-live-size);
+  border-radius: var(--radius-circle);
+  flex: none;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.terminalTaskChips {
+  flex: none !important;
+  overflow: visible !important;
+  min-width: 0;
+}
+
+.terminalCard :global(.card-head-task) {
+  flex: none;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: none;
+}
+
+.terminalTaskChipOn {
+  box-shadow: 0 0 0 1px var(--card-focus);
+}
+
+.terminalCardResumeId {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.terminalCardResumeId:hover {
+  color: var(--text);
+}
+
+.terminalCardContinue {
+  flex: none;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.terminalTaskDrawer {
+  position: absolute;
+  top: 50px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  right: var(--space-6);
+  width: 320px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  max-width: calc(100% - 24px); /* sd:allow: Cards-v2.1.dc.html approved measure */
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6) 14px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  border-radius: var(--card-radius);
+  border: 1px solid #2a2f3d; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  background: var(--card-pill-browser);
+  box-shadow: 0 16px 40px #000c; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  color: var(--card-name);
+  pointer-events: auto;
+}
+
+.terminalTaskDrawerId {
+  font-family: var(--font-mono);
+  font-size: var(--text-4);
+  color: var(--card-context);
+}
+
+.terminalTaskDrawerTitle {
+  font-size: 14.5px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.terminalTaskDrawerPhase {
+  font-size: 12.5px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  color: var(--card-pill-terminal-text);
+}
+
+.terminalTaskDrawerReport {
+  font-size: var(--text-5);
+  color: #c9cede; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  line-height: 1.45;
+}
+
+.terminalTaskDrawerOpen {
+  min-height: 32px; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-4);
+  border: 1px solid #2a2f3d; /* sd:allow: Cards-v2.1.dc.html approved measure */
+  background: var(--card-pill-surface);
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--text-5);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.terminalTaskDrawerOpen:hover {
+  background: #242b3c; /* sd:allow: Cards-v2.1.dc.html approved measure */
 }
