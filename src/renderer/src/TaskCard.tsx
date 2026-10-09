@@ -2081,12 +2081,7 @@ function TaskCardInner({
         viewingFrozen={viewingFrozen}
         onOpenCharts={() => setChartsOpen(true)}
         onCreateTask={() => setCreatingTask(true)}
-        totalDoneCount={
-          typeof (window as unknown as { __STELLAR_FILA_DONE_TOTAL__?: number }).__STELLAR_FILA_DONE_TOTAL__ ===
-          "number"
-            ? (window as unknown as { __STELLAR_FILA_DONE_TOTAL__: number }).__STELLAR_FILA_DONE_TOTAL__
-            : groups.done.length
-        }
+        totalDoneCount={groups.done.length}
       />
       {creatingTask && !viewingFrozen && (
         <div data-part="create-task-inline" style={{ padding: "8px 18px" }}>

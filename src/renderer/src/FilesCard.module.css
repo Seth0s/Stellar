@@ -23,6 +23,8 @@
 
 .rail {
   width: 48px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  /* Prototype nav is content-box: the 1px divider sits outside the 48px. */
+  box-sizing: content-box;
   flex: none;
   border-right: 1px solid var(--card-divider);
   background: var(--card-foot-surface);
@@ -78,6 +80,8 @@
 
 .side {
   width: 270px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  /* Prototype aside is content-box: border-right adds 1px outside the 270. */
+  box-sizing: content-box;
   flex: none;
   border-right: 1px solid var(--card-divider);
   background: #0d1016; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
@@ -445,6 +449,29 @@
   flex-direction: column;
   gap: var(--space-5);
   font-size: var(--text-5);
+}
+
+/* Codigo.dc.html status bar is content-box 26px / gap 16; shared .card-foot stays 28/12 (V2).
+   content-box lets the 1px divider sit outside the stated height, same as the prototype header. */
+:global(.files-card) :global(.card-head),
+:global(.files-card) :global(.card-foot) {
+  box-sizing: content-box;
+}
+:global(.files-card) :global(.card-foot) {
+  height: 26px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  gap: var(--space-7);
+}
+
+/* The 5px gutter stole editor-column width. The handle stays width 0; the
+   ::after hit slab (cards.css) carries the foam line while hovered or dragged. */
+:global(.files-card) :global(.files-tree-resize) {
+  width: 0;
+  background: transparent;
+}
+:global(.files-card) :global(.files-tree-resize):hover::after,
+:global(.files-card) :global(.files-tree-resize):active::after,
+:global(.files-card) :global(.files-tree-resize.is-dragging)::after {
+  background: var(--foam);
 }
 
 .footExtras {

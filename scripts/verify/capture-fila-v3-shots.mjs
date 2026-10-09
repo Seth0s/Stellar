@@ -382,9 +382,7 @@ try {
   console.log("tileCount", tileCount);
   if (tileCount < 5) throw new Error(`expected seeded tiles, got ${tileCount}`);
 
-  // Remount with archive total so "Ver todas as 212" matches the prototype.
   // Rails already start open (shown state); do not click them (that would collapse).
-  await page.evalJs(`window.__STELLAR_FILA_DONE_TOTAL__ = 212`);
   await page.evalJs(`document.querySelector(".topbar-home")?.click()`);
   for (let i = 0; i < 40; i++) {
     if (await page.evalJs(`!!document.querySelector(".home-session-card")`)) break;
@@ -392,7 +390,6 @@ try {
   }
   await page.evalJs(`
     (() => {
-      window.__STELLAR_FILA_DONE_TOTAL__ = 212;
       const name = [...document.querySelectorAll(".home-session-name")]
         .find((item) => item.textContent.includes("Fila V3 shots"));
       (name?.closest("button")

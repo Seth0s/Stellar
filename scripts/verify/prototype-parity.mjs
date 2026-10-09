@@ -371,7 +371,7 @@ async function fixtureCodigoV6(page, scratchDir) {
       kind: "files",
       provider: "",
       cwd: ${JSON.stringify(scratchDir)},
-      x: 30, y: 56, w: 1380, h: 820,
+      x: 30, y: 56, w: 1380, h: 852,
       resume_id: null, model: null, effort: null, system_prompt: null,
       group_id: null, label: "Stellar",
       updated_at: Date.now(),
@@ -392,6 +392,62 @@ async function fixtureCodigoV6(page, scratchDir) {
     if (await page.evalJs(`!!document.querySelector(".files-card")`)) break;
     await delay(100);
   }
+  // Same files the prototype tab strip shows, in that order, then reselect
+  // the first so the open tab matches the mock. The editor tablist only
+  // mounts once a file is open.
+  const clickLastNode = async (name) => {
+    for (let i = 0; i < 40; i++) {
+      const found = await page.evalJs(`(() => {
+        const hits = [...document.querySelectorAll(".files-card .files-node-name")]
+          .filter((el) => el.textContent === ${JSON.stringify(name)});
+        const hit = hits.at(-1);
+        if (!hit) return false;
+        hit.click();
+        return true;
+      })()`);
+      if (found) return;
+      await delay(100);
+    }
+    throw new Error(`codigo fixture: tree node not found: ${name}`);
+  };
+  const waitNode = async (name, min) => {
+    for (let i = 0; i < 40; i++) {
+      const count = Number(await page.evalJs(
+        `[...document.querySelectorAll(".files-card .files-node-name")].filter((el) => el.textContent === ${JSON.stringify(name)}).length`,
+      ));
+      if (count >= min) return;
+      await delay(100);
+    }
+    throw new Error(`codigo fixture: expected ${min} "${name}" node(s)`);
+  };
+  await waitNode("src", 1);
+  await clickLastNode("src");
+  await waitNode("renderer", 1);
+  await clickLastNode("renderer");
+  await waitNode("src", 2);
+  await clickLastNode("src");
+  await waitNode("useTerminal.ts", 1);
+  await clickLastNode("useTerminal.ts");
+  await clickLastNode("terminal-render.ts");
+  await clickLastNode("TaskCard.tsx");
+  await clickLastNode("useTerminal.ts");
+  for (let i = 0; i < 40; i++) {
+    const tabs = Number(await page.evalJs(`document.querySelectorAll(".files-editor [role='tab']").length`));
+    if (tabs >= 3) break;
+    if (i === 39) throw new Error(`codigo fixture: opened ${tabs} editor tabs, expected 3`);
+    await delay(100);
+  }
+  await page.evalJs(`
+    (() => {
+      document.querySelectorAll(".card-frame.spawning").forEach((el) => el.classList.remove("spawning"));
+      const card = document.querySelector(".files-card");
+      if (!card) return;
+      document.querySelectorAll('.card-frame[data-focused="true"]').forEach((el) => {
+        el.dataset.focused = "false";
+      });
+      card.dataset.focused = "true";
+    })()
+  `);
 }
 
 async function fixtureSettingsV7(page) {
@@ -413,7 +469,6 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
   const { spawnCard } = await import("./cdp-client.mjs");
   await bootIntoFreshSession(page, "Parity Fila V3", { spawnTerminal: false });
   await delay(400);
-  await page.evalJs(`window.__STELLAR_FILA_DONE_TOTAL__ = 212`);
   const ids = JSON.parse(
     await page.evalJs(`
       (async () => {
@@ -493,7 +548,6 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
   await delay(1000);
   await page.evalJs(`
     (async () => {
-      window.__STELLAR_FILA_DONE_TOTAL__ = 212;
       const boards = await window.store.boards.list();
       const board = boards.find((b) => b.name === "Parity Fila V3") ?? boards[0];
       const cards = await window.store.list(board.id);
@@ -513,7 +567,6 @@ async function fixtureFilaV3(page, userDataDir, detailTaskPrefix = null) {
   }
   await page.evalJs(`
     (() => {
-      window.__STELLAR_FILA_DONE_TOTAL__ = 212;
       const name = [...document.querySelectorAll(".home-session-name")]
         .find((item) => item.textContent.includes("Parity Fila V3"));
       (name?.closest("button")
