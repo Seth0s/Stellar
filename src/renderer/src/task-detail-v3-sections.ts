@@ -35,8 +35,11 @@ export function extractWhatIsBlurb(prompt: string | null | undefined): string | 
   let started = false;
   for (const raw of lines) {
     const line = raw.trim();
-    if (/^o\s+que\s+é\b/i.test(line)) {
+    // Avoid \\b after non-ASCII letters — JS word boundaries are ASCII-only.
+    if (/^o\s+que\s+é(?:\s|$)/i.test(line)) {
+      // Explicit heading replaces any leading title/prose already collected.
       started = true;
+      out.length = 0;
       continue;
     }
     if (!started && out.length === 0 && line.length > 0 && !/^(fazer|aceite|regras|gates|#{1,3}\s)/i.test(line)) {
@@ -48,9 +51,34 @@ export function extractWhatIsBlurb(prompt: string | null | undefined): string | 
       if (/^(o\s+aceite|aceite|fazer|o\s+que\s+foi|##|#{1,3}\s)/i.test(line)) break;
       if (line) out.push(line);
       else if (out.length > 0) break;
-    } else if (out.length > 0 && (line.length === 0 || /^(fazer|aceite|o\s+aceite|##)/i.test(line))) {
+    } else if (out.length > 0) {
+      // Blank lines may separate a short title from a later what-is heading —
+      // keep scanning. Structural section headers end the leading-prose path.
+      if (line.length === 0) continue;
+      if (/^(fazer|aceite|o\s+aceite|o\s+que\s+foi|##)/i.test(line)) break;
       break;
     }
+  }
+  const text = out.join(" ").replace(/\s+/g, " ").trim();
+  return text || null;
+}
+
+/** Prose under "O que foi medido" when the Resumo has no gate command rows. */
+export function extractMeasuredBlurb(prompt: string | null | undefined): string | null {
+  if (!prompt) return null;
+  const lines = prompt.split(/\r?\n/);
+  const out: string[] = [];
+  let started = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (/^o\s+que\s+foi\s+medido(?:\s|$)/i.test(line)) {
+      started = true;
+      continue;
+    }
+    if (!started) continue;
+    if (/^(o\s+aceite|aceite|fazer|o\s+que\s+é|##|#{1,3}\s)/i.test(line)) break;
+    if (line) out.push(line);
+    else if (out.length > 0) break;
   }
   const text = out.join(" ").replace(/\s+/g, " ").trim();
   return text || null;

@@ -60,6 +60,8 @@ export type QueueTaskFacts = {
     ok: boolean;
     failedCommand: string | null;
     isolation: { undeclaredInTerritory: string[] } | null;
+    /** Per-command results when the measured gate listed them. */
+    commands?: readonly { cmd: string; ok: boolean }[] | null;
   } | null;
   /** Reviewer waiting label when known. */
   reviewerLabel?: string | null;
@@ -142,14 +144,18 @@ export function groupTasksByQueueColumn<T extends QueueTaskFacts & { id: string;
   return groups;
 }
 
-/** DADOS §6 — three sources only. */
+/** DADOS §6 — three sources only. Prototype Fila also shows review=wanted
+ * while the task is still in Pronta (ready/reserved), before awaiting_review. */
 export function taskNeedsYou(task: QueueTaskFacts): boolean {
   if (task.blockedQuestion != null) return true;
   if (task.requestedStatus != null) return true;
   if (
-    task.phase === "awaiting_review" &&
     task.review === "wanted" &&
-    !cardHasReviewer(task.cards.map((c) => c.role))
+    !cardHasReviewer(task.cards.map((c) => c.role)) &&
+    (task.phase === "awaiting_review" ||
+      task.phase === "ready" ||
+      task.phase === "reserved" ||
+      task.phase === "changes_requested")
   ) {
     return true;
   }
@@ -162,7 +168,23 @@ export function filterByQueueFilter<T extends QueueTaskFacts>(tasks: readonly T[
   return tasks.filter((t) => t.cardAlive && t.phase === "running" && t.blockedQuestion == null);
 }
 
-export function countQueueFilter(tasks: readonly QueueTaskFacts[], filter: QueueFilter): number {
+/**
+ * Chip counts. "Tudo" = tasks in open columns (waiting/ready/running/review/
+ * done-today/failed). Excludes superseded and archived done (see-all link).
+ */
+export function countQueueFilter(
+  tasks: readonly QueueTaskFacts[],
+  filter: QueueFilter,
+  now: number = Date.now(),
+): number {
+  if (filter === "all") {
+    return tasks.filter((task) => {
+      const col = columnForQueueTask(task);
+      if (col === "superseded") return false;
+      if (col === "done" && !isDoneToday(task.updatedAt, now)) return false;
+      return true;
+    }).length;
+  }
   return filterByQueueFilter(tasks, filter).length;
 }
 
@@ -224,16 +246,19 @@ export function deriveTileStatusPhrase(task: QueueTaskFacts): string {
     return action ? `${who} ${action}` : `${who} trabalhando`;
   }
   if (task.phase === "awaiting_review" || task.phase === "changes_requested") {
-    const gates = gatePhraseBits(task);
-    const who = task.reviewerLabel?.trim() || (task.review === "wanted" && !cardHasReviewer(task.cards.map((c) => c.role)) ? "você" : "revisor");
-    const wait = `Esperando ${who}`;
-    return gates ? `${gates} · ${wait}` : wait;
+    // Gate commands render as tile chips; the status line is only the wait.
+    const who =
+      task.reviewerLabel?.trim() ||
+      (task.review === "wanted" && !cardHasReviewer(task.cards.map((c) => c.role)) ? "você" : "o REVISOR");
+    return `Esperando ${who}`;
   }
   if (task.phase === "done") {
     const who = task.approverLabel?.trim() || "você";
     const rounds = task.rounds ?? 0;
     const roundBit = rounds > 0 ? ` · ${rounds} rodada${rounds === 1 ? "" : "s"}` : "";
-    return `✓ aprovada por ${who}${roundBit}`;
+    // Portuguese: "pelo" before consonant-initial labels; "por" before "voce".
+    const prep = who === "você" ? "por" : "pelo";
+    return `✓ aprovada ${prep} ${who}${roundBit}`;
   }
   if (task.phase === "failed") {
     const kind = task.failureKind?.trim() || "falha";
@@ -265,9 +290,26 @@ function shortCommand(cmd: string): string {
 /** Compact gate chips for the tile (only when a measured gate exists). */
 export type TileGateChip = { label: string; tone: "good" | "danger" };
 
+function chipCommandLabel(cmd: string): string {
+  const s = cmd.trim().replace(/^npm\s+run\s+/, "").replace(/^npx\s+/, "");
+  if (/^vitest\b/i.test(s)) return "vitest";
+  const first = s.split(/\s+/)[0] ?? s;
+  return first.length <= 28 ? first : `${first.slice(0, 25)}…`;
+}
+
 export function deriveTileGateChips(task: QueueTaskFacts): TileGateChip[] {
   const gate = task.gateRun;
   if (!gate) return [];
+  const outside =
+    (gate.isolation?.undeclaredInTerritory?.length ?? 0) > 0 || task.gateRedOutsideTerritory === true;
+  const commands = gate.commands;
+  if (commands && commands.length > 0) {
+    return commands.map((c) => {
+      const name = chipCommandLabel(c.cmd);
+      if (c.ok) return { label: `${name} ✓`, tone: "good" as const };
+      return { label: outside ? `${name} ✕ outro card` : `${name} ✕`, tone: "danger" as const };
+    });
+  }
   if (gate.ok) return [{ label: "gates ✓", tone: "good" }];
   const bits = gatePhraseBits(task);
   if (!bits) return [{ label: "gates ✕", tone: "danger" }];
@@ -444,5 +486,103 @@ export function queueColumnToStatus(column: QueueColumn): string {
       return "failed";
     case "superseded":
       return "superseded";
+  }
+}
+
+/** Open-column minimum widths from Fila-v3.1 (running/review columns are wider). */
+export const QUEUE_COLUMN_MIN_PX: Record<QueueColumn, number> = {
+  waiting: 200,
+  ready: 200,
+  running: 220,
+  review: 220,
+  done: 200,
+  failed: 200,
+  superseded: 200,
+};
+
+export const QUEUE_RAIL_WIDTH_PX = 44;
+export const QUEUE_COLUMN_GAP_PX = 12;
+
+export type QueueRailDecisionInput = {
+  availableWidth: number;
+  counts: Readonly<Record<QueueColumn, number>>;
+  /** Columns the user explicitly collapsed (persisted per board). */
+  userCollapsed: ReadonlySet<QueueColumn>;
+  /** Empty columns the user opened (overrides born-collapsed for this session). */
+  userExpanded: ReadonlySet<QueueColumn>;
+};
+
+function widthNeeded(rails: ReadonlySet<QueueColumn>): number {
+  let total = 0;
+  let n = 0;
+  for (const col of QUEUE_COLUMN_ORDER) {
+    if (n > 0) total += QUEUE_COLUMN_GAP_PX;
+    total += rails.has(col) ? QUEUE_RAIL_WIDTH_PX : QUEUE_COLUMN_MIN_PX[col];
+    n += 1;
+  }
+  return total;
+}
+
+/**
+ * Fila v3.1 — empty columns are born as rails; user collapse is sticky;
+ * remaining open columns that do not fit collapse from the right into rails.
+ * Expanding a rail on a narrow card may overflow (horizontal scroll), never omit.
+ */
+export function decideColumnRails(input: QueueRailDecisionInput): Set<QueueColumn> {
+  const rails = new Set<QueueColumn>();
+  for (const col of QUEUE_COLUMN_ORDER) {
+    if (input.userCollapsed.has(col)) {
+      rails.add(col);
+      continue;
+    }
+    if (input.counts[col] === 0 && !input.userExpanded.has(col)) {
+      rails.add(col);
+    }
+  }
+  if (!(input.availableWidth > 0)) return rails;
+  // Collapse when open columns would fill the width exactly too — at 1200px
+  // Concluida/Falhas/Substituidas must be rails (Fila-v3.1-NOTAS.md).
+  while (widthNeeded(rails) >= input.availableWidth) {
+    let collapsed = false;
+    for (let i = QUEUE_COLUMN_ORDER.length - 1; i >= 0; i--) {
+      const col = QUEUE_COLUMN_ORDER[i];
+      if (!rails.has(col)) {
+        rails.add(col);
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) break;
+  }
+  return rails;
+}
+
+const COLLAPSED_STORAGE_PREFIX = "stellar.fila.collapsed.";
+
+export function loadCollapsedColumns(boardId: string): Set<QueueColumn> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_STORAGE_PREFIX + boardId);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return new Set();
+    const out = new Set<QueueColumn>();
+    for (const col of QUEUE_COLUMN_ORDER) {
+      if ((parsed as Record<string, unknown>)[col] === true) out.add(col);
+    }
+    return out;
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveCollapsedColumns(boardId: string, collapsed: ReadonlySet<QueueColumn>): void {
+  try {
+    const obj: Record<string, boolean> = {};
+    for (const col of QUEUE_COLUMN_ORDER) {
+      if (collapsed.has(col)) obj[col] = true;
+    }
+    localStorage.setItem(COLLAPSED_STORAGE_PREFIX + boardId, JSON.stringify(obj));
+  } catch {
+    /* quota / private mode — preference is best-effort */
   }
 }

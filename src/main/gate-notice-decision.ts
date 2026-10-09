@@ -317,6 +317,8 @@ export type TaskGateView = {
   isolation: TaskGateIsolationView | null;
   /** Trailing output of the failed command, for the tooltip/expansion. */
   failedOutput: string | null;
+  /** Per-command exit outcomes when `gateRun.commands` was recorded. */
+  commands: { cmd: string; ok: boolean }[] | null;
 };
 
 function asIsolation(value: unknown): TaskGateIsolationView | null {
@@ -358,6 +360,15 @@ export function taskGateViewFromResult(resultJson: string | null | undefined): T
       ? [failed.stdout, failed.stderr].filter((s): s is string => typeof s === "string" && s.trim().length > 0).join("\n")
       : "";
   const failedOutput = lastNonEmptyLines(combined, GATE_CONTRADICTION_TAIL_LINES);
+  const commandRows = Array.isArray(commands)
+    ? commands
+        .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+        .map((c) => ({
+          cmd: typeof c.cmd === "string" ? c.cmd : typeof c.command === "string" ? c.command : "",
+          ok: c.exitCode === 0,
+        }))
+        .filter((c) => c.cmd.length > 0)
+    : [];
   return {
     ok: summary.ok,
     passed: summary.passed,
@@ -365,5 +376,6 @@ export function taskGateViewFromResult(resultJson: string | null | undefined): T
     failedCommand: summary.failedCommand,
     isolation: asIsolation(gateRun?.isolation),
     failedOutput: failedOutput.length > 0 ? failedOutput : null,
+    commands: commandRows.length > 0 ? commandRows : null,
   };
 }

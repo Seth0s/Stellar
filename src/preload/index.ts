@@ -1329,6 +1329,7 @@ export type TaskBoardItem = {
     failedCommand: string | null;
     isolation: { mode: "isolated" | "shared"; reason: string | null; undeclaredInTerritory: string[] } | null;
     failedOutput: string | null;
+    commands?: { cmd: string; ok: boolean }[] | null;
   } | null;
   /** LIVE progress of a gate run (the runner's in-memory registry, not the
    * database). `null` = no gate running now. */

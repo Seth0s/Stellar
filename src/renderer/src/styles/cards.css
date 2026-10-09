@@ -527,6 +527,17 @@
 .card-foot-row [data-tone="good"] { color: var(--good); }
 .card-foot-row [data-tone="warn"] { color: var(--warn); }
 .card-foot-row [data-tone="danger"] { color: var(--danger); }
+/* Fila.dc.html footer: 12.5px / pad 10×18 — shared V2 foot stays 11.5/28 for other kinds. */
+.card-frame[data-kind="task"] .card-foot {
+  height: auto;
+  min-height: var(--card-foot-height);
+  padding: 10px 18px;
+  font-size: 12.5px;
+  gap: 16px;
+}
+.card-frame[data-kind="task"] .card-foot-row {
+  gap: 16px;
+}
 .card-frame[data-kind="browser"] .card-foot-row .card-foot-status[data-tone="good"] { color: var(--card-browser-success); }
 .card-frame[data-kind="changes"] .card-foot-row [data-tone="good"] { color: var(--card-success); }
 .card-frame[data-kind="changes"] .card-foot-row [data-tone="danger"] { color: var(--card-danger); }

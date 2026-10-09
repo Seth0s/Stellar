@@ -52,6 +52,7 @@ export function queueFactsFromBoardItem(
           isolation: task.gateRun.isolation
             ? { undeclaredInTerritory: task.gateRun.isolation.undeclaredInTerritory }
             : null,
+          commands: task.gateRun.commands ?? null,
         }
       : null,
     reviewerLabel: extras?.reviewerLabel ?? null,

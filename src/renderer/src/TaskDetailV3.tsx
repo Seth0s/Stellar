@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { TaskBoardItem } from "../../preload/index";
 import { parseTaskPrompt } from "../../task-prompt-decision";
@@ -16,11 +16,23 @@ import { groupDiffFiles, type DiffRow } from "./task-gate-detail";
 import {
   extractAcceptanceBullets,
   extractWhatIsBlurb,
+  extractMeasuredBlurb,
   measuredGateRows,
 } from "./task-detail-v3-sections";
 import { Icon } from "./icons";
 import { getLocale, t } from "../../shared/i18n";
 import styles from "./TaskDetailV3.module.css";
+
+const ENTER_MS = 200;
+const EXIT_MS = 140;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
 
 function DiffFileRow({ row }: { row: DiffRow }) {
   const territory =
@@ -68,6 +80,7 @@ export function TaskDetailV3({
   now,
   readOnly,
   sprintLabel,
+  cardId,
   onClose,
   onOpenTask,
 }: {
@@ -75,10 +88,38 @@ export function TaskDetailV3({
   now: number;
   readOnly: boolean;
   sprintLabel: string | null;
+  cardId: string;
   onClose: () => void;
   onOpenTask: (id: string) => void;
 }) {
-  const { modalProps } = useModal({ onClose });
+  const [phase, setPhase] = useState<"enter" | "open" | "leave">(() =>
+    prefersReducedMotion() ? "open" : "enter",
+  );
+  const [host, setHost] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const frame =
+      document.querySelector(`.card-frame[data-card-id="${CSS.escape(cardId)}"] .card-clip`) ??
+      document.querySelector(`[data-card-id="${CSS.escape(cardId)}"] .card-clip`);
+    setHost(frame instanceof HTMLElement ? frame : null);
+  }, [cardId]);
+
+  const requestClose = useCallback(() => {
+    if (prefersReducedMotion()) {
+      onClose();
+      return;
+    }
+    setPhase("leave");
+    window.setTimeout(() => onClose(), EXIT_MS);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (phase !== "enter") return;
+    const timer = window.setTimeout(() => setPhase("open"), ENTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase, host]);
+
+  const { modalProps } = useModal({ onClose: requestClose });
   const [tab, setTab] = useState<TabId>("resumo");
   const [fullPrompt, setFullPrompt] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -107,6 +148,7 @@ export function TaskDetailV3({
     [fullPrompt, parsed.original, task.promptPreview],
   );
   const acceptance = useMemo(() => extractAcceptanceBullets(fullPrompt), [fullPrompt]);
+  const measuredBlurb = useMemo(() => extractMeasuredBlurb(fullPrompt), [fullPrompt]);
   const gateRows = useMemo(() => measuredGateRows(task.gateRun), [task.gateRun]);
   const diffGroups = useMemo(() => groupDiffFiles(diffFiles), [diffFiles]);
   const diffRows = useMemo(
@@ -232,20 +274,36 @@ export function TaskDetailV3({
             ? styles.agoraDanger
             : styles.agoraNeutral;
 
+  if (!host) return null;
+
+  const dialogClass =
+    phase === "enter"
+      ? `${styles.dialog} ${styles.dialogEnter}`
+      : phase === "leave"
+        ? `${styles.dialog} ${styles.dialogLeave}`
+        : styles.dialog;
+
   return createPortal(
-    <div className={`modal-root ${styles.root}`} data-part="task-detail-v3" role="presentation">
-      <div className="modal-backdrop" onClick={onClose} />
-      <section className={styles.dialog} {...modalProps} aria-labelledby="task-detail-v3-title" role="dialog" aria-modal="true">
+    <div
+      className={styles.root}
+      data-part="task-detail-v3"
+      data-anim={phase}
+      role="presentation"
+    >
+      <div className={`modal-backdrop ${styles.veil}`} data-part="task-detail-veil" onClick={requestClose} />
+      <section className={dialogClass} {...modalProps} aria-labelledby="task-detail-v3-title" role="dialog" aria-modal="true">
         <header className={styles.head}>
           <div className={styles.metaRow}>
-            <span className={styles.id}>#{shortTaskId(task.id)}</span>
+            <span className={styles.id} data-part="task-detail-id">
+              #{shortTaskId(task.id)}
+            </span>
             {typeLabel && <span className={styles.pill}>{typeLabel}</span>}
             {sprintLabel && <span className={`${styles.pill} ${styles.pillSprint}`}>{sprintLabel}</span>}
             <span style={{ flex: 1 }} />
             <button type="button" className={styles.btn}>
               {t("task.detail.actions")}
             </button>
-            <button type="button" className={`${styles.btn} ${styles.btnIcon}`} aria-label={t("common.close")} onClick={onClose}>
+            <button type="button" className={`${styles.btn} ${styles.btnIcon}`} aria-label={t("common.close")} onClick={requestClose}>
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9cede" strokeWidth="1.6" aria-hidden="true">
                 <path d="M3 3l8 8M11 3l-8 8" />
               </svg>
@@ -315,7 +373,7 @@ export function TaskDetailV3({
           </div>
         )}
 
-        <nav className={styles.tabs} aria-label={t("task.detail.tab.summary")}>
+        <nav className={styles.tabs} aria-label={t("shell.sections")} data-part="task-detail-tabs">
           {(
             [
               ["resumo", "task.detail.tab.summary", null],
@@ -350,20 +408,26 @@ export function TaskDetailV3({
                     {whatIs || "—"}
                   </p>
                 </section>
-                {!superseded && gateRows.length > 0 && (
+                {!superseded && (measuredBlurb || gateRows.length > 0) && (
                   <section data-part="task-detail-measured">
                     <h2 className={styles.sectionKicker}>{t("task.detail.measured")}</h2>
-                    <div className={styles.panel}>
-                      {gateRows.map((row) => (
-                        <div key={row.cmd} className={styles.diffRow}>
-                          <span className={row.ok ? styles.diffAdd : undefined}>{row.ok ? "✓" : "✕"}</span>
-                          <span className={styles.mono} style={{ flex: 1 }}>
-                            {row.cmd}
-                          </span>
-                          {row.detail && <span className={styles.sectionMuted}>{row.detail}</span>}
-                        </div>
-                      ))}
-                    </div>
+                    {measuredBlurb ? (
+                      <div className={styles.panel} data-part="task-detail-measured-blurb">
+                        {measuredBlurb}
+                      </div>
+                    ) : (
+                      <div className={styles.panel}>
+                        {gateRows.map((row) => (
+                          <div key={row.cmd} className={styles.diffRow}>
+                            <span className={row.ok ? styles.diffAdd : undefined}>{row.ok ? "✓" : "✕"}</span>
+                            <span className={styles.mono} style={{ flex: 1 }}>
+                              {row.cmd}
+                            </span>
+                            {row.detail && <span className={styles.sectionMuted}>{row.detail}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </section>
                 )}
                 {!superseded && acceptance.length > 0 && (
@@ -626,6 +690,6 @@ export function TaskDetailV3({
         </div>
       </section>
     </div>,
-    document.body,
+    host,
   );
 }
