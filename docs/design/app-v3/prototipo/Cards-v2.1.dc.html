@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Cards v2.1 — header do agente</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.mono{font-family:'JetBrains Mono',monospace}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.card{border-radius:12px;background:#0f1218;border:1px solid #4a5690;box-shadow:0 0 0 1px #4a5690,0 14px 40px #000a;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.hd{height:42px;flex:none;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;border-bottom:1px solid #1d2230;background:#12151d;min-width:0}
+.ic{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:none;background:#2a1d14}
+.nm{font-size:13.5px;font-weight:600;flex:0 1 auto;min-width:4ch;max-width:42%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx{font-size:12px;color:#8d94a6;flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.right{display:flex;align-items:center;gap:6px;flex:none;min-width:0}
+.pill{font-size:11.5px;padding:2px 8px;border-radius:999px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;flex:none}
+.chip{font-size:11.5px;padding:2px 8px;border-radius:999px;background:#161a24;color:#a9b8ff;border:0;font-family:'JetBrains Mono',monospace;cursor:pointer;flex:none;white-space:nowrap}
+.chip:hover{background:#1d2333}
+.chipOn{box-shadow:0 0 0 1px #4a5690}
+.acts{display:flex;align-items:center;gap:2px;flex:none}
+.ab{width:28px;height:28px;border-radius:7px;border:0;background:transparent;color:#8d94a6;display:grid;place-items:center;cursor:pointer;flex:none;padding:0}
+.ab:hover{background:#1d2230;color:#e8eaf0}
+.ft{height:28px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;border-top:1px solid #1d2230;background:#0c0f15;font-size:11.5px;color:#8d94a6;white-space:nowrap;overflow:hidden}
+.live{width:7px;height:7px;border-radius:50%;background:#7d8cff;animation:pulse 1.6s ease-in-out infinite;flex:none}
+.dot{width:7px;height:7px;border-radius:50%;flex:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #7d8cff88}70%{box-shadow:0 0 0 6px #7d8cff00}100%{box-shadow:0 0 0 0 #7d8cff00}}
+.menu{position:absolute;top:46px;right:44px;width:180px;background:#161a24;border:1px solid #2a2f3d;border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:2px;z-index:3;box-shadow:0 12px 32px #000a}
+.menu button{height:32px;border:0;background:transparent;color:#e8eaf0;font:inherit;font-size:13px;text-align:left;padding:0 8px;border-radius:7px;cursor:pointer}
+.menu button:hover{background:#1d2230}
+.drawer{position:absolute;top:50px;right:12px;width:320px;max-width:calc(100% - 24px);background:#161a24;border:1px solid #2a2f3d;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;z-index:2;box-shadow:0 16px 40px #000c}
+.btn{min-height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#1c2230;color:#e8eaf0;font:inherit;font-size:13px;cursor:pointer}
+@media (prefers-reduced-motion: reduce){.live{animation:none}}
+</style>
+</helmet>
+
+<div style="width: 1760px; height: 980px; box-sizing: border-box; background: #05060a; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 12px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <button type="button" class="{{scLargo}}" onClick="{{goLargo}}">Trabalhando</button>
+    <button type="button" class="{{scGaveta}}" onClick="{{goGaveta}}">Gaveta</button>
+    <button type="button" class="{{scEspera}}" onClick="{{goEspera}}">Esperando você</button>
+    <button type="button" class="{{scOcioso}}" onClick="{{goOcioso}}">Ocioso</button>
+    <button type="button" class="{{scErro}}" onClick="{{goErro}}">Erro</button>
+    <button type="button" class="{{scSaiu}}" onClick="{{goSaiu}}">Saiu</button>
+    <button type="button" class="{{scVivo}}" onClick="{{goVivo}}">Processo vivo</button>
+    <button type="button" class="{{scSem}}" onClick="{{goSem}}">Sem task</button>
+    <button type="button" class="{{scEstreito}}" onClick="{{goEstreito}}">Estreito · 420</button>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
+  </div>
+
+  <div data-cena="{{cena}}" style="flex: 1; min-height: 0; border-radius: 16px; background-color: #07080d; background-image: radial-gradient(#1c2230 1px, transparent 1px); background-size: 22px 22px; display: flex; align-items: center; justify-content: center">
+    <section class="card" aria-label="Card de agente" style="width: {{cardW}}px; height: 420px">
+      <header class="hd">
+        <span class="ic"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#f0a46b" stroke-width="1.6" aria-hidden="true"><path d="M3 4l3 3-3 3M7.5 10H11"></path></svg></span>
+        <span class="nm">{{cardName}}</span>
+        <span class="ctx">{{ctx}}</span>
+        <span class="right">
+          <sc-if value="{{showPill}}" hint-placeholder-val="{{ true }}">
+            <span class="pill" style="{{pillStyle}}"><sc-if value="{{showLive}}" hint-placeholder-val="{{ true }}"><span class="live"></span></sc-if><sc-if value="{{showDot}}" hint-placeholder-val="{{ false }}"><span class="dot" style="{{dotStyle}}"></span></sc-if>{{pill}}</span>
+          </sc-if>
+          <sc-if value="{{showChip}}" hint-placeholder-val="{{ true }}">
+            <button type="button" class="{{chipClass}}" onClick="{{toggleDrawer}}" aria-expanded="{{drawerOpen}}">#511abc</button>
+          </sc-if>
+          <span class="acts">
+            <sc-if value="{{showBell}}" hint-placeholder-val="{{ true }}">
+              <button type="button" class="ab" aria-label="Avisos"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M7 2.2a3 3 0 0 1 3 3V7l.8 1.6H3.2L4 7V5.2a3 3 0 0 1 3-3z"></path><path d="M5.6 10.6a1.4 1.4 0 0 0 2.8 0"></path></svg></button>
+            </sc-if>
+            <sc-if value="{{showFull}}" hint-placeholder-val="{{ true }}">
+              <button type="button" class="ab" aria-label="Tela cheia"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"></path></svg></button>
+            </sc-if>
+            <sc-if value="{{showStop}}" hint-placeholder-val="{{ true }}">
+              <button type="button" class="ab" aria-label="Parar"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1.2" fill="currentColor"></rect></svg></button>
+            </sc-if>
+            <button type="button" class="ab" aria-label="Mais ações" onClick="{{toggleMenu}}"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="7" r="1.2"></circle><circle cx="7" cy="7" r="1.2"></circle><circle cx="11" cy="7" r="1.2"></circle></svg></button>
+            <button type="button" class="ab" aria-label="Fechar card"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+          </span>
+        </span>
+      </header>
+
+      <div class="mono" style="flex: 1; position: relative; padding: 12px 14px; font-size: 12.5px; line-height: 1.65; color: #c9cede; background: #0b0d12; min-height: 0">
+        <sc-if value="{{showWork}}" hint-placeholder-val="{{ true }}">
+          <div style="color: #8d94a6">● Read(src/main/idle-without-report-decision.ts)</div>
+          <div style="color: #8d94a6">● Edit(src/main/providers.ts) +31 −2</div>
+          <div>Agora os testes com amostras reais de tela…</div>
+          <div style="color: #3fb68b">  ✓ 14 passed</div>
+        </sc-if>
+        <sc-if value="{{showIdleBody}}" hint-placeholder-val="{{ false }}">
+          <div style="color: #8d94a6">{{bodyLine}}</div>
+        </sc-if>
+
+        <sc-if value="{{showMenu}}" hint-placeholder-val="{{ false }}">
+          <div class="menu" role="menu" aria-label="Mais ações">
+            <button type="button">Avisos</button>
+            <button type="button">Tela cheia</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{showDrawer}}" hint-placeholder-val="{{ false }}">
+          <aside class="drawer" aria-label="Gaveta da task">
+            <span class="mono" style="font-size: 12px; color: #8d94a6">#511abc</span>
+            <span style="font-size: 14.5px; font-weight: 600; line-height: 1.35">Card que termina o turno sem report recebe o lembrete</span>
+            <span style="font-size: 12.5px; color: #c3cbff">Fase · Rodando</span>
+            <span style="font-size: 13px; color: #c9cede; line-height: 1.45">Último report · nenhum nesta rodada. O card ainda está no turno.</span>
+            <button type="button" class="btn">Abrir detalhe</button>
+          </aside>
+        </sc-if>
+      </div>
+
+      <footer class="ft">
+        <span>{{footA}}</span>
+        <span>{{footB}}</span>
+      </footer>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const fromHash = new URLSearchParams((location.hash || "").replace(/^#/, "")).get("cena");
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "largo";
+    this.state = { cena };
+  }
+
+  // The task id lives only on the header chip. The pill names a measured
+  // fact, not PTY noise. The footer is context and quota, never a timer.
+  // On a narrow card the context ellipsizes first; bell and fullscreen move
+  // into More. The chip does not ellipsize.
+  renderVals() {
+    const cena = this.state.cena;
+    const sc = (k) => (cena === k ? "scene sceneOn" : "scene");
+    const go = (k) => () => this.setState({ cena: k });
+    const narrow = cena === "estreito";
+    const working = cena === "largo" || cena === "gaveta" || narrow;
+    const waiting = cena === "espera";
+    const idle = cena === "ocioso";
+    const failed = cena === "erro";
+    const exited = cena === "saiu";
+    const bash = cena === "vivo";
+    const none = cena === "sem";
+    const labels = {
+      largo: "Trabalhando = turno em andamento. Rodapé: contexto e cota",
+      gaveta: "O chip abre a gaveta ancorada ao card",
+      espera: "Esperando você = aprovação ou pergunta",
+      ocioso: "Processo no ar, sem turno. Não é trabalhando",
+      erro: "O turno falhou. A pílula diz erro",
+      saiu: "O processo encerrou",
+      vivo: "Bash não declara turno: processo vivo, não trabalhando",
+      sem: "Sem chip. Pílula ocioso. Rodapé só a cota",
+      estreito: "420px · sino e tela cheia foram para Mais ações",
+    };
+    const pill = working
+      ? "trabalhando"
+      : waiting
+        ? "esperando você"
+        : failed
+          ? "erro"
+          : exited
+            ? "saiu"
+            : bash
+              ? "processo vivo"
+              : "ocioso";
+    const pillStyle = working
+      ? "background:#1a2040;color:#c3cbff"
+      : waiting
+        ? "background:#2a1d10;color:#f0b25c"
+        : failed
+          ? "background:#3a1c18;color:#f2a093"
+          : bash
+            ? "background:#14223a;color:#8fb4ff"
+            : "background:#161a24;color:#a3aabb";
+    const dot = waiting ? "#f0b25c" : failed ? "#e5534b" : bash ? "#8fb4ff" : exited ? "#8d94a6" : "#8d94a6";
+    return {
+      cena,
+      cenaLabel: labels[cena] || "",
+      cardW: narrow ? "420" : "900",
+      cardName: bash ? "bash" : "IMPL · Claude",
+      ctx: bash || none ? "~/Projects/Stellar" : "Sonnet 5.5 · ~/Projects/Stellar",
+      scLargo: sc("largo"), scGaveta: sc("gaveta"), scEspera: sc("espera"),
+      scOcioso: sc("ocioso"), scErro: sc("erro"), scSaiu: sc("saiu"), scVivo: sc("vivo"),
+      scSem: sc("sem"), scEstreito: sc("estreito"),
+      goLargo: go("largo"), goGaveta: go("gaveta"), goEspera: go("espera"),
+      goOcioso: go("ocioso"), goErro: go("erro"), goSaiu: go("saiu"), goVivo: go("vivo"),
+      goSem: go("sem"), goEstreito: go("estreito"),
+      showPill: true,
+      showLive: working,
+      showDot: !working,
+      dotStyle: "background:" + dot,
+      pill,
+      pillStyle,
+      showChip: !none,
+      chipClass: cena === "gaveta" ? "chip chipOn" : "chip",
+      drawerOpen: cena === "gaveta" ? "true" : "false",
+      showDrawer: cena === "gaveta",
+      showBell: !narrow,
+      showFull: !narrow,
+      showStop: working || waiting || idle || bash,
+      showMenu: narrow,
+      toggleDrawer: () => this.setState({ cena: cena === "gaveta" ? "largo" : "gaveta" }),
+      toggleMenu: () => this.setState({ cena: narrow ? "largo" : "estreito" }),
+      showWork: working || waiting,
+      showIdleBody: !(working || waiting),
+      bodyLine: none
+        ? "Shell pronto. Nenhuma task ligada a este card."
+        : failed
+          ? "O turno terminou com erro. O processo não segue em trabalho."
+          : exited
+            ? "O processo encerrou. exit 0."
+            : bash
+              ? "$ aguardando comando. Este provider não declara turno."
+              : "Turno encerrado. O processo continua no ar, sem trabalho novo.",
+      footA: bash || none ? "" : waiting ? "contexto 41%" : "contexto 34%",
+      footB: bash ? "" : "cota 77% semana",
+    };
+  }
+}
+</script>
+</body>
+</html>
