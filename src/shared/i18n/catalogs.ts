@@ -1500,7 +1500,10 @@ export const ptBR = {
   "files.createIn": "{kind} em /{path}",
   "files.createKindFile": "arquivo",
   "files.createKindFolder": "pasta",
-  "files.tooLarge": "arquivo maior que 512KB, sem preview",
+  "files.tooLarge": "arquivo maior que 32MB — não abre no editor",
+  "files.plainModeBanner":
+    "Arquivo grande ({lines} linhas) — highlight, fold e preview desligados para o board continuar fluido",
+  "files.previewDisabledLarge": "Preview desligado neste tamanho — o board ficaria lento",
   "files.closeTab": "Fechar",
   "files.closeUnsaved": "Não salvo — fechar mesmo assim",
   "files.closeDiscard": "Clique de novo pra descartar e fechar",
@@ -3428,7 +3431,10 @@ export const en: Record<MessageKey, string> = {
   "files.createIn": "{kind} in /{path}",
   "files.createKindFile": "file",
   "files.createKindFolder": "folder",
-  "files.tooLarge": "file larger than 512KB, no preview",
+  "files.tooLarge": "file larger than 32MB — will not open in the editor",
+  "files.plainModeBanner":
+    "Large file ({lines} lines) — highlight, fold and preview off so the board stays smooth",
+  "files.previewDisabledLarge": "Preview disabled at this size — it would stall the board",
   "files.closeTab": "Close",
   "files.closeUnsaved": "Unsaved — close anyway",
   "files.closeDiscard": "Click again to discard and close",

@@ -99,6 +99,7 @@ import {
   createEntry,
   deletePath,
   listDir,
+  MAX_EDITOR_FILE_BYTES,
   readFile,
   readImageDataUrl,
   renamePath,
@@ -2117,7 +2118,7 @@ function createWindow() {
       for (;;) {
         const row = store.getReport(cardId, after);
         if (!row) break;
-        let body: unknown = null;
+        let body: unknown;
         try {
           body = decodeReportArgument(JSON.parse(row.report_json));
         } catch {
@@ -4068,7 +4069,11 @@ function createWindow() {
   );
 
   ipcMain.handle("fs:list", (_e, root: string, path: string) => listDir(root, path));
-  ipcMain.handle("fs:read", (_e, root: string, path: string) => readFile(root, path));
+  // FilesCard IDE only — agent/chat tools call `readFile` with the default
+  // `MAX_FILE_BYTES` cap so a tool result cannot swallow a huge buffer.
+  ipcMain.handle("fs:read", (_e, root: string, path: string) =>
+    readFile(root, path, MAX_EDITOR_FILE_BYTES),
+  );
   ipcMain.handle("fs:write", (_e, root: string, path: string, content: string) => writeFile(root, path, content));
   ipcMain.handle("fs:read-image", (_e, root: string, path: string) => readImageDataUrl(root, path));
   // DESIGN-BACKLOG.md item 49 — filename search across the whole tree,

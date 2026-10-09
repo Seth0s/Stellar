@@ -7,7 +7,15 @@ import { promisify } from "node:util";
 const execFileP = promisify(execFile);
 
 const IGNORE = new Set(["node_modules", ".git", "dist", "target"]);
+/** Cap for agent tools / chat / sticky / content-search — keep small so a
+ * tool result cannot pull a multi-megabyte buffer into model context. */
 export const MAX_FILE_BYTES = 512 * 1024;
+
+/** Cap for the FilesCard IDE `fs:read` path only. Larger than
+ * `MAX_FILE_BYTES` so a big source file opens in the editor (plain mode
+ * above the old ceiling) instead of the hard "too large, no preview"
+ * refuse that froze the owner's workflow. */
+export const MAX_EDITOR_FILE_BYTES = 32 * 1024 * 1024;
 
 const IMAGE_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -122,10 +130,14 @@ export async function listDir(root: string, path: string): Promise<DirEntry[]> {
   return items;
 }
 
-export async function readFile(root: string, path: string): Promise<ReadFileResult> {
+export async function readFile(
+  root: string,
+  path: string,
+  maxBytes: number = MAX_FILE_BYTES,
+): Promise<ReadFileResult> {
   const target = confine(root, path);
   const stat = await fs.stat(target);
-  if (stat.size > MAX_FILE_BYTES) return { tooLarge: true };
+  if (stat.size > maxBytes) return { tooLarge: true };
   return { content: await fs.readFile(target, "utf8") };
 }
 

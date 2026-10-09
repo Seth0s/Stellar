@@ -24,6 +24,11 @@ import {
   decideAgentDotByPath,
   decideTerritoryRoster,
 } from "./code-territory-roster-decision";
+import {
+  decideEditorPerfMode,
+  decideMinimapBars,
+  extractLineWindow,
+} from "./code-editor-perf-decision";
 import styles from "./FilesCard.module.css";
 
 const PROVIDER_ACCENT: Record<string, string> = {
@@ -627,10 +632,23 @@ function FilesCardInner({
 
   const agentLineMarks = useMemo(() => decideAgentLineMarks(agentHunks), [agentHunks]);
 
+  const editorPerf = useMemo(
+    () => (content == null ? null : decideEditorPerfMode(content)),
+    [content],
+  );
+
   const breadcrumbSymbol = useMemo(() => {
     if (!activePath || content == null) return null;
-    return decideBreadcrumbSymbol(content, cursorPos.line);
+    // Only scan a short window above the cursor — splitting the whole
+    // buffer on every cursor move stalls pan when a large file is open.
+    const win = extractLineWindow(content, cursorPos.line, 80);
+    return decideBreadcrumbSymbol(win.text, win.cursorLineInWindow);
   }, [activePath, content, cursorPos.line]);
+
+  const minimapBars = useMemo(() => {
+    if (content == null) return [];
+    return decideMinimapBars(content, 80, (lineNo) => agentLineMarks.get(lineNo)?.color);
+  }, [content, agentLineMarks]);
 
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -836,7 +854,10 @@ function FilesCardInner({
         path,
         content: null,
         imageDataUrl: null,
-        view: kind === "markdown" ? "preview" : "code",
+        // Markdown preview of a large buffer builds a full HTML DOM and
+        // stalls board pan — start in code view; switch to preview only
+        // after the buffer is known to be small enough (see read below).
+        view: "code",
         dirty: false,
         tooLarge: false,
         diskConflict: null,
@@ -857,7 +878,13 @@ function FilesCardInner({
     window.fs.read(root, path).then(
       (result) => {
         if ("tooLarge" in result) updateTab(path, { tooLarge: true, content: "" });
-        else updateTab(path, { content: result.content });
+        else {
+          const perf = decideEditorPerfMode(result.content);
+          updateTab(path, {
+            content: result.content,
+            view: kind === "markdown" && perf.allowMarkdownPreview ? "preview" : "code",
+          });
+        }
       },
       (e) => setError(String(e)),
     );
@@ -1712,7 +1739,20 @@ function FilesCardInner({
               )}
               <span style={{ flex: 1 }} />
               {mediaKind(activePath) === "markdown" && (
-                <button type="button" className={styles.btn} onClick={() => updateTab(activePath, { view: view === "code" ? "preview" : "code" })}>
+                <button
+                  type="button"
+                  className={styles.btn}
+                  disabled={view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview}
+                  title={
+                    view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview
+                      ? t("files.previewDisabledLarge")
+                      : undefined
+                  }
+                  onClick={() => {
+                    if (view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview) return;
+                    updateTab(activePath, { view: view === "code" ? "preview" : "code" });
+                  }}
+                >
                   {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
                 </button>
               )}
@@ -1724,12 +1764,21 @@ function FilesCardInner({
             <div className="files-editor-msg">{t("files.diskChangedDirty")}</div>
           )}
           {activeTab?.diskConflict === "gone" && <div className="files-editor-msg">{t("files.diskGone")}</div>}
+          {editorPerf?.showPlainBanner && !tooLarge && (
+            <div className={`files-editor-msg ${styles.plainBanner}`} role="status">
+              {t("files.plainModeBanner", { lines: String(editorPerf.lineCount) })}
+            </div>
+          )}
           {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
             <div className="files-editor-image">
               <img src={imageDataUrl} alt={activePath} />
             </div>
           )}
-          {activePath && !tooLarge && mediaKind(activePath) === "markdown" && view === "preview" && (
+          {activePath &&
+            !tooLarge &&
+            mediaKind(activePath) === "markdown" &&
+            view === "preview" &&
+            editorPerf?.allowMarkdownPreview !== false && (
             content === null ? (
               <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
@@ -1745,16 +1794,17 @@ function FilesCardInner({
           {activePath &&
             !tooLarge &&
             mediaKind(activePath) !== "image" &&
-            !(mediaKind(activePath) === "markdown" && view === "preview") &&
+            !(mediaKind(activePath) === "markdown" && view === "preview" && editorPerf?.allowMarkdownPreview !== false) &&
             (content === null ? (
               <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
               <Suspense fallback={<div className="files-editor-msg">{t("files.loadingEditor")}</div>}>
                 <CodeEditor
-                  key={`${activePath}:${activeTab?.contentEpoch ?? 0}`}
+                  key={`${activePath}:${activeTab?.contentEpoch ?? 0}:${editorPerf?.mode ?? "full"}`}
                   value={content}
                   filename={activePath}
                   jumpToLine={activeTab?.pendingJumpLine}
+                  plain={editorPerf?.mode === "plain"}
                   agentLineMarks={agentLineMarks}
                   onAgentGutterAction={(action, mark) => {
                     if (action === "open-card") onFocusCard?.(mark.cardId);
@@ -1781,28 +1831,16 @@ function FilesCardInner({
               </div>
             )}
             <div className={styles.minimap} aria-hidden="true">
-              {(() => {
-                const lines = (content ?? "").split("\n");
-                const maxBars = 80;
-                const step = Math.max(1, Math.ceil(lines.length / maxBars));
-                const bars = [];
-                for (let i = 0; i < lines.length; i += step) {
-                  const lineNo = i + 1;
-                  const mark = agentLineMarks.get(lineNo);
-                  const sample = lines[i] ?? "";
-                  bars.push(
-                    <span
-                      key={lineNo}
-                      className={styles.minimapBar}
-                      style={{
-                        width: `${Math.min(100, 12 + Math.min(88, sample.length))}%`,
-                        background: mark?.color ?? undefined,
-                      }}
-                    />,
-                  );
-                }
-                return bars;
-              })()}
+              {minimapBars.map((bar) => (
+                <span
+                  key={bar.lineNo}
+                  className={styles.minimapBar}
+                  style={{
+                    width: `${bar.widthPct}%`,
+                    background: bar.color,
+                  }}
+                />
+              ))}
             </div>
           </div>
           <div className={styles.bottom}>
