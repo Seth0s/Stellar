@@ -13,6 +13,8 @@
  */
 
 import { isDependencySettled } from "../task-status-derive";
+import { declaredTaskIdFromReportBody } from "./report-task-link-decision";
+import { reportConcludesTask } from "./report-estado-decision";
 
 export type TaskPhase =
   | "waiting_deps"
@@ -82,11 +84,13 @@ export type BoardTaskPhaseFactsInput = {
   depStatuses: readonly (string | null)[];
   /** Live implementer links: null reservation_state = active, "reserved" = held. */
   liveImplementers: readonly { reservation_state: string | null }[];
-  /** updated_at of the principal card's latest report, or null. */
-  implementerReportAt: number | null;
-  /** Last work-granted instant for the principal card, or null when unknown. */
-  implementerWorkGrantedAt: number | null;
-  /** A reviewer asked for changes after the latest report. */
+  /**
+   * True only when `implementerReportedFinalSinceDelivery` says this task
+   * has an ok:true + estado final report after the last delivery. The
+   * caller applies attribution; this shape does not see the card's latest row.
+   */
+  implementerReportedSinceLastDelivery: boolean;
+  /** A reviewer asked for changes after the latest report of this task. */
   reviewerChangesRequested: boolean;
 };
 
@@ -96,9 +100,7 @@ export function boardTaskPhaseFacts(input: BoardTaskPhaseFactsInput): TaskPhaseF
     deps: input.depStatuses.map((status) => ({ status })),
     hasActiveImplementer: input.liveImplementers.some((l) => l.reservation_state == null),
     hasReservedCard: input.liveImplementers.some((l) => l.reservation_state === "reserved"),
-    implementerReportedSinceLastDelivery:
-      input.implementerReportAt !== null &&
-      (input.implementerWorkGrantedAt === null || input.implementerReportAt >= input.implementerWorkGrantedAt),
+    implementerReportedSinceLastDelivery: input.implementerReportedSinceLastDelivery,
     reviewerChangesRequested: input.reviewerChangesRequested,
   };
 }
@@ -106,4 +108,58 @@ export function boardTaskPhaseFacts(input: BoardTaskPhaseFactsInput): TaskPhaseF
 /** Convenience wrapper for callers that only need the phase. */
 export function deriveBoardTaskPhase(input: BoardTaskPhaseFactsInput): TaskPhase {
   return deriveTaskPhase(boardTaskPhaseFacts(input));
+}
+
+/** One stored report of the implementer card, body already decoded. */
+export type PhaseReportRow = {
+  body: unknown;
+  at: number;
+};
+
+/**
+ * Whether the implementer has delivered THIS task since the last work grant.
+ *
+ * The card is a slot: its newest row may belong to another task, and a
+ * checkpoint (`estado` omitted or `parcial`) is not a delivery. Only the
+ * latest row whose declared task id is `taskId` and whose time is at or
+ * after `lastDeliveryAt` counts, and only when that row is ok:true with
+ * estado final. `lastDeliveryAt === null` means the caller has no clock,
+ * so every attributed row is in the window.
+ */
+export function implementerReportedFinalSinceDelivery(input: {
+  taskId: string;
+  reports: readonly PhaseReportRow[];
+  lastDeliveryAt: number | null;
+}): boolean {
+  const latest = latestAttributedInWindow(input.taskId, input.reports, input.lastDeliveryAt);
+  return latest !== null && reportConcludesTask(latest.body);
+}
+
+/** Time of the newest report declared for this task, ignoring the window.
+ *  Reviewer "changes requested" compares against this, not against another
+ *  task's row on the same card. */
+export function latestAttributedReportAt(
+  taskId: string,
+  reports: readonly PhaseReportRow[],
+): number | null {
+  let at: number | null = null;
+  for (const row of reports) {
+    if (declaredTaskIdFromReportBody(row.body) !== taskId) continue;
+    if (at === null || row.at >= at) at = row.at;
+  }
+  return at;
+}
+
+function latestAttributedInWindow(
+  taskId: string,
+  reports: readonly PhaseReportRow[],
+  lastDeliveryAt: number | null,
+): PhaseReportRow | null {
+  let latest: PhaseReportRow | null = null;
+  for (const row of reports) {
+    if (declaredTaskIdFromReportBody(row.body) !== taskId) continue;
+    if (lastDeliveryAt !== null && row.at < lastDeliveryAt) continue;
+    if (!latest || row.at >= latest.at) latest = row;
+  }
+  return latest;
 }

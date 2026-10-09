@@ -62,7 +62,14 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { projectTaskPrompt } from "../task-prompt-projection";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
-import { deriveBoardTaskPhase, type TaskPhase } from "./task-phase-decision";
+import {
+  deriveBoardTaskPhase,
+  implementerReportedFinalSinceDelivery,
+  latestAttributedReportAt,
+  type PhaseReportRow,
+  type TaskPhase,
+} from "./task-phase-decision";
+import { decodeReportArgument } from "./report-retry-decision";
 import { checkAgentAvailability, providerById, providerCapacity, refreshProviderReadiness, PROVIDERS, type SpawnOpts } from "./providers";
 import { readCardHealth } from "./card-health";
 import { getProviderUsage } from "./provider-usage";
@@ -2098,6 +2105,31 @@ function createWindow() {
       cardsByTask.set(tc.task_id, list);
     }
     const reportByCardId = new Map(store.listReportsForBoard(boardId).map((r) => [r.card_id, r]));
+    // Phase walks every row of the implementer card. The latest row alone is
+    // another task's report or a parcial checkpoint often enough that the
+    // queue would show "awaiting review" while the card is still working.
+    const phaseReportsByCard = new Map<string, PhaseReportRow[]>();
+    const phaseReportsForCard = (cardId: string): PhaseReportRow[] => {
+      const cached = phaseReportsByCard.get(cardId);
+      if (cached) return cached;
+      const rows: PhaseReportRow[] = [];
+      let after = 0;
+      for (;;) {
+        const row = store.getReport(cardId, after);
+        if (!row) break;
+        let body: unknown = null;
+        try {
+          body = decodeReportArgument(JSON.parse(row.report_json));
+        } catch {
+          body = null;
+        }
+        rows.push({ body, at: row.updated_at });
+        if (typeof row.seq !== "number" || row.seq <= after) break;
+        after = row.seq;
+      }
+      phaseReportsByCard.set(cardId, rows);
+      return rows;
+    };
     // RODADA 2 — mesma convenção de parse que message-bus.ts's
     // onTaskDone já usa pra este mesmo campo (`deps_json ?
     // JSON.parse(...) : []`, sem try/catch): só este código escreve essa
@@ -2164,18 +2196,23 @@ function createWindow() {
       const liveImplementers = store.listLiveImplementersForTask(t.id);
       const implementerCardId =
         t.card_id ?? liveImplementers.find((l) => l.reservation_state == null)?.card_id ?? null;
-      const implementerReportAt = implementerCardId ? reportByCardId.get(implementerCardId)?.updated_at ?? null : null;
+      const phaseReports = implementerCardId ? phaseReportsForCard(implementerCardId) : [];
       const implementerWorkGrantedAt = implementerCardId ? registry.getLastWorkGrantedAt(implementerCardId) : null;
+      const implementerReportedSinceLastDelivery = implementerReportedFinalSinceDelivery({
+        taskId: t.id,
+        reports: phaseReports,
+        lastDeliveryAt: implementerWorkGrantedAt,
+      });
+      const attributedAt = latestAttributedReportAt(t.id, phaseReports);
       const taskVerdicts = verdictsByTask.get(t.id) ?? [];
       const lastVerdict = taskVerdicts.length > 0 ? taskVerdicts[taskVerdicts.length - 1]! : null;
       const reviewerChangesRequested =
-        lastVerdict?.verdict === "reprovado" && (implementerReportAt === null || lastVerdict.at >= implementerReportAt);
+        lastVerdict?.verdict === "reprovado" && (attributedAt === null || lastVerdict.at >= attributedAt);
       const phase = deriveBoardTaskPhase({
         status: t.status,
         depStatuses: deps.map((depId) => depStatuses[depId] ?? null),
         liveImplementers,
-        implementerReportAt,
-        implementerWorkGrantedAt,
+        implementerReportedSinceLastDelivery,
         reviewerChangesRequested,
       });
       // CAMADA 4 (task b41ac547) — mesmo par de fatos que o MCP publica:
