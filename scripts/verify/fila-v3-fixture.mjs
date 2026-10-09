@@ -390,6 +390,32 @@ Push: o desktop cifra o aviso (RFC 8291) e o servidor só assina com VAPID e env
     },
   ];
 
+  // The see-all label counts every done row. Rows older than today stay out
+  // of the done column, which only lists rows updated today. The archive
+  // size matches the prototype copy (212).
+  const DONE_ARCHIVE_TOTAL = 212;
+  const namedDone = rows.filter((r) => r.status === "done").length;
+  const archiveUpdatedAt = now - 2 * 86_400_000;
+  for (let i = 0; i < DONE_ARCHIVE_TOTAL - namedDone; i++) {
+    const n = String(i).padStart(4, "0");
+    rows.push({
+      id: `arch${n}-aaaa-4000-8000-000000000d01`,
+      prompt: "arquivo concluído",
+      status: "done",
+      purpose: "implement",
+      result_json: null,
+      deps_json: null,
+      requested_status: null,
+      requested_reason: null,
+      requested_by: null,
+      requested_at: null,
+      superseded_by: null,
+      review: null,
+      ord: 100 + i,
+      updated_at: archiveUpdatedAt,
+    });
+  }
+
   const tx = db.transaction(() => {
     for (const r of rows) {
       insert.run({

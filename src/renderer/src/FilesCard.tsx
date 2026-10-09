@@ -507,11 +507,13 @@ function FilesCardInner({
     const saved = Number(localStorage.getItem(TREE_WIDTH_KEY));
     return saved >= TREE_WIDTH_MIN && saved <= TREE_WIDTH_MAX ? saved : TREE_WIDTH_DEFAULT;
   });
+  const [treeResizing, setTreeResizing] = useState(false);
   const resizingRef = useRef(false);
 
   function startTreeResize(e: React.PointerEvent) {
     e.preventDefault();
     resizingRef.current = true;
+    setTreeResizing(true);
     const startX = e.clientX;
     const startWidth = treeWidth;
     function onMove(ev: PointerEvent) {
@@ -521,6 +523,7 @@ function FilesCardInner({
     }
     function onUp() {
       resizingRef.current = false;
+      setTreeResizing(false);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     }
@@ -1633,7 +1636,10 @@ function FilesCardInner({
         {/* DESIGN-BACKLOG.md item 53 — drag handle to resize the tree
             panel; `.files-tree-panel`'s width used to be a hardcoded
             220px with no way to widen/narrow it at all. */}
-        <div className="files-tree-resize" onPointerDown={startTreeResize} />
+        <div
+          className={`files-tree-resize${treeResizing ? " is-dragging" : ""}`}
+          onPointerDown={startTreeResize}
+        />
         <div className={`${styles.main} files-editor`}>
           {/* DESIGN-BACKLOG.md item 50 — horizontal tab bar, one pill per
               open file (insertion order). A dirty tab shows a dot instead
