@@ -24,6 +24,7 @@ export type TaskGateView = {
   failedCommand: string | null;
   isolation: TaskGateIsolationView | null;
   failedOutput: string | null;
+  commands?: { cmd: string; ok: boolean }[] | null;
 };
 
 export type TaskGateProgress = { index: number; total: number; command: string };

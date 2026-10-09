@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  QUEUE_COLUMN_ORDER,
   columnForQueueTask,
   countQueueFilter,
+  decideColumnRails,
   deriveAgoraBanner,
   deriveTileStatusPhrase,
   filterByQueueFilter,
@@ -9,6 +11,7 @@ import {
   summarizeRecentAction,
   taskNeedsYou,
   tileShowsLiveActivity,
+  type QueueColumn,
   type QueueTaskFacts,
 } from "../../src/renderer/src/task-fila-v3-decision";
 
@@ -97,6 +100,19 @@ describe("deriveTileStatusPhrase (DADOS §4)", () => {
       deriveTileStatusPhrase(facts({ phase: "superseded", supersededBy: "faae5162-xxxx", supersededTargetDone: true })),
     ).toBe("→ #faae5162 concluída");
   });
+
+  it("contracts done approver as pelo revisor / pelo Master / por você", () => {
+    expect(
+      deriveTileStatusPhrase(facts({ phase: "done", approverLabel: "revisor", rounds: 2 })),
+    ).toBe("✓ aprovada pelo revisor · 2 rodadas");
+    expect(
+      deriveTileStatusPhrase(facts({ phase: "done", approverLabel: "Master", rounds: 4 })),
+    ).toBe("✓ aprovada pelo Master · 4 rodadas");
+    expect(
+      deriveTileStatusPhrase(facts({ phase: "done", approverLabel: "Master", rounds: 1 })),
+    ).toBe("✓ aprovada pelo Master · 1 rodada");
+    expect(deriveTileStatusPhrase(facts({ phase: "done" }))).toBe("✓ aprovada por você");
+  });
 });
 
 describe("deriveAgoraBanner (DADOS §5)", () => {
@@ -157,6 +173,26 @@ describe("taskNeedsYou / filters (DADOS §6)", () => {
     expect(countQueueFilter(list, "liveAgent")).toBe(1);
     expect(filterByQueueFilter(list, "liveAgent")).toHaveLength(1);
   });
+
+  it("includes review=wanted while still in Pronta (ready)", () => {
+    expect(taskNeedsYou(facts({ phase: "ready", review: "wanted", cards: [] }))).toBe(true);
+    expect(taskNeedsYou(facts({ phase: "ready", review: "wanted", cards: [{ role: "reviewer" }] }))).toBe(false);
+  });
+
+  it("Tudo excludes superseded and archived done (Fila.dc.html Tudo 14)", () => {
+    const now = Date.parse("2026-10-09T18:00:00Z");
+    const list = [
+      facts({ phase: "waiting_deps" }),
+      facts({ phase: "ready" }),
+      facts({ phase: "running", cardAlive: true }),
+      facts({ phase: "awaiting_review" }),
+      facts({ phase: "done", updatedAt: now - 3_600_000 }),
+      facts({ phase: "done", updatedAt: now - 2 * 86_400_000 }),
+      facts({ phase: "failed" }),
+      facts({ phase: "superseded" }),
+    ];
+    expect(countQueueFilter(list, "all", now)).toBe(6);
+  });
 });
 
 describe("tileShowsLiveActivity / isDoneToday / summarizeRecentAction", () => {
@@ -174,5 +210,88 @@ describe("tileShowsLiveActivity / isDoneToday / summarizeRecentAction", () => {
   it("summarizes a tool line from the output tail without inventing", () => {
     expect(summarizeRecentAction(null)).toBeNull();
     expect(summarizeRecentAction("noise\n● Read(useTerminal.ts)\nok")).toBe("Read(useTerminal.ts)");
+  });
+});
+
+describe("decideColumnRails (Fila v3.1)", () => {
+  const fullCounts = Object.fromEntries(QUEUE_COLUMN_ORDER.map((c) => [c, 2])) as Record<QueueColumn, number>;
+
+  it("opens every column with content when the board is wide enough", () => {
+    const rails = decideColumnRails({
+      availableWidth: 1700,
+      counts: fullCounts,
+      userCollapsed: new Set(),
+      userExpanded: new Set(),
+    });
+    expect([...rails]).toEqual([]);
+  });
+
+  it("born-collapses empty columns unless the user expanded them", () => {
+    const counts = { ...fullCounts, running: 0, review: 0 };
+    const born = decideColumnRails({
+      availableWidth: 1700,
+      counts,
+      userCollapsed: new Set(),
+      userExpanded: new Set(),
+    });
+    expect(born.has("running")).toBe(true);
+    expect(born.has("review")).toBe(true);
+    expect(born.has("waiting")).toBe(false);
+
+    const expanded = decideColumnRails({
+      availableWidth: 1700,
+      counts,
+      userCollapsed: new Set(),
+      userExpanded: new Set<QueueColumn>(["running"]),
+    });
+    expect(expanded.has("running")).toBe(false);
+    expect(expanded.has("review")).toBe(true);
+  });
+
+  it("collapses from the right when the card is 1200 / 800 wide", () => {
+    // Exact 1200 fills open columns; Concluida must still become a rail.
+    const atExact1200 = decideColumnRails({
+      availableWidth: 1200,
+      counts: fullCounts,
+      userCollapsed: new Set(),
+      userExpanded: new Set(),
+    });
+    expect(atExact1200.has("done")).toBe(true);
+    expect(atExact1200.has("failed")).toBe(true);
+    expect(atExact1200.has("superseded")).toBe(true);
+
+    const at1200 = decideColumnRails({
+      availableWidth: 1164,
+      counts: fullCounts,
+      userCollapsed: new Set(),
+      userExpanded: new Set(),
+    });
+    expect(at1200.has("superseded")).toBe(true);
+    expect(at1200.has("failed")).toBe(true);
+    expect(at1200.has("done")).toBe(true);
+    expect(at1200.has("waiting")).toBe(false);
+    expect(at1200.has("ready")).toBe(false);
+
+    const at800 = decideColumnRails({
+      availableWidth: 764,
+      counts: fullCounts,
+      userCollapsed: new Set(),
+      userExpanded: new Set(),
+    });
+    expect(at800.has("running")).toBe(true);
+    expect(at800.has("review")).toBe(true);
+    expect(at800.has("waiting")).toBe(false);
+    expect(at800.has("ready")).toBe(false);
+  });
+
+  it("honours user-collapsed even when the board is wide", () => {
+    const rails = decideColumnRails({
+      availableWidth: 1700,
+      counts: fullCounts,
+      userCollapsed: new Set<QueueColumn>(["ready"]),
+      userExpanded: new Set(),
+    });
+    expect(rails.has("ready")).toBe(true);
+    expect(rails.has("waiting")).toBe(false);
   });
 });

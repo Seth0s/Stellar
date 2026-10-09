@@ -83,11 +83,13 @@ const COLUMN_HEADER_KEY = {
 function TaskPulseFooter({ tasks }: { tasks: TaskBoardItem[] }) {
   const pulse = decideTaskFooter(tasks, Date.now());
   return (
-    <span className="card-foot-row" data-role="task-card-pulse">
-      <span data-tone="good">{pulse.working} trabalhando</span>
-      <span>{pulse.review} em revisão</span>
+    <span className="card-foot-row" data-role="task-card-pulse" data-part="queue-footer">
+      <span data-tone="good">{pulse.working} agentes trabalhando</span>
+      <span>{pulse.review} esperando revisão</span>
       <span data-tone="warn">{pulse.needsHuman} precisam de você</span>
-      {pulse.latestAge !== null && <span>atualizado {pulse.latestAge}</span>}
+      {pulse.latestAge !== null && (
+        <span>{pulse.latestAge === "agora" ? "Atualizado agora" : `atualizado ${pulse.latestAge}`}</span>
+      )}
     </span>
   );
 }
@@ -1402,42 +1404,12 @@ function TaskCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
-      headerContext={<>{boardNames[activeBoardId] ?? activeBoardId}{activeSprintLabel ? ` · ${activeSprintLabel}` : ""}</>}
-      headerStatus={<span>{viewingFrozen ? "snapshot da sprint" : "quadro ao vivo"}</span>}
       footerContent={
         <TaskPulseFooter tasks={boardTasks} />
       }
       headerContent={
         <>
           <span className="card-head-actions">
-            <button
-              type="button"
-              data-part="sprints-toggle"
-              data-no-drag
-              className={`${styles.chartsToggleBtn} ${sprintsOpen ? styles.chartsToggleActive : ""}`}
-              aria-pressed={sprintsOpen}
-              title={t("task.sprintsManage")}
-              onClick={() => {
-                setSprintsOpen((v) => !v);
-                setChartsOpen(false);
-              }}
-            >
-              <span>{activeSprintLabel ?? t("task.sprints")}</span>
-            </button>
-            <button
-              type="button"
-              data-part="charts-toggle"
-              className={`${styles.chartsToggleBtn} ${chartsOpen ? styles.chartsToggleActive : ""}`}
-              aria-pressed={chartsOpen}
-              title={t("task.charts")}
-              onClick={() => {
-                setChartsOpen((v) => !v);
-                setSprintsOpen(false);
-              }}
-            >
-              <Icon name="charts" size={12} />
-              <span>{t("task.charts")}</span>
-            </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
             </button>
@@ -1513,8 +1485,15 @@ function TaskCardInner({
           setChartsOpen(true);
           setSprintsOpen(false);
         }}
+        onOpenSprints={() => {
+          setSprintsOpen(true);
+          setChartsOpen(false);
+        }}
         onCreateTask={() => setCreatingTask(true)}
         totalDoneCount={groups.done.length}
+        boardId={activeBoardId}
+        boardLabel={boardNames[activeBoardId] ?? activeBoardId}
+        sprintLabel={activeSprintLabel}
       />
       )}
       {!chartsOpen && !sprintsOpen && creatingTask && !viewingFrozen && (
@@ -1536,6 +1515,7 @@ function TaskCardInner({
           now={now}
           readOnly={viewingFrozen}
           sprintLabel={activeSprintLabel}
+          cardId={cardId}
           onClose={() => setOpenTaskId(null)}
           onOpenTask={(id) => setOpenTaskId(id)}
         />

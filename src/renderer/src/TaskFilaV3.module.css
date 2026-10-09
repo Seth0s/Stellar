@@ -1,20 +1,53 @@
-/* Fila V3 — measures from docs/design/app-v3/prototipo/Fila.dc.html */
+/* Fila V3.1 — measures from docs/design/app-v3/prototipo/Fila-v3.1.dc.html */
 
 .toolbar {
+  --fila-col-min: 200px;
+  --fila-col-min-wide: 220px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--fila-pad-18) 0;
+  gap: 10px 12px; /* sd:allow: Fila-v3.1.dc.html .head gap */
+  padding: var(--fila-pad-14) var(--fila-pad-18);
+  /* Match Fila-v3.1.dc.html .head band (needs-strip top = 76). */
+  min-height: 64px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--fila-bar-track);
   flex: none;
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  min-width: 0;
+}
+
+.filaTitle {
+  margin: 0;
+  font-size: var(--fila-text-17);
+  font-weight: 600;
+  color: var(--card-name);
+  flex: none;
+}
+
+.sprintLink {
+  white-space: nowrap;
+  font: inherit;
+  font-size: var(--fila-text-13);
+  color: var(--fila-link);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+}
+
+.sprintLink:hover {
+  color: var(--fila-link-hover);
+}
+
+.toolbarGrow {
+  flex: 1 1 8px;
   min-width: 0;
 }
 
 .filters {
   display: flex;
-  gap: var(--space-3);
-  margin-left: var(--space-4);
+  gap: 6px; /* sd:allow: Fila-v3.1.dc.html filters gap */
   flex: none;
 }
 
@@ -62,9 +95,9 @@
   border: 1px solid var(--fila-btn-border);
   border-radius: var(--fila-chip-radius);
   width: var(--fila-search-width);
+  max-width: 100%;
   box-sizing: border-box;
-  margin-left: auto;
-  flex: none;
+  flex: 1 1 180px;
 }
 
 .search input {
@@ -168,18 +201,22 @@
 }
 
 .board {
+  --fila-col-min: 200px;
+  --fila-col-min-wide: 220px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   padding: var(--space-6) var(--fila-pad-18) var(--space-7);
   display: flex;
   gap: var(--space-6);
   overflow-x: auto;
   overflow-y: hidden;
   flex-wrap: nowrap;
+  align-items: stretch;
 }
 
 .column {
-  flex: 1 1 0;
+  flex: 1 1 200px;
   min-width: var(--fila-col-min);
   display: flex;
   flex-direction: column;
@@ -460,6 +497,7 @@
 .rail {
   width: var(--fila-rail-width);
   flex: none;
+  align-self: stretch;
   border: 1px solid var(--fila-bar-track);
   border-radius: var(--fila-tile-radius);
   background: var(--fila-rail-bg);
@@ -528,9 +566,11 @@
 }
 
 .empty {
+  border: 1px dashed var(--fila-btn-border);
+  border-radius: var(--fila-tile-radius);
+  padding: var(--space-7);
   color: var(--card-context);
-  font-size: var(--fila-text-12-5);
-  padding: var(--space-4) 0;
+  font-size: var(--fila-text-13);
 }
 
 .markerHollow {
