@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Card Fila v3.1</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
+.mono{font-family:'JetBrains Mono',monospace}
+.chip{height:30px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.chip:hover{color:#e8eaf0;border-color:#3a4258}
+.chipOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.btn{min-height:32px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.btn:hover{border-color:#3a4258}
+.tile{border:1px solid #1f2433;border-radius:12px;background:#11141c;padding:12px;display:flex;flex-direction:column;gap:9px;cursor:pointer}
+.tile:hover{border-color:#343c55;background:#141823}
+.live{width:8px;height:8px;border-radius:50%;background:#7d8cff;flex:none;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #7d8cff88}70%{box-shadow:0 0 0 7px #7d8cff00}100%{box-shadow:0 0 0 0 #7d8cff00}}
+.bar{height:3px;border-radius:2px;background:#1d2230;overflow:hidden}
+.barFill{height:100%;width:40%;background:#7d8cff;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+.rail{width:44px;flex:none;align-self:stretch;border:1px solid #1d2230;border-radius:12px;background:#0c0f15;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;cursor:pointer;color:#a3aabb;font:inherit}
+.rail:hover{border-color:#343c55;color:#e8eaf0}
+.vert{writing-mode:vertical-rl;transform:rotate(180deg);font-size:13px;letter-spacing:.04em}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.sprint{white-space:nowrap;font-size:13px;flex:none}
+.head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px}
+.col{flex:1 1 200px;min-width:200px;display:flex;flex-direction:column;gap:10px}
+@media (prefers-reduced-motion: reduce){.live,.barFill{animation:none}}
+</style>
+</helmet>
+
+<div style="width: 1760px; height: 980px; box-sizing: border-box; background: #05060a; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 12px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <button type="button" class="{{scAbertas}}" onClick="{{goAbertas}}">Todas abertas · 1700</button>
+    <button type="button" class="{{scVazias}}" onClick="{{goVazias}}">Vazias recolhidas</button>
+    <button type="button" class="{{scUsuario}}" onClick="{{goUsuario}}">Pronta recolhida</button>
+    <button type="button" class="{{scMedia}}" onClick="{{goMedia}}">Média · 1200</button>
+    <button type="button" class="{{scEstreita}}" onClick="{{goEstreita}}">Estreita · 800</button>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
+  </div>
+
+  <div data-cena="{{cena}}" style="width: {{cardW}}px; max-width: {{cardW}}px; min-width: 0; flex: 0 0 auto; align-self: center; height: 860px; box-sizing: border-box; background-color: #0b0d12; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230">
+
+    <header class="head" style="padding: 14px 18px; border-bottom: 1px solid #1d2230">
+      <h1 style="margin: 0; font-size: 17px; font-weight: 600; flex: none">Fila</h1>
+      <a href="Sprints.dc.html" class="sprint">Board 64 · Sprint Ciclo 2 ▾</a>
+      <div role="group" aria-label="Filtro" class="filters" style="display: flex; gap: 6px; flex: none">
+        <button type="button" class="{{fTudo}}" onClick="{{goTudo}}">Tudo <span style="color: #8d94a6">14</span></button>
+        <button type="button" class="{{fVoce}}" onClick="{{goVoce}}">Precisa de você <span style="color: #f0b25c">3</span></button>
+        <button type="button" class="{{fVivas}}" onClick="{{goVivas}}">Com agente vivo <span style="color: #8d94a6">2</span></button>
+      </div>
+      <span style="flex: 1 1 8px"></span>
+      <label class="search" style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 1px solid #2a2f3d; border-radius: 8px; width: 220px; max-width: 100%; box-sizing: border-box; flex: 1 1 180px">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="4.5"></circle><path d="M9.5 9.5L13 13"></path></svg>
+        <input aria-label="Buscar task" placeholder="Buscar por título ou #id" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #e8eaf0; font: inherit; font-size: 13px; outline: none">
+      </label>
+      <a href="Graficos.dc.html" class="btn">Gráficos</a>
+      <a href="CriarTask.dc.html" class="btn" style="background: #4a5fe0; border-color: #4a5fe0; font-weight: 600; color: #fff">+ Nova task</a>
+    </header>
+
+    <sc-if value="{{showStrip}}" hint-placeholder-val="{{ true }}">
+      <section aria-label="Precisa de você" style="margin: 12px 18px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+        <div style="border: 1px solid #5a3d17; background: #1f170d; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0b25c"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f0b25c"></span>Pergunta para você · há 2 h</div>
+          <span style="font-size: 13.5px; line-height: 1.4">#0c8694 R1 foi disparada sozinha, mas o celular está em pausa. O que fazer?</span>
+          <div style="display: flex; gap: 6px"><button type="button" class="btn">Manter pausada</button><button type="button" class="btn">Liberar</button></div>
+        </div>
+        <div style="border: 1px solid #5a3d17; background: #1f170d; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0b25c"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f0b25c"></span>Pergunta para você · há 2 h</div>
+          <span style="font-size: 13.5px; line-height: 1.4">#70584525 A5c e mais 3 esperam liberação depois do commit do ciclo.</span>
+          <div style="display: flex; gap: 6px"><button type="button" class="btn">Ver as 4</button></div>
+        </div>
+        <div style="border: 1px solid #27305a; background: #131829; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a9b8ff"><span style="width: 7px; height: 7px; border-radius: 50%; background: #7d8cff"></span>Protótipo para aprovar</div>
+          <span style="font-size: 13.5px; line-height: 1.4">#a550a7ae Detalhe da task no card Fila, mais organizado</span>
+          <div style="display: flex; gap: 6px"><button type="button" class="btn">Abrir</button></div>
+        </div>
+      </section>
+    </sc-if>
+
+    <div style="flex: 1; min-height: 0; min-width: 0; padding: 12px 18px 16px; display: flex; gap: 12px; overflow-x: auto; align-items: stretch">
+
+      <sc-if value="{{openEsp}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Esperando" class="col">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8d94a6"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Esperando</h2><span style="font-size: 12.5px; color: #8d94a6">3</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">deps ou você</span><button type="button" class="btn" onClick="{{toggleEsp}}" aria-label="Recolher Esperando" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#0c8694</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2a1d10; color: #f0b25c">pergunta</span></div>
+            <span style="font-size: 14px; line-height: 1.35">R1 — Relay do celular (WSS), presença e Web Push</span>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #e6cfae"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f0b25c"></span>Espera sua resposta</div>
+          </div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#49cfbe</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #1d2333; color: #c3cbff">implementar</span></div>
+            <span style="font-size: 14px; line-height: 1.35">R2 — Conexão do desktop e pareamento por QR</span>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb">Depois de #0c8694 R1</div>
+          </div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#a49a83</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #1d2333; color: #c3cbff">implementar</span></div>
+            <span style="font-size: 14px; line-height: 1.35">A5d — Criação rápida de task</span>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #e6cfae"><span style="width: 8px; height: 8px; border-radius: 50%; background: #f0b25c"></span>Pausada até você liberar</div>
+          </div>
+        </section>
+      </sc-if>
+      <sc-if value="{{railEsp}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleEsp}}" aria-label="Mostrar Esperando"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8d94a6"></span><span style="font-size: 12px">3</span><span class="vert">Esperando</span></button>
+      </sc-if>
+
+      <sc-if value="{{openPronta}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Pronta" class="col">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #c9cede"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Pronta</h2><span style="font-size: 12.5px; color: #8d94a6">4</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{togglePronta}}" aria-label="Recolher Pronta" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#c5b6ae</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">próxima</span></div>
+            <span style="font-size: 14px; line-height: 1.35">Terminal: scroll e desenho travam depois de sair da sessão e voltar</span>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb">Reservada para IMPL · Claude</div>
+          </div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#3fe745</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span></div>
+            <span style="font-size: 14px; line-height: 1.35">Navegadores: CPU a 99% com 5 abertos</span>
+            <div style="font-size: 12.5px; color: #8d94a6">Sem card · commandcode sem cota</div>
+          </div>
+          <div class="tile">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#91a568</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span></div>
+            <span style="font-size: 14px; line-height: 1.35">Card Fila: "Substituídas" como coluna própria</span>
+            <div style="font-size: 12.5px; color: #8d94a6">Sem card</div>
+          </div>
+        </section>
+      </sc-if>
+      <sc-if value="{{railPronta}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{togglePronta}}" aria-label="Mostrar Pronta"><span style="width: 8px; height: 8px; border-radius: 2px; background: #c9cede"></span><span style="font-size: 12px">4</span><span class="vert">Pronta</span></button>
+      </sc-if>
+
+      <sc-if value="{{openRod}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Rodando" class="col" style="min-width: 220px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #7d8cff"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Rodando</h2><span style="font-size: 12.5px; color: #8d94a6">{{rodCount}}</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleRod}}" aria-label="Recolher Rodando" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <sc-if value="{{showRodTiles}}" hint-placeholder-val="{{ true }}">
+            <div class="tile" style="border-color: #2b3460">
+              <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#511abc</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span class="mono" style="font-size: 11.5px; color: #8d94a6">38 min</span></div>
+              <span style="font-size: 14px; line-height: 1.35">Card que termina o turno sem report recebe o lembrete</span>
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px"><span class="live"></span><span style="flex: 1">IMPL · Claude escrevendo testes</span><span style="font-size: 11.5px; color: #8d94a6">ctx 34%</span></div>
+              <div class="bar" aria-hidden="true"><div class="barFill"></div></div>
+            </div>
+            <div class="tile" style="border-color: #2b3460">
+              <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#ad6787</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">investigar</span><span style="flex: 1"></span><span class="mono" style="font-size: 11.5px; color: #8d94a6">12 min</span></div>
+              <span style="font-size: 14px; line-height: 1.35">Investigação: terminal ao voltar da sessão</span>
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px"><span class="live"></span><span style="flex: 1">EXPLORER · Gemini lendo useTerminal.ts</span></div>
+              <div class="bar" aria-hidden="true"><div class="barFill"></div></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{showRodEmpty}}" hint-placeholder-val="{{ false }}">
+            <div style="border: 1px dashed #2a2f3d; border-radius: 12px; padding: 16px; color: #8d94a6; font-size: 13px">Nenhuma task</div>
+          </sc-if>
+        </section>
+      </sc-if>
+      <sc-if value="{{railRod}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleRod}}" aria-label="Mostrar Rodando"><span style="width: 8px; height: 8px; border-radius: 2px; background: #7d8cff"></span><span style="font-size: 12px">{{rodCount}}</span><span class="vert">Rodando</span></button>
+      </sc-if>
+
+      <sc-if value="{{openRev}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Revisão" class="col" style="min-width: 220px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #f0a43e"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Revisão</h2><span style="font-size: 12.5px; color: #8d94a6">{{revCount}}</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleRev}}" aria-label="Recolher Revisão" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <sc-if value="{{showRevTiles}}" hint-placeholder-val="{{ true }}">
+            <div class="tile" style="border-color: #4a3618">
+              <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#e0b6b8</span><span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #2c1a1a; color: #f2a093">corrigir</span><span style="flex: 1"></span><span style="font-size: 11.5px; color: #8d94a6">rodada 2</span></div>
+              <span style="font-size: 14px; line-height: 1.35">Terminais fora da tela não desenham</span>
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+                <span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #3a1c18; color: #f2a093">check:types ✕ outro card</span>
+                <span style="font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: #14302a; color: #8fdcc0">vitest ✓</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #a3aabb">Esperando o REVISOR</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{showRevEmpty}}" hint-placeholder-val="{{ false }}">
+            <div style="border: 1px dashed #2a2f3d; border-radius: 12px; padding: 16px; color: #8d94a6; font-size: 13px">Nenhuma task</div>
+          </sc-if>
+        </section>
+      </sc-if>
+      <sc-if value="{{railRev}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleRev}}" aria-label="Mostrar Revisão"><span style="width: 8px; height: 8px; border-radius: 2px; background: #f0a43e"></span><span style="font-size: 12px">{{revCount}}</span><span class="vert">Revisão</span></button>
+      </sc-if>
+
+      <sc-if value="{{openConc}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Concluída" class="col">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #3fb68b"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Concluída</h2><span style="font-size: 12.5px; color: #8d94a6">hoje 3</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleConc}}" aria-label="Recolher Concluída" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#d97be5</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">A9 — Gate de plano e upgrade</span></div>
+            <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo revisor · 2 rodadas</span>
+          </div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#ba68dd</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">A5b — Tasks do time</span></div>
+            <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo Master · 4 rodadas</span>
+          </div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px; opacity: .85">
+            <div style="display: flex; align-items: center; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#9012e6</span><span style="flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Território compartilhado</span></div>
+            <span style="font-size: 12px; color: #8fdcc0">✓ aprovada pelo Master · 1 rodada</span>
+          </div>
+          <a href="#" style="font-size: 12.5px">Ver todas as 212</a>
+        </section>
+      </sc-if>
+      <sc-if value="{{railConc}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleConc}}" aria-label="Mostrar Concluída"><span style="width: 8px; height: 8px; border-radius: 2px; background: #3fb68b"></span><span style="font-size: 12px">3</span><span class="vert">Concluída</span></button>
+      </sc-if>
+
+      <sc-if value="{{openFail}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Falhas" class="col">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Falhas</h2><span style="font-size: 12.5px; color: #8d94a6">1</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleFail}}" aria-label="Recolher Falhas" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <div class="tile"><div style="display: flex; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#711281</span></div><span style="font-size: 14px; line-height: 1.35">Cinco smokes que o destravamento expôs</span><span style="font-size: 12px; color: #f2a093">✕ julgada · 23/09</span></div>
+        </section>
+      </sc-if>
+      <sc-if value="{{railFail}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleFail}}" aria-label="Mostrar Falhas"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><span style="font-size: 12px">1</span><span class="vert">Falhas</span></button>
+      </sc-if>
+
+      <sc-if value="{{openSup}}" hint-placeholder-val="{{ true }}">
+        <section aria-label="Substituídas" class="col">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Substituídas</h2><span style="font-size: 12.5px; color: #8d94a6">6</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleSup}}" aria-label="Recolher Substituídas" style="min-height: 26px; padding: 0 8px">‹</button></div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">R4 — Avisos no celular</span><span style="font-size: 12px; color: #a3aabb">→ #878514a8</span></div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">B9b — Integrações II</span><span style="font-size: 12px; color: #a3aabb">→ #ebfc5e30 concluída</span></div>
+          <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">A4 — Time no app</span><span style="font-size: 12px; color: #a3aabb">→ #36f32fed concluída</span></div>
+        </section>
+      </sc-if>
+      <sc-if value="{{railSup}}" hint-placeholder-val="{{ false }}">
+        <button type="button" class="rail" onClick="{{toggleSup}}" aria-label="Mostrar Substituídas"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><span style="font-size: 12px">6</span><span class="vert">Substituídas</span></button>
+      </sc-if>
+    </div>
+
+    <footer style="padding: 10px 18px; border-top: 1px solid #1d2230; display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: #8d94a6">
+      <span style="display: flex; align-items: center; gap: 6px"><span class="live"></span>{{rodCount}} agentes trabalhando</span>
+      <span>{{revCount}} esperando revisão</span>
+      <span style="color: #f0b25c">3 precisam de você</span>
+      <span style="flex: 1"></span>
+      <span>Atualizado agora</span>
+    </footer>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const fromHash = new URLSearchParams((location.hash || "").replace(/^#/, "")).get("cena");
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "abertas";
+    this.state = Object.assign({ f: "tudo", cena }, this.scene(cena));
+  }
+
+  // Empty columns start collapsed. Narrow cards collapse from the right
+  // into the same rail the v3 failure column already used.
+  scene(cena) {
+    const rails = { esp: false, pronta: false, rod: false, rev: false, conc: false, fail: false, sup: false };
+    const empty = { rod: false, rev: false };
+    let w = 1700;
+    if (cena === "vazias") {
+      rails.rod = true;
+      rails.rev = true;
+      empty.rod = true;
+      empty.rev = true;
+    } else if (cena === "usuario") {
+      rails.pronta = true;
+    } else if (cena === "media") {
+      w = 1200;
+      rails.conc = true;
+      rails.fail = true;
+      rails.sup = true;
+    } else if (cena === "estreita") {
+      w = 800;
+      rails.rod = true;
+      rails.rev = true;
+      rails.conc = true;
+      rails.fail = true;
+      rails.sup = true;
+    }
+    return { rails, empty, w };
+  }
+
+  go(cena) {
+    return () => this.setState(Object.assign({ cena }, this.scene(cena)));
+  }
+
+  toggle(key) {
+    return () => {
+      const rails = Object.assign({}, this.state.rails);
+      rails[key] = !rails[key];
+      this.setState({ rails });
+    };
+  }
+
+  renderVals() {
+    const f = this.state.f;
+    const rails = this.state.rails;
+    const empty = this.state.empty;
+    const c = (k) => (f === k ? "chip chipOn" : "chip");
+    const sc = (k) => (this.state.cena === k ? "scene sceneOn" : "scene");
+    const labels = {
+      abertas: "Larga · 1700 — toda coluna aberta",
+      vazias: "Rodando 0 e Revisão 0 nascem em faixa",
+      usuario: "Pronta tem tasks e foi recolhida",
+      media: "1200 — Concluída, Falhas e Substituídas viram faixa",
+      estreita: "800 — só Esperando e Pronta cabem abertas",
+    };
+    return {
+      cena: this.state.cena,
+      cenaLabel: labels[this.state.cena] || "",
+      cardW: String(this.state.w),
+      fTudo: c("tudo"), fVoce: c("voce"), fVivas: c("vivas"),
+      goTudo: () => this.setState({ f: "tudo" }),
+      goVoce: () => this.setState({ f: "voce" }),
+      goVivas: () => this.setState({ f: "vivas" }),
+      showStrip: f !== "vivas",
+      scAbertas: sc("abertas"), scVazias: sc("vazias"), scUsuario: sc("usuario"),
+      scMedia: sc("media"), scEstreita: sc("estreita"),
+      goAbertas: this.go("abertas"), goVazias: this.go("vazias"), goUsuario: this.go("usuario"),
+      goMedia: this.go("media"), goEstreita: this.go("estreita"),
+      openEsp: !rails.esp, railEsp: rails.esp, toggleEsp: this.toggle("esp"),
+      openPronta: !rails.pronta, railPronta: rails.pronta, togglePronta: this.toggle("pronta"),
+      openRod: !rails.rod, railRod: rails.rod, toggleRod: this.toggle("rod"),
+      openRev: !rails.rev, railRev: rails.rev, toggleRev: this.toggle("rev"),
+      openConc: !rails.conc, railConc: rails.conc, toggleConc: this.toggle("conc"),
+      openFail: !rails.fail, railFail: rails.fail, toggleFail: this.toggle("fail"),
+      openSup: !rails.sup, railSup: rails.sup, toggleSup: this.toggle("sup"),
+      rodCount: empty.rod ? "0" : "2",
+      revCount: empty.rev ? "0" : "1",
+      showRodTiles: !empty.rod,
+      showRodEmpty: empty.rod,
+      showRevTiles: !empty.rev,
+      showRevEmpty: empty.rev,
+    };
+  }
+}
+</script>
+</body>
+</html>
