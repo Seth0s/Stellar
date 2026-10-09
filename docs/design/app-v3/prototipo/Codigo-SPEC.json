@@ -1,0 +1,65 @@
+{
+  "id": "codigo-v6",
+  "title": "Código V6 — card IDE",
+  "specMd": "Codigo-SPEC.md",
+  "proto": "Codigo.dc.html",
+  "impl": "codigo-v6",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "codigo-v6",
+  "tolerances": { "lengthPx": 1, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border",
+    "border-radius",
+    "width",
+    "height"
+  ],
+  "root": {
+    "proto": "section[aria-label='Card de código']",
+    "impl": ".files-card"
+  },
+  "pairs": [
+    {
+      "id": "code-shell",
+      "proto": "section[aria-label='Card de código']",
+      "impl": ".files-card"
+    },
+    {
+      "id": "code-head",
+      "proto": "section[aria-label='Card de código'] > header",
+      "impl": ".files-card .card-head"
+    },
+    {
+      "id": "activity-rail",
+      "proto": "nav[aria-label='Painéis']",
+      "impl": ".files-card nav[aria-label='Painéis']"
+    },
+    {
+      "id": "side-panel",
+      "proto": "aside[aria-label='Arquivos']",
+      "impl": ".files-card aside[aria-label='Arquivos']"
+    },
+    {
+      "id": "side-title",
+      "proto": "aside[aria-label='Arquivos'] > div:first-child",
+      "impl": ".files-card aside[aria-label='Arquivos'] > div:first-child"
+    },
+    {
+      "id": "editor-tabs",
+      "proto": "main [role='tablist']",
+      "impl": ".files-card [role='tablist']"
+    },
+    {
+      "id": "status-bar",
+      "proto": "section[aria-label='Card de código'] > footer",
+      "impl": ".files-card .card-foot"
+    }
+  ],
+  "approvedDiffs": []
+}

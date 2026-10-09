@@ -1,0 +1,70 @@
+{
+  "id": "cards-v2",
+  "title": "Cards V2 — chrome compartilhado",
+  "specMd": "Cards-V2-SPEC.md",
+  "proto": "Cards.dc.html",
+  "impl": "cards-v2",
+  "viewport": { "width": 1440, "height": 900 },
+  "fixture": "cards-v2",
+  "tolerances": { "lengthPx": 1, "colorDeltaE": 2.5 },
+  "props": [
+    "font-size",
+    "font-weight",
+    "line-height",
+    "padding",
+    "gap",
+    "color",
+    "background-color",
+    "border",
+    "border-radius",
+    "width",
+    "height"
+  ],
+  "root": {
+    "proto": "section[aria-label='Card de terminal']",
+    "impl": "[data-card-id='v2-terminal']"
+  },
+  "pairs": [
+    {
+      "id": "terminal-shell",
+      "proto": "section[aria-label='Card de terminal']",
+      "impl": "[data-card-id='v2-terminal']"
+    },
+    {
+      "id": "terminal-head",
+      "proto": "section[aria-label='Card de terminal'] > header.hd",
+      "impl": "[data-card-id='v2-terminal'] .card-head"
+    },
+    {
+      "id": "terminal-name",
+      "proto": "section[aria-label='Card de terminal'] .nm",
+      "impl": "[data-card-id='v2-terminal'] .card-head-name"
+    },
+    {
+      "id": "terminal-foot",
+      "proto": "section[aria-label='Card de terminal'] > footer.ft",
+      "impl": "[data-card-id='v2-terminal'] .card-foot"
+    },
+    {
+      "id": "browser-shell",
+      "proto": "section[aria-label='Card de navegador']",
+      "impl": "[data-card-id='v2-browser']"
+    },
+    {
+      "id": "files-shell",
+      "proto": "section[aria-label='Card de arquivos']",
+      "impl": "[data-card-id='v2-files']"
+    },
+    {
+      "id": "changes-shell",
+      "proto": "section[aria-label='Card de mudanças']",
+      "impl": "[data-card-id='v2-changes']"
+    },
+    {
+      "id": "note-shell",
+      "proto": "section[aria-label='Nota']",
+      "impl": "[data-card-id='v2-sticky']"
+    }
+  ],
+  "approvedDiffs": []
+}

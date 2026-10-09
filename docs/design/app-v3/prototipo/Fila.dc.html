@@ -157,17 +157,17 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
       <a href="#" style="font-size: 12.5px">Ver todas as 212</a>
     </section>
 
-    <sc-if value="{{openFail}}" hint-placeholder-val="{{ false }}">
+    <sc-if value="{{openFail}}" hint-placeholder-val="{{ true }}">
       <section aria-label="Falhas" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
         <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Falhas</h2><span style="font-size: 12.5px; color: #8d94a6">1</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleFail}}" aria-label="Recolher falhas" style="min-height: 26px; padding: 0 8px">‹</button></div>
         <div class="tile"><div style="display: flex; gap: 8px"><span class="mono" style="font-size: 12px; color: #8d94a6">#711281</span></div><span style="font-size: 14px; line-height: 1.35">Cinco smokes que o destravamento expôs</span><span style="font-size: 12px; color: #f2a093">✕ julgada · 23/09</span></div>
       </section>
     </sc-if>
-    <sc-if value="{{closedFail}}" hint-placeholder-val="{{ true }}">
+    <sc-if value="{{closedFail}}" hint-placeholder-val="{{ false }}">
       <button type="button" class="rail" onClick="{{toggleFail}}" aria-label="Mostrar falhas"><span style="width: 8px; height: 8px; border-radius: 2px; background: #e5534b"></span><span style="font-size: 12px">1</span><span class="vert">Falhas</span></button>
     </sc-if>
 
-    <sc-if value="{{openSup}}" hint-placeholder-val="{{ false }}">
+    <sc-if value="{{openSup}}" hint-placeholder-val="{{ true }}">
       <section aria-label="Substituídas" style="flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 10px">
         <div style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><h2 style="margin: 0; font-size: 13.5px; font-weight: 600">Substituídas</h2><span style="font-size: 12.5px; color: #8d94a6">6</span><span style="flex: 1"></span><button type="button" class="btn" onClick="{{toggleSup}}" aria-label="Recolher substituídas" style="min-height: 26px; padding: 0 8px">‹</button></div>
         <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">R4 — Avisos no celular</span><span style="font-size: 12px; color: #a3aabb">→ <a href="#">#878514a8</a></span></div>
@@ -175,7 +175,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
         <div class="tile" style="padding: 10px 12px; gap: 6px"><span style="font-size: 13.5px">A4 — Time no app</span><span style="font-size: 12px; color: #a3aabb">→ <a href="#">#36f32fed</a> concluída</span></div>
       </section>
     </sc-if>
-    <sc-if value="{{closedSup}}" hint-placeholder-val="{{ true }}">
+    <sc-if value="{{closedSup}}" hint-placeholder-val="{{ false }}">
       <button type="button" class="rail" onClick="{{toggleSup}}" aria-label="Mostrar substituídas"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid #8d94a6; box-sizing: border-box"></span><span style="font-size: 12px">6</span><span class="vert">Substituídas</span></button>
     </sc-if>
   </div>
@@ -191,7 +191,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
 class Component extends DCLogic {
-  constructor(props) { super(props); this.state = { f: 'tudo', sup: false, fail: false }; }
+  constructor(props) { super(props); this.state = { f: 'tudo', sup: true, fail: true }; }
   renderVals() {
     const f = this.state.f;
     const c = (k) => (f === k ? 'chip chipOn' : 'chip');

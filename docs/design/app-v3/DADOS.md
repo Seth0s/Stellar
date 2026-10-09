@@ -48,8 +48,8 @@ report", nunca para Rodando.
 Ordem de avaliação; vale a primeira que casar:
 
 1. `blockedQuestion` → "Espera sua resposta".
-2. `requestedStatus` → "Pede para mover para <status>". Não é "pausada": o agente
-   está pedindo uma decisão.
+2. `requestedStatus` → "Pausada até você liberar" (texto do protótipo aprovado;
+   a faixa "Agora" e "Precisa de você" ainda descrevem o pedido de status).
 3. `waiting_deps` → "Depois de #<dep> <título curto>".
 4. `reserved` → "Reservada para <card>".
 5. `ready` → "Sem card", e "· <provider> sem cota" quando a cota do provider da task

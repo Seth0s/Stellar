@@ -81,7 +81,21 @@ const FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
 </script>
 </body></html>`;
 
-const server = createServer((_req, res) => {
+// CSP page: script-src 'self' with no unsafe-eval — the regression that
+// in-page new Function hit on GitHub-like CSP. No inline <script> either
+// (that would also be blocked); browser_eval is injected by Electron.
+const CSP_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head>
+<body><div id="alvo">csp</div></body></html>`;
+
+const server = createServer((req, res) => {
+  if (req.url === "/csp" || req.url?.startsWith("/csp?")) {
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "script-src 'self'",
+    });
+    res.end(CSP_FIXTURE);
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(FIXTURE);
 });
@@ -172,6 +186,35 @@ try {
   check("um eval lento (1,5s) com limite maior passa", lento.ok, true);
   const rapido = await evalOn("sleep(1500)", { timeoutMs: 500 });
   check("...e o MESMO eval com limite curto é recusado (o limite é respeitado)", rapido.ok, false);
+
+  // --- 4. async function body: top-level return + await ---------------------
+  const comReturn = await evalOn("return 'from-return'");
+  check("top-level return yields the value (async function body)", parseEval(comReturn.result), "from-return");
+  const comAwait = await evalOn("await sleep(200); return 'after-await'");
+  check("top-level await settles in one call (portal-style wait)", parseEval(comAwait.result), "after-await");
+
+  // --- 5. real exception: message + stack + line, not Electron's opaque string
+  const explodiu = await evalOn("throw new Error('stellar-eval-boom')");
+  check("throw is refused (ok:false)", explodiu.ok, false);
+  check("...with the exception message", /stellar-eval-boom/.test(explodiu.error ?? ""), true);
+  check("...with stack", /Error: stellar-eval-boom/.test(explodiu.error ?? ""), true);
+  check("...with script line", /script line \d+/i.test(explodiu.error ?? ""), true);
+  check("...without Electron's opaque string", /Script failed to execute/i.test(explodiu.error ?? ""), false);
+
+  // --- 6. default 30s: a 12s eval WITHOUT timeoutMs passes (failed at 10s) --
+  const defaultLento = await evalOn("sleep(12000)");
+  check("default timeoutMs=30s: sleep(12s) with no param passes", defaultLento.ok, true);
+  check("...and returns a value (nothing discarded)", defaultLento.ok && defaultLento.result !== undefined, true);
+
+  // --- 7. CSP without unsafe-eval: form chosen in MAIN, literal inject -----
+  await page.evalJs(`window.browser.navigate(${JSON.stringify(cardId)}, ${JSON.stringify(`http://127.0.0.1:${port}/csp`)})`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const cspReturn = await evalOn("return 1+1");
+  check("CSP script-src 'self': return 1+1 works (no in-page new Function)", cspReturn.ok, true);
+  check("...and yields 2", parseEval(cspReturn.result), 2);
+  const cspAwait = await evalOn("await Promise.resolve(2)");
+  check("CSP script-src 'self': await Promise.resolve(2) works", cspAwait.ok, true);
+  check("...and yields 2", parseEval(cspAwait.result), 2);
 
   finish();
 } catch (err) {

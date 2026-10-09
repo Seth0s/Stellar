@@ -31,7 +31,7 @@ const MCP_BASE = `http://127.0.0.1:${MCP_PORT}/mcp`;
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-idle-without-report-${CDP_PORT}`, import.meta.url).pathname;
 const IDLE_POINTER_NEEDLE = "idle sem chamar report";
 const NO_AGENT_POINTER_NEEDLE = "sem agente lendo";
-const REPORT_POINTER_NEEDLE = "relatório disponível — chame read_report";
+const REPORT_POINTER_NEEDLE = "report available";
 
 let mcpUrl = MCP_BASE;
 let nextRpcId = 1;
