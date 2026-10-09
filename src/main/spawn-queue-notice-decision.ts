@@ -1,3 +1,5 @@
+import { APP_NOTICE } from "./agent-facing-notices";
+
 /**
  * O aviso que fecha o CARD FANTASMA da fila autônoma (task bf1fb0a7).
  *
@@ -51,12 +53,5 @@ export function describeQueuedSpawnArrival(input: {
   label?: string | null;
 }): string {
   const seconds = Math.round(input.waitedMs / 1000);
-  const named = input.label ? ` labelled ${JSON.stringify(input.label)}` : "";
-  return (
-    `your queued spawn_agent is UP: card ${input.cardId} (${input.provider})${named} — ` +
-    `this call waited ${seconds}s in the autonomous board's queue, past the point where your own client's ` +
-    `watchdog is likely to have aborted it. If you already gave up on that call, THIS is your card: ` +
-    `do not spawn another one for the same work, and if you already did, close the duplicate — two agents ` +
-    `on one tree is how silent overwrites get manufactured.`
-  );
+  return APP_NOTICE.queuedSpawn({ cardId: input.cardId, provider: input.provider, waitedSec: seconds });
 }

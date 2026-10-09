@@ -35,6 +35,9 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
   const base = {
     alive: true,
     waitingOnConsent: false,
+    reportedSinceWorkGranted: false,
+    answeredDirectorSinceWorkGranted: false,
+    hasAgentReader: true,
     hasLinkedRunningTask: true,
     alreadyNotified: false,
     msSinceLastActivity: IDLE_WITHOUT_REPORT_MS,

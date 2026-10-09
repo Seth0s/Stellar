@@ -79,7 +79,7 @@ describe("painel de cards arquivados (d3c005dc)", () => {
 
     await waitFor(() => expect(document.querySelectorAll('[data-role="archived-row"]').length).toBe(2));
     expect(listArchivedCards).toHaveBeenCalledWith("b1");
-    const rows = [...document.querySelectorAll('[data-role="archived-row"]')].map((r) => r.textContent ?? "");
+    const rows = Array.from(document.querySelectorAll('[data-role="archived-row"]')).map((r) => r.textContent ?? "");
     // O card COM rótulo mostra o rótulo; o SEM rótulo mostra o ID — nunca um
     // nome inventado (mesma ausência honesta do chip da Fila).
     expect(rows[0]).toContain("Sessão antiga");
@@ -93,7 +93,7 @@ describe("painel de cards arquivados (d3c005dc)", () => {
     render(<ArchivedCardsPanel boardId="b1" onClose={() => {}} />);
     await waitFor(() => expect(document.querySelectorAll('[data-role="archived-row"]').length).toBe(2));
 
-    const rows = [...document.querySelectorAll('[data-role="archived-row"]')];
+    const rows = Array.from(document.querySelectorAll('[data-role="archived-row"]'));
     const comSessao = rows[0]!.textContent ?? "";
     const semSessao = rows[1]!.textContent ?? "";
 

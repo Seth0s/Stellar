@@ -114,6 +114,7 @@ beforeEach(() => {
 function card() {
   return render(
     <ChangesCard
+      cardId="changes-test"
       rect={{ x: 0, y: 0, w: 600, h: 400 }}
       zoom={1}
       zIndex={1}

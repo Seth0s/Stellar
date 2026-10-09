@@ -76,11 +76,13 @@ export type BashDiscoveryDecision = {
  */
 export const AGENT_SCROLLBACK_DISCOVERY_TIP =
   "[stellar] This provider has no system-prompt injection. When you " +
-  "finish a task another card spawned you for, report a structured " +
-  "result: if a tool named `report` is in your tool catalog (MCP server " +
-  "`stellar`), call it; otherwise run `acbridge report '<json>'` (on " +
-  "PATH) with `verdict` inside the JSON. Same payload, same record " +
-  "either way.";
+  "work a task another card spawned you for, report structured results " +
+  "as checkpoints and when you finish: if a tool named `report` is in " +
+  "your tool catalog (MCP server `stellar`), call it; otherwise run " +
+  "`acbridge report '<json>'` (on PATH). Put estado: \"parcial\" | " +
+  "\"final\" in the JSON (omit = parcial); only you mark final. Declare " +
+  "decisaoTomada as soon as you decide. A formal `verdict` goes inside " +
+  "the JSON for acbridge. Same payload, same record either way.";
 
 /** Human-facing tip for bash cards (nested hand-launched agents). English
  * for the same reason as ACBRIDGE_HINT; agents may read the scrollback.

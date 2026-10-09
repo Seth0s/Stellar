@@ -1,5 +1,7 @@
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
+import type { ProcessIdentity } from "./process-identity";
+import { peerPidFromSocket } from "./peer-credentials";
 
 /**
  * BRIDGE MCP COMPARTILHADO — o processo pesado por card vira UM por app.
@@ -14,17 +16,11 @@ import { join } from "node:path";
  * Este módulo é o LADO DO APP desse desenho: um único Unix socket por app.
  * O stub por card (minúsculo, ver `resources/bin/stellar-mcp`) só precisa
  * PIPAR stdio↔socket; quem fala HTTP com o servidor MCP desta app é o main,
- * pela MESMA rota que o shim antigo usava (`POST /mcp?card=<id>`) — nenhuma
- * segunda implementação de MCP, nenhum transporte novo, nenhuma fonte de
- * verdade nova. A identidade continua sendo o `?card=`; ela deixa de vir do
- * shim (que a carimbava) e passa a viajar como a PRIMEIRA linha do socket,
- * escrita pelo stub a partir do mesmo `AGENT_CANVAS_CARD_ID`.
+ * pela rota `POST /mcp`. A identidade vem do PID peer atestado pelo kernel
+ * no socket Unix, seguido até a raiz de processo da PTY registrada no spawn.
  *
- * Por que um handshake e não um socket por card: um socket por card exigiria
- * o main abrir um listener por card no spawn (mais fiação em pty-registry);
- * o handshake mantém UM socket e reaproveita o id que o stub já tem no
- * ambiente. Custo: duas linhas de protocolo, parseadas por `RelaySession`
- * (abaixo, pura e testada).
+ * The relay keeps a single listener. It does not accept identity from the
+ * client stream; an unavailable peer credential makes the request anonymous.
  *
  * Opt-in de propósito: `mcp-server.ts` só sobe o socket quando
  * `AGENT_CANVAS_MCP_RELAY=1` no ambiente do APP. O stub detecta o socket pela
@@ -71,23 +67,6 @@ export function relaySocketPath(tmpDir: string, mcpUrl: string): string | null {
   return join(tmpDir, `stellar-mcp-relay-${url.port}.sock`);
 }
 
-/** A primeira linha de uma conexão do bridge: `{"card":"<id>"}`. Devolve o
- * id, ou `null` quando ausente/malformado — e aí a conexão é descartada
- * (nunca roteada sem identidade). */
-export function parseRelayHandshake(line: string): string | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const card = (value as { card?: unknown }).card;
-  if (typeof card !== "string") return null;
-  const trimmed = card.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 /**
  * A parte HTTP de `forward` do shim antigo, movida para o main: a resposta do
  * servidor pode ser JSON puro ou um frame SSE (o `accept` negocia os dois — o
@@ -110,20 +89,18 @@ export function extractJsonLine(text: string): string | null {
   }
 }
 
-export type RelayMessage = { cardId: string; line: string };
+export type RelayMessage = { line: string };
 export type RelayPushResult = { messages: RelayMessage[]; error?: string };
 
 /**
- * Máquina de estados de UMA conexão do bridge: separa NDJSON, consome a
- * PRIMEIRA linha como handshake e carimba o id em tudo que vem depois.
+ * Splits one relay connection into bounded NDJSON lines without accepting
+ * caller-declared identity from its stream.
  * Pura (sem socket, sem fetch) por dois motivos: é testável sozinha, e é a
  * única peça de framing — o shim antigo e este lado não podem divergir nela
  * porque só existe aqui.
  */
 export class RelaySession {
   private buffer = "";
-  private cardId: string | null = null;
-  private handshaken = false;
   private readonly maxLine: number;
 
   constructor(maxLine = 8 * 1024 * 1024) {
@@ -144,34 +121,26 @@ export class RelaySession {
       const line = this.buffer.slice(0, newline).trim();
       this.buffer = this.buffer.slice(newline + 1);
       if (!line) continue;
-      if (!this.handshaken) {
-        this.handshaken = true;
-        const card = parseRelayHandshake(line);
-        if (!card) return { messages: [], error: "relay handshake missing card id" };
-        this.cardId = card;
-        continue;
-      }
-      if (this.cardId) messages.push({ cardId: this.cardId, line });
+      messages.push({ line });
     }
     return { messages };
   }
 
-  get handshakeComplete(): boolean {
-    return this.handshaken;
-  }
 }
 
-export type RelayForwarder = (cardId: string, line: string) => Promise<string | null>;
+export type RelayForwarder = (identity: ProcessIdentity | null, line: string) => Promise<string | null>;
 
-/** `forward` de produção: um POST loopback para a MESMA rota HTTP desta app,
- * carimbando o card do handshake. Reusa o caminho já testado (o HTTP do
- * mcp-server), em vez de reimplementar o protocolo MCP num transporte novo. */
-export function httpRelayForwarder(getMcpUrl: () => string): RelayForwarder {
-  return async (cardId, line) => {
-    const url = `${getMcpUrl()}${getMcpUrl().includes("?") ? "&" : "?"}card=${encodeURIComponent(cardId)}`;
-    const res = await fetch(url, {
+/** Forwards over loopback using an app-only token and kernel-derived identity. */
+export function httpRelayForwarder(getMcpUrl: () => string, getInternalToken: () => string): RelayForwarder {
+  return async (identity, line) => {
+    const res = await fetch(getMcpUrl(), {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${getInternalToken()}`,
+        ...(identity ? { "x-stellar-caller-card": identity.cardId } : {}),
+      },
       body: line,
     });
     return extractJsonLine(await res.text());
@@ -181,6 +150,10 @@ export function httpRelayForwarder(getMcpUrl: () => string): RelayForwarder {
 export type RelayServerOptions = {
   socketPath: string;
   getMcpUrl: () => string;
+  getInternalToken: () => string;
+  resolvePeerIdentity?: (peerPid: number) => ProcessIdentity | null;
+  /** Test seam — production always uses kernel peer credentials. */
+  getPeerPid?: (socket: Socket) => number | null;
   forward?: RelayForwarder;
   onError?: (error: unknown) => void;
 };
@@ -189,8 +162,15 @@ export type RelayServerOptions = {
  * decisão do shim: uma chamada que bloqueia não pode reordenar as
  * respostas em relação aos pedidos). */
 export function createRelayServer(opts: RelayServerOptions): { close: () => void } {
-  const forward = opts.forward ?? httpRelayForwarder(opts.getMcpUrl);
-  const server: Server = createServer((socket) => {
+  const forward = opts.forward ?? httpRelayForwarder(opts.getMcpUrl, opts.getInternalToken);
+  const server: Server = createServer((socket: Socket) => {
+    // Resolve peer identity per message, not once at accept: `_handle.fd`
+    // or a still-null startTime at the first tick must not freeze the
+    // whole connection as anonymous (legitimate card refused forever).
+    const resolveIdentity = (): ProcessIdentity | null => {
+      const peerPid = opts.getPeerPid ? opts.getPeerPid(socket) : peerPidFromSocket(socket);
+      return peerPid && opts.resolvePeerIdentity ? opts.resolvePeerIdentity(peerPid) : null;
+    };
     const session = new RelaySession();
     let queue: Promise<void> = Promise.resolve();
     socket.on("data", (chunk) => {
@@ -203,7 +183,7 @@ export function createRelayServer(opts: RelayServerOptions): { close: () => void
       for (const message of result.messages) {
         queue = queue
           .then(async () => {
-            const body = await forward(message.cardId, message.line);
+            const body = await forward(resolveIdentity(), message.line);
             if (body !== null && socket.writable) socket.write(`${body}\n`);
           })
           .catch((error) => opts.onError?.(error));

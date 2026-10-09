@@ -8,6 +8,8 @@ import type { SessionTemplate } from "./useBoardStore";
 import { groupByProject, type Board, type BoardCounts as Counts } from "./sessions";
 import { t } from "../../shared/i18n";
 import { GlobalComposer } from "./GlobalComposer";
+import { BoardMountProgress } from "./BoardMountProgress";
+import type { BoardMountProgress as BoardMountProgressState } from "./useBoardMountQueue";
 // O papel de um vínculo task↔card fala a MESMA língua do chip da Fila
 // (`describeCardRole`, TaskCard.tsx) — exportado de lá em vez de reescrito
 // aqui: uma segunda tabela de papel é justamente o defeito que esta sessão
@@ -42,6 +44,7 @@ export function Topbar({
   onDeleteBoard,
   onSuggestInstall,
   orchestratorCardPresent = true,
+  boardMountProgress,
 }: {
   boards: Board[];
   activeBoardId: string;
@@ -85,6 +88,8 @@ export function Topbar({
    * cleanup would hide the inconsistency the human needs to see.
    */
   orchestratorCardPresent?: boolean;
+  /** Real card-mount progress while a board is opening (docs/PERF.md §17). */
+  boardMountProgress?: BoardMountProgressState | null;
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
@@ -213,6 +218,8 @@ export function Topbar({
           sempre (cards de terminal com provider != bash — o que o SQL conta);
           o que saiu foi o "· N ativos", que era o MESMO número com uma palavra
           afirmando atividade que nada mediu. */}
+        {(activeCounts || boardMountProgress) && (
+        <div className="topbar-leading">
         {activeCounts && (
           <button
             ref={agentsListBtnRef}
@@ -227,6 +234,9 @@ export function Topbar({
               ? t("home.agentsCount", { agents: activeCounts.agents })
               : t("home.agentsZero")}
           </button>
+        )}
+        {boardMountProgress ? <BoardMountProgress progress={boardMountProgress} /> : null}
+        </div>
         )}
         {/* O dropdown: NOME e PAPÉIS, porque papel não é atributo do card — é
           POR TASK. Medido no board do dono: 6 dos 11 cards eram implementer

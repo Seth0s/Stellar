@@ -85,6 +85,7 @@ function taskWith(result_json: string | null): TaskRow {
     card_id: null,
     board_id: "64",
     cwd: null,
+    spawn_profile: null,
     result_json,
     deps_json: null,
     retry_count: 0,

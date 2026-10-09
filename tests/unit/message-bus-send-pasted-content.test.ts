@@ -51,7 +51,6 @@ function harness(target: { id: string; provider: string }, opts: { spawnedBy?: s
     // Regra geral de auto-conector: `send` é um dos cmds que grava a aresta.
     onAutoConnect: () => undefined,
     listAllConnectors: () => [],
-    findSpawnByChild: () => undefined,
     listSpawnsByParent: () => [],
     getCardBoardId: () => "b1",
     isBoardAutonomous: () => false,

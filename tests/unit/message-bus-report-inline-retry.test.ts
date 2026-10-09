@@ -47,6 +47,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: "worker-1",
     board_id: "b1",
     cwd: "/tmp/repo",
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,

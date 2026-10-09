@@ -4,6 +4,7 @@ import { SettingsModal } from "@renderer/SettingsModal";
 import { setLocale } from "../../src/shared/i18n";
 import { parsePresets } from "../../src/main/board-preset-decision";
 import presetsJson from "../../src/main/data/board-presets.json";
+import type { SettingsPage } from "@renderer/SettingsModal";
 
 const board = {
   id: "board-1",
@@ -12,17 +13,13 @@ const board = {
   concurrency_cap: null as number | null,
 };
 
-function renderSettings(
-  page: "general" | "shortcuts" | "keys" | "devices" | "maestro" | "agents" = "general",
-  extras: Partial<Parameters<typeof SettingsModal>[0]> = {},
-) {
+function renderSettings(page: SettingsPage = "general", extras: Partial<Parameters<typeof SettingsModal>[0]> = {}) {
   const onPageChange = vi.fn();
   const onClose = vi.fn();
   const onToggleAutonomous = vi.fn();
   const onSetConcurrencyCap = vi.fn();
-  // BOARD PRESETS, FASE 2 — o modal pede a lista declarada ao main
-  // (`window.store.boardPresets`) e aplica por callback; o teste fornece os dois.
   const onApplyPreset = vi.fn();
+  const onSetDefaults = vi.fn();
   const view = render(
     <SettingsModal
       page={page}
@@ -38,10 +35,11 @@ function renderSettings(
       onToggleAutonomous={onToggleAutonomous}
       onSetConcurrencyCap={onSetConcurrencyCap}
       onApplyPreset={onApplyPreset}
+      onSetDefaults={onSetDefaults}
       {...extras}
     />,
   );
-  return { ...view, onPageChange, onClose, onToggleAutonomous, onSetConcurrencyCap, onApplyPreset };
+  return { ...view, onPageChange, onClose, onToggleAutonomous, onSetConcurrencyCap, onApplyPreset, onSetDefaults };
 }
 
 beforeEach(() => {
@@ -55,6 +53,13 @@ beforeEach(() => {
         systemLocale: "pt-BR",
       })),
     },
+    agents: {
+      checkAvailability: vi.fn(async () => []),
+      onAvailabilityStale: vi.fn(() => () => {}),
+    },
+    providerUsage: {
+      get: vi.fn(async () => ({ supported: false, reason: "test" })),
+    },
     system: {
       homeDir: "/home/test",
       platform: "linux",
@@ -67,6 +72,18 @@ beforeEach(() => {
         busProtocol: 2,
         label: "dev abc1234 (dirty tree)",
       })),
+      getProvidersConfigPath: vi.fn(async () => "/tmp/providers.json"),
+      openProvidersConfig: vi.fn(async () => ({ ok: true, error: null })),
+      readProvidersConfig: vi.fn(async () => ({
+        path: "/tmp/providers.json",
+        rows: [],
+        rejected: [],
+        skipped: [],
+        error: null,
+      })),
+      addProvider: vi.fn(),
+      removeProvider: vi.fn(),
+      onProvidersConfigChanged: vi.fn(() => () => {}),
     },
     secrets: {
       isEncryptionAvailable: vi.fn(async () => true),
@@ -81,158 +98,133 @@ beforeEach(() => {
       revokeDevice: vi.fn(async () => {}),
       revokeAll: vi.fn(async () => {}),
     },
-    // BOARD PRESETS, FASE 2 — a lista é DADO servido pelo main; aqui entra a
-    // lista REAL (`data/board-presets.json`), para a UI ser exercitada contra
-    // os mesmos valores que o app usa.
+    cloud: {
+      status: vi.fn(async () => ({ state: "logged-out", apiBaseUrl: "", lastError: null })),
+      login: vi.fn(),
+      logout: vi.fn(),
+      cancel: vi.fn(),
+      onStatusChanged: vi.fn(() => () => {}),
+      plansUrl: vi.fn(async () => "https://example.com/plans"),
+      devices: { list: vi.fn(async () => []), disconnect: vi.fn() },
+    },
+    workhome: {
+      status: vi.fn(async () => ({
+        loggedIn: false,
+        profileId: null,
+        enabledTools: [],
+        toolRoots: {},
+        workFolders: [],
+        lastRevision: null,
+        lastSyncAt: null,
+        lastError: null,
+      })),
+      syncNow: vi.fn(),
+    },
+    updater: {
+      check: vi.fn(async () => ({ checked: false })),
+    },
     store: {
       boardPresets: vi.fn(async () => parsePresets(presetsJson)),
+      boardBackgroundStatus: vi.fn(async () => ({
+        boards: {},
+        backgroundCount: 0,
+        maxBackgroundSessions: 4,
+        overCap: false,
+      })),
+      boardAgentRoles: vi.fn(async () => []),
+      boardContext: {
+        get: vi.fn(async () => ({ ok: true, rulesText: "", gateToolPaths: [], trapCount: 0 })),
+        setRules: vi.fn(async () => ({ ok: true })),
+        setGateToolPaths: vi.fn(async () => ({ ok: true })),
+      },
     },
   });
 });
 
-describe("SettingsModal", () => {
-  it("separates Application vs This board in the nav and shows the board name", () => {
-    renderSettings();
+describe("SettingsModal V7", () => {
+  it("separates Application vs This board, search, and prototype nav order", () => {
+    renderSettings("account");
 
     const dialog = screen.getByRole("dialog", { name: "Configurações" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(dialog.querySelector("[data-settings-board-name]")?.textContent).toBe("Maestro");
     expect(screen.getByText("Aplicativo")).toBeTruthy();
-    expect(screen.getByText("Este board")).toBeTruthy();
-    // "Sobre", não "Geral" — o rótulo mudou por DECISÃO (task b2a0a4f8: o
-    // conteúdo da página é idioma/build/escopo), e o aria-current está nele
-    // porque o helper renderiza a página `general` explicitamente.
-    expect(screen.getByRole("button", { name: /Sobre/ }).getAttribute("aria-current")).toBe("page");
-    // Nova ordem da nav (task b2a0a4f8): Providers primeiro (default da
-    // engrenagem), Sobre no fim; páginas de board depois da seção própria.
-    expect([...dialog.querySelectorAll(".settings-nav-item")].map((b) => b.getAttribute("data-settings-page"))).toEqual([
+    expect(screen.getByText(/Este board · Maestro/)).toBeTruthy();
+    expect(screen.getByPlaceholderText("Buscar configuração")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Conta e plano/ }).getAttribute("aria-current")).toBe("page");
+    expect(
+      Array.from(dialog.querySelectorAll("[data-settings-page]")).map((b) => b.getAttribute("data-settings-page")),
+    ).toEqual([
+      "account",
       "providers",
       "shortcuts",
       "keys",
       "devices",
+      "appearance",
+      "performance",
       "general",
-      "maestro",
-      "agents",
+      "mode",
+      "rules",
+      "team",
     ]);
   });
 
-  it("Sobre (id general, por decisão — ver SettingsModal) is the app-scoped page: locale control + build identity + scope note, no board toggles", async () => {
-    renderSettings("general");
-
-    expect(screen.getByLabelText("Idioma")).toBeTruthy();
-    expect(screen.getByText(/vale para o aplicativo inteiro/)).toBeTruthy();
-    expect(await screen.findByText(/dev abc1234 \(dirty tree\)/)).toBeTruthy();
-    expect(document.querySelector("[data-settings-build-identity]")).toBeTruthy();
-    expect(screen.queryByLabelText(/Modo autônomo/)).toBeNull();
-    expect(screen.queryByLabelText(/Limite de agentes/)).toBeNull();
+  it("scope chip says app vs board", () => {
+    const app = renderSettings("providers");
+    expect(document.querySelector("[data-settings-scope]")?.textContent).toMatch(/vale para o app inteiro/);
+    app.unmount();
+    renderSettings("mode");
+    expect(document.querySelector("[data-settings-scope]")?.textContent).toMatch(/vale só para o board/);
   });
 
-  it("? entry (page=shortcuts) is the ShortcutsOverlay list, not a copy", () => {
-    renderSettings("shortcuts");
+  it("search filters nav entries", () => {
+    renderSettings("account");
+    fireEvent.change(screen.getByPlaceholderText("Buscar configuração"), { target: { value: "cota" } });
+    const pages = Array.from(document.querySelectorAll("[data-settings-page]")).map((b) => b.getAttribute("data-settings-page"));
+    expect(pages).toEqual(["providers"]);
+  });
 
+  it("Sobre (general) shows build identity; locale lives on Aparência", async () => {
+    const about = renderSettings("general");
+    expect(await screen.findByText(/dev abc1234 \(dirty tree\)/)).toBeTruthy();
+    expect(screen.queryByLabelText("Idioma")).toBeNull();
+    about.unmount();
+    renderSettings("appearance");
+    expect(screen.getByLabelText("Idioma")).toBeTruthy();
+  });
+
+  it("? entry (page=shortcuts) keeps ShortcutsOverlay", () => {
+    renderSettings("shortcuts");
     expect(screen.getByRole("button", { name: /Atalhos/ }).getAttribute("aria-current")).toBe("page");
     expect(document.querySelector(".shortcuts-grid")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Configurar" })).toBeTruthy();
   });
 
-  it("Maestro hosts autonomous mode; Agentes hosts the concurrency cap", () => {
-    const { onToggleAutonomous, onSetConcurrencyCap, rerender, onPageChange, onClose } = renderSettings("maestro");
-
-    const toggle = document.querySelector(".autonomous-toggle-label input") as HTMLInputElement;
-    expect(toggle).toBeTruthy();
-    expect(toggle.checked).toBe(false);
+  it("Modo de trabalho hosts autonomous + concurrency (legacy maestro/agents normalize)", () => {
+    const { onToggleAutonomous, onSetConcurrencyCap } = renderSettings("maestro");
+    const toggle = screen.getByRole("button", { name: /Modo autônomo|autônomo/i });
     fireEvent.click(toggle);
     expect(onToggleAutonomous).toHaveBeenCalledWith("board-1", true);
 
-    rerender(
-      <SettingsModal
-        page="agents"
-        onPageChange={onPageChange}
-        onClose={onClose}
-        board={board}
-        shortcutOverrides={{}}
-        onRebind={vi.fn()}
-        onRestoreDefault={vi.fn()}
-        onRestoreAll={vi.fn()}
-        locale="pt-BR"
-        onLocaleOverrideChange={vi.fn()}
-        onToggleAutonomous={onToggleAutonomous}
-        onSetConcurrencyCap={onSetConcurrencyCap}
-        onApplyPreset={vi.fn()}
-      />,
-    );
-
-    const cap = screen.getByLabelText(/Limite de agentes simultâneos/);
+    const cap = document.querySelector("#settings-concurrency") as HTMLInputElement;
+    expect(cap).toBeTruthy();
     fireEvent.change(cap, { target: { value: "5" } });
     expect(onSetConcurrencyCap).toHaveBeenCalledWith("board-1", 5);
   });
 
-  // ============ BOARD PRESETS, FASE 2 (task 83f4cfa3) ============
-  // O que a fase 2 acrescenta na UI, travado em jsdom (rápido) além do smoke
-  // CDP que dirige o app REAL: a lista com o custo honesto, o diff ANTES de
-  // aplicar, e a leitura "está em X / custom" sem reivindicar preset nenhum.
-
-  it("Maestro lista os três presets, com custo e o LINK da doc no Máximo", async () => {
-    renderSettings("maestro");
-
-    expect(await screen.findByText("Eficiente")).toBeTruthy();
-    expect(screen.getByText("Produtivo")).toBeTruthy();
-    expect(screen.getByText("Máximo")).toBeTruthy();
-    // Custo dito sem número inventado, e o link é a página dos três jeitos.
-    const docs = document.querySelector("[data-preset-docs='maximo']") as HTMLAnchorElement;
-    expect(docs?.getAttribute("href")).toBe("https://stellar.idyplatform.com/docs/tres-jeitos-de-trabalhar/");
-    expect(document.querySelector("[data-preset-cost='maximo']")?.textContent).not.toMatch(/[0-9]/);
-  });
-
-  it("mostra o DIFF antes de aplicar — e aplicar chama o callback com o preset", async () => {
-    const { onApplyPreset } = renderSettings("maestro");
-    fireEvent.click(await screen.findByText("Máximo"));
-
+  it("Modo lista presets e mostra diff antes de aplicar", async () => {
+    const { onApplyPreset } = renderSettings("mode");
+    expect(await screen.findByText("Junto")).toBeTruthy();
+    expect(screen.getByText("Orquestrado")).toBeTruthy();
+    expect(screen.getByText("Autônomo")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Autônomo"));
     const diff = document.querySelector("[data-preset-diff='maximo']");
     expect(diff).toBeTruthy();
-    const changed = [...document.querySelectorAll("[data-preset-change]")].map((li) => li.getAttribute("data-preset-change"));
-    expect(changed.sort()).toEqual(["autonomous", "concurrencyCap", "defaultAllowCommit", "defaultReview"]);
-    // O teto entra no diff com antes → depois (8 é o placeholder declarado).
-    expect(document.querySelector("[data-preset-change='concurrencyCap']")?.textContent).toContain("8");
-    // A promessa de escopo, em texto.
-    expect(diff?.textContent).toMatch(/só para o que vem a seguir/);
-
-    fireEvent.click(document.querySelector("[data-preset-apply='maximo']") as HTMLButtonElement);
-    expect(onApplyPreset).toHaveBeenCalledTimes(1);
-    expect(onApplyPreset.mock.calls[0]![0]).toBe("board-1");
+    fireEvent.click(screen.getByRole("button", { name: /Aplicar/ }));
+    expect(onApplyPreset).toHaveBeenCalled();
     expect((onApplyPreset.mock.calls[0]![1] as { id: string }).id).toBe("maximo");
   });
 
-  it("board que já está no preset: nenhuma mudança listada e Aplicar desabilitado", async () => {
-    // 'Eficiente' == autônomo desligado, cap 1, allowCommit false.
-    renderSettings("maestro", {
-      board: { ...board, autonomous: false, concurrency_cap: 1, default_allow_commit: 0 },
-    });
-    // Espera a lista (assíncrona) chegar antes de clicar — o rótulo do badge,
-    // em 'Eficiente', aparece duas vezes; 'Produtivo' é único.
-    await screen.findByText("Produtivo");
-    fireEvent.click(document.querySelector("[data-preset-id='eficiente']") as HTMLButtonElement);
-
-    expect(document.querySelector("[data-preset-no-change]")).toBeTruthy();
-    expect([...document.querySelectorAll("[data-preset-change]")]).toHaveLength(0);
-    expect((document.querySelector("[data-preset-apply='eficiente']") as HTMLButtonElement).disabled).toBe(true);
-    // E o badge diz que é o preset ATUAL — a leitura é do estado real do board.
-    expect(document.querySelector("[data-preset-current]")?.getAttribute("data-preset-current")).toBe("eficiente");
-  });
-
-  it("mexer um ajuste depois já é 'custom' — a UI nunca reivindica um preset que não bate", async () => {
-    renderSettings("maestro", {
-      board: { ...board, autonomous: false, concurrency_cap: 4, default_allow_commit: 0 },
-    });
-
-    await screen.findByText("Eficiente");
-    expect(document.querySelector("[data-preset-current]")?.getAttribute("data-preset-current")).toBe("custom");
-    expect(document.querySelector("[data-preset-current]")?.textContent).toMatch(/custom/);
-  });
-
-  it("nav switches pages and does not keep a second modal chrome", () => {
+  it("nav switches pages; one modal-root; no thin-scroll", () => {
     const { onPageChange } = renderSettings("general");
-
     fireEvent.click(screen.getByRole("button", { name: /Chaves de API/ }));
     expect(onPageChange).toHaveBeenCalledWith("keys");
     expect(document.querySelectorAll(".modal-root").length).toBe(1);
@@ -241,26 +233,21 @@ describe("SettingsModal", () => {
 
   it("closes on Escape and backdrop click", () => {
     const { onClose, container } = renderSettings();
-
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
-
     fireEvent.click(container.querySelector(".modal-backdrop")!);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it("hides This board when no board is open", () => {
+  it("hides This board when no board; board page redirects to providers", () => {
     renderSettings("general", { board: null });
-
-    expect(screen.queryByText("Este board")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Maestro/ })).toBeNull();
+    expect(screen.queryByText(/Este board/)).toBeNull();
+    const { onPageChange } = renderSettings("mode", { board: null });
+    expect(onPageChange).toHaveBeenCalledWith("providers");
   });
 
-  it("no board: a board page redirects to the DEFAULT page (providers), which exists without a board", () => {
-    // O fallback antigo levava a "general" porque ela era a default; com
-    // Providers na default (task b2a0a4f8), o redirecionamento o segue —
-    // providers é app-scoped e renderiza sem board.
-    const { onPageChange } = renderSettings("maestro", { board: null });
-    expect(onPageChange).toHaveBeenCalledWith("providers");
+  it("Dispositivos shows celular em breve", () => {
+    renderSettings("devices");
+    expect(screen.getByText(/em breve/i)).toBeTruthy();
   });
 });

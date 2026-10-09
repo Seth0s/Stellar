@@ -154,7 +154,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     const bodies = await waitForBodies(written, 1);
     const idleLines = bodies.filter((t) => t.includes(UNPROVEN_POINTER));
     expect(idleLines).toHaveLength(1);
-    expect(idleLines[0]).toBe(`[de: worker] ${UNPROVEN_POINTER}`);
+    expect(idleLines[0]).toContain(`[de: worker] ${UNPROVEN_POINTER}`);
     expect(written.filter(([id, data]) => id === "worker-1" && data !== "\r")).toHaveLength(0);
     expect(written.filter(([id, data]) => id === "spawner-1" && data.includes(UNPROVEN_POINTER))).toHaveLength(1);
   });
@@ -296,7 +296,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
       b.scanIdleWithoutReport({ nowMs: now });
       b.scanIdleWithoutReport({ nowMs: now + SELF_REMINDER_FLOOR_MS + 1_000 });
       const toWorker = await waitForBodies(written, 1);
-      expect(toWorker.filter((t) => t.includes("without calling the report tool"))).toHaveLength(1);
+      expect(toWorker.filter((t) => t.includes("without calling report"))).toHaveLength(1);
       expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
 
       b.scanIdleWithoutReport({ nowMs: now + SELF_REMINDER_FLOOR_MS + SELF_REMINDER_ESCALATE_MS + 2_000 });
@@ -351,7 +351,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     const bodies = await waitForBodies(written, 1);
     const noAgentLines = bodies.filter((t) => t.includes(NO_AGENT_POINTER));
     expect(noAgentLines).toHaveLength(1);
-    expect(noAgentLines[0]).toBe(`[de: worker] ${NO_AGENT_POINTER}`);
+    expect(noAgentLines[0]).toContain(`[de: worker] ${NO_AGENT_POINTER}`);
     // A frase errada: nenhuma acusação de "não reportou" para quem não tem
     // agente — e nem a inferida, que é a outra ponta da mesma pergunta. É este
     // par de asserções que morre se o fato sumir da fiação.

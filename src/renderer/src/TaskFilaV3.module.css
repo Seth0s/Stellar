@@ -1,0 +1,572 @@
+/* Fila V3 — measures from docs/design/app-v3/prototipo/Fila.dc.html */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--fila-pad-18) 0;
+  flex: none;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.filters {
+  display: flex;
+  gap: var(--space-3);
+  margin-left: var(--space-4);
+  flex: none;
+}
+
+.chip {
+  height: var(--fila-chip-height);
+  padding: 0 var(--space-6);
+  border-radius: var(--fila-chip-radius);
+  border: 1px solid var(--fila-btn-border);
+  background: transparent;
+  color: var(--fila-text-soft);
+  font: inherit;
+  font-size: var(--fila-text-13);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+.chip:hover {
+  color: var(--card-name);
+  border-color: var(--fila-hover-border);
+}
+
+.chipOn {
+  background: var(--fila-chip-on-bg);
+  color: var(--card-name);
+  border-color: var(--fila-chip-on-border);
+}
+
+.chipCount {
+  color: var(--card-context);
+}
+
+.chipCountNeeds {
+  color: var(--card-warning);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--fila-btn-height);
+  padding: 0 var(--space-5);
+  border: 1px solid var(--fila-btn-border);
+  border-radius: var(--fila-chip-radius);
+  width: var(--fila-search-width);
+  box-sizing: border-box;
+  margin-left: auto;
+  flex: none;
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--fila-text-13);
+  outline: none;
+}
+
+.btn {
+  min-height: var(--fila-btn-height);
+  padding: 0 var(--space-6);
+  border-radius: var(--fila-chip-radius);
+  border: 1px solid var(--fila-btn-border);
+  background: var(--fila-btn-bg);
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--fila-text-13);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+
+.btn:hover {
+  border-color: var(--fila-hover-border);
+}
+
+.btnPrimary {
+  background: var(--fila-primary);
+  border-color: var(--fila-primary);
+  font-weight: 600;
+  color: var(--fila-on-primary);
+}
+
+.needsStrip {
+  margin: var(--space-6) var(--fila-pad-18) 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+  flex: none;
+}
+
+.needsCard {
+  border: 1px solid var(--fila-needs-border);
+  background: var(--fila-needs-bg);
+  border-radius: var(--fila-tile-radius);
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  color: var(--card-name);
+}
+
+.needsCardReview {
+  border-color: var(--fila-review-needs-border);
+  background: var(--fila-review-needs-bg);
+}
+
+.needsHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--fila-text-12);
+  color: var(--card-warning);
+}
+
+.needsHeadReview {
+  color: var(--fila-link);
+}
+
+.needsDot {
+  width: var(--fila-needs-dot);
+  height: var(--fila-needs-dot);
+  border-radius: var(--radius-circle);
+  background: var(--card-warning);
+  flex: none;
+}
+
+.needsDotReview {
+  background: var(--card-live);
+}
+
+.needsBody {
+  font-size: var(--fila-text-13-5);
+  line-height: 1.4;
+  color: var(--card-name);
+}
+
+.needsActions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.board {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-6) var(--fila-pad-18) var(--space-7);
+  display: flex;
+  gap: var(--space-6);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+}
+
+.column {
+  flex: 1 1 0;
+  min-width: var(--fila-col-min);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+}
+
+.columnWide {
+  min-width: var(--fila-col-min-wide);
+}
+
+.columnHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: none;
+}
+
+.columnMarker {
+  width: var(--fila-marker);
+  height: var(--fila-marker);
+  border-radius: var(--radius-1);
+  flex: none;
+}
+
+.columnTitle {
+  margin: 0;
+  font-size: var(--fila-text-13-5);
+  font-weight: 600;
+  color: var(--card-name);
+}
+
+.columnCount {
+  font-size: var(--fila-text-12-5);
+  color: var(--card-context);
+}
+
+.columnHint {
+  font-size: var(--fila-text-11-5);
+  color: var(--card-context);
+  margin-left: auto;
+}
+
+.columnBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.tile {
+  border: 1px solid var(--fila-tile-border);
+  border-radius: var(--fila-tile-radius);
+  background: var(--fila-tile-bg);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fila-gap-9);
+  cursor: pointer;
+  text-align: left;
+  color: var(--card-name);
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tile:hover {
+  border-color: var(--fila-tile-hover-border);
+  background: var(--fila-tile-hover-bg);
+}
+
+.tileRunning {
+  border-color: var(--fila-running-border);
+}
+
+.tileReview {
+  border-color: var(--fila-review-border);
+}
+
+.tileDone {
+  padding: var(--space-5) var(--space-6);
+  gap: var(--space-3);
+  opacity: 0.85;
+}
+
+.tileTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.tileId {
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-12);
+  color: var(--card-context);
+  flex: none;
+}
+
+.typeChip {
+  font-size: var(--fila-text-11-5);
+  padding: var(--space-1) 7px; /* sd:allow: Fila.dc.html type chip pad 2px 7px */
+  border-radius: var(--fila-type-radius);
+  flex: none;
+  white-space: nowrap;
+}
+
+.typeAsk {
+  background: var(--fila-type-ask-bg);
+  color: var(--fila-type-ask-fg);
+}
+
+.typeImpl {
+  background: var(--fila-type-impl-bg);
+  color: var(--fila-type-impl-fg);
+}
+
+.typeFix {
+  background: var(--fila-type-fix-bg);
+  color: var(--fila-type-fix-fg);
+}
+
+.typeInvest {
+  background: var(--fila-type-invest-bg);
+  color: var(--fila-type-invest-fg);
+}
+
+.tileMeta {
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-11-5);
+  color: var(--card-context);
+  margin-left: auto;
+  flex: none;
+  white-space: nowrap;
+}
+
+.tileTitle {
+  font-size: var(--fila-text-14);
+  line-height: 1.35;
+  color: var(--card-name);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tileDoneRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.tileDoneTitle {
+  flex: 1;
+  font-size: var(--fila-text-13-5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--card-name);
+}
+
+.tilePhrase {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--fila-text-12-5);
+  color: var(--fila-text-soft);
+  min-width: 0;
+}
+
+.tilePhraseAmber {
+  color: var(--fila-phrase-amber);
+}
+
+.tilePhraseDone {
+  font-size: var(--fila-text-12);
+  color: var(--fila-done-phrase);
+}
+
+.tilePhraseLive {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--card-name);
+}
+
+.phraseDot {
+  width: var(--fila-live-size);
+  height: var(--fila-live-size);
+  border-radius: var(--radius-circle);
+  background: var(--card-warning);
+  flex: none;
+}
+
+.live {
+  width: var(--fila-live-size);
+  height: var(--fila-live-size);
+  border-radius: var(--radius-circle);
+  background: var(--card-live);
+  flex: none;
+  animation: filaPulse var(--card-live-duration) ease-in-out infinite;
+}
+
+.ctx {
+  font-size: var(--fila-text-11-5);
+  color: var(--card-context);
+  flex: none;
+}
+
+.gates {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.gateChip {
+  font-size: var(--fila-text-11-5);
+  padding: var(--space-1) 7px; /* sd:allow: Fila.dc.html gate chip pad 2px 7px */
+  border-radius: var(--fila-type-radius);
+}
+
+.gateFail {
+  background: var(--fila-gate-fail-bg);
+  color: var(--fila-gate-fail-fg);
+}
+
+.gateOk {
+  background: var(--fila-gate-ok-bg);
+  color: var(--fila-gate-ok-fg);
+}
+
+.gateRunning {
+  background: color-mix(in srgb, var(--foam) 18%, transparent);
+  color: var(--foam);
+}
+
+.bar {
+  height: var(--fila-bar-height);
+  border-radius: var(--radius-1);
+  background: var(--fila-bar-track);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  width: var(--fila-bar-fill);
+  background: var(--card-live);
+  animation: filaSlide var(--fila-slide-duration) ease-in-out infinite;
+}
+
+.avatar {
+  width: var(--fila-avatar-size);
+  height: var(--fila-avatar-size);
+  border-radius: var(--fila-avatar-radius);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-2);
+  font-weight: 600;
+  flex: none;
+}
+
+.avatarCl {
+  background: var(--fila-avatar-cl-bg);
+  color: var(--fila-avatar-cl-fg);
+}
+
+.avatarRv {
+  background: var(--fila-avatar-rv-bg);
+  color: var(--fila-avatar-rv-fg);
+}
+
+.rail {
+  width: var(--fila-rail-width);
+  flex: none;
+  border: 1px solid var(--fila-bar-track);
+  border-radius: var(--fila-tile-radius);
+  background: var(--fila-rail-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-6) 0;
+  cursor: pointer;
+  color: var(--fila-text-soft);
+  font: inherit;
+}
+
+.rail:hover {
+  border-color: var(--fila-tile-hover-border);
+  color: var(--card-name);
+}
+
+.railCount {
+  font-size: var(--fila-text-12);
+}
+
+.vert {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: var(--fila-text-13);
+  letter-spacing: 0.04em;
+}
+
+.railOpen {
+  flex: 1 1 0;
+  min-width: var(--fila-col-min);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+}
+
+.collapseBtn {
+  min-height: var(--fila-collapse-height);
+  padding: 0 var(--space-4);
+}
+
+.seeAll {
+  font: inherit;
+  font-size: var(--fila-text-12-5);
+  color: var(--fila-link);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.seeAll:hover {
+  color: var(--fila-link-hover);
+}
+
+.dropGhost {
+  border: 1px dashed var(--fila-chip-on-border);
+  border-radius: var(--fila-tile-radius);
+  padding: var(--space-4);
+  color: var(--fila-text-soft);
+  font-size: var(--fila-text-12-5);
+  text-align: center;
+}
+
+.empty {
+  color: var(--card-context);
+  font-size: var(--fila-text-12-5);
+  padding: var(--space-4) 0;
+}
+
+.markerHollow {
+  width: var(--fila-marker);
+  height: var(--fila-marker);
+  border-radius: var(--radius-1);
+  border: var(--fila-marker-hollow) solid var(--card-context);
+  box-sizing: border-box;
+  background: transparent;
+  flex: none;
+}
+
+@keyframes filaPulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--card-live-glow);
+  }
+  70% {
+    box-shadow: 0 0 0 var(--fila-pulse-spread) var(--card-live-clear);
+  }
+  100% {
+    box-shadow: 0 0 0 0 var(--card-live-clear);
+  }
+}
+
+@keyframes filaSlide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live,
+  .barFill {
+    animation: none;
+  }
+}

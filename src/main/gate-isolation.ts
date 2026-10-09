@@ -48,8 +48,8 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { rm, symlink, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
 
@@ -167,6 +167,80 @@ function safeIsDir(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+function nestedGitRootAtOrAbove(sourceRoot: string, target: string): string | null {
+  let candidate = target;
+  while (!safeIsDir(candidate) && candidate !== sourceRoot) candidate = dirname(candidate);
+  for (;;) {
+    if (candidate !== sourceRoot && existsSync(join(candidate, ".git"))) {
+      return relative(sourceRoot, candidate).split(/\\/g).join("/");
+    }
+    if (candidate === sourceRoot) return null;
+    const parent = dirname(candidate);
+    if (parent === candidate || !parent.startsWith(`${sourceRoot}${sep}`)) return null;
+    candidate = parent;
+  }
+}
+
+async function nestedGitRootsWithin(sourceRoot: string, scope: string): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === ".git") continue;
+      const child = join(dir, entry.name);
+      if (existsSync(join(child, ".git"))) {
+        found.push(relative(sourceRoot, child).split(/\\/g).join("/"));
+        continue;
+      }
+      await walk(child);
+    }
+  };
+  if (safeIsDir(scope)) await walk(scope);
+  return found;
+}
+
+/**
+ * Finds nested repositories touched by declared paths. The outer worktree
+ * cannot carry a nested repository's HEAD or dirty tree; the caller must run
+ * those gates in the shared checkout and label that choice.
+ */
+export async function findNestedRepositoriesForPaths(input: {
+  sourceRoot: string;
+  paths: readonly string[];
+}): Promise<string[]> {
+  const sourceRoot = resolve(input.sourceRoot);
+  const found = new Set<string>();
+  const globScopes = new Set<string>();
+  for (const raw of input.paths) {
+    const withoutScope = raw
+      .trim()
+      .replace(/^(?:shared|exclusive):/, "")
+      .split(" (")[0] ?? "";
+    const normalized = withoutScope.replace(/\\/g, "/").replace(/^\.\/+/, "");
+    if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) continue;
+    const parts = normalized.split("/");
+    const globAt = parts.findIndex(
+      (part) => part.includes("*") || part.includes("?") || part.includes("["),
+    );
+    const literal = (globAt < 0 ? parts : parts.slice(0, globAt)).filter(Boolean).join("/");
+    const target = resolve(sourceRoot, literal || ".");
+    if (target !== sourceRoot && !target.startsWith(`${sourceRoot}${sep}`)) continue;
+
+    const ancestor = nestedGitRootAtOrAbove(sourceRoot, target);
+    if (ancestor) found.add(ancestor);
+    if (globAt >= 0) globScopes.add(target);
+  }
+  for (const scope of globScopes) {
+    for (const nested of await nestedGitRootsWithin(sourceRoot, scope)) found.add(nested);
+  }
+  return [...found].sort();
 }
 
 /**

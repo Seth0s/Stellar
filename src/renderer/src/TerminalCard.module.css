@@ -13,23 +13,22 @@
 
 .terminalCard:global(.card-base) {
   box-shadow:
-    var(--card-shadow, var(--shadow-card)),
+    var(--card-shadow, var(--card-shadow-base)),
     0 0 0 1px color-mix(in srgb, var(--accent, transparent) 30%, transparent),
     0 0 20px -6px var(--accent, transparent);
 }
 
-/* Medido via CDP (card 55ed1cb4): `.card-scale` é `rect` em unidades de
-   mundo, o frame é border-box com 1px de borda, origin 0 0 depois da
-   borda esquerda/cima. Em zoom >= 0.9 o CardFrame NÃO compensa (comentário
-   em CardFrame.tsx — mexer lá pega BrowserCard). Resultado no terminal
-   largo: clip/body/footer 1px além da borda direita E inferior, o
-   anel de acento acima torna o vazamento óbvio. Encolher o clip 2px
-   (as duas bordas) ancora o body dentro da content-box sem tocar no
-   CardFrame nem nas zonas de resize (irmãs do scale, fora do clip). */
-.terminalCard :global(.card-clip) {
-  width: calc(100% - 2px);
-  height: calc(100% - 2px);
+/* File/media drag over a live terminal — accent ring, no layout shift. */
+.terminalCard.dropTarget:global(.card-base) {
+  box-shadow:
+    var(--card-shadow, var(--card-shadow-base)),
+    0 0 0 2px var(--accent, var(--foam)),
+    0 0 24px -4px var(--accent, var(--foam));
 }
+
+/* `.card-base` is content-box (cards.css): declared rect is the content
+   box, so `.card-clip` at 100% already sits inside the border. The old
+   `calc(100% - 2px)` hack assumed border-box and shrank head/foot by 2px. */
 
 /* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
    `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
@@ -144,6 +143,8 @@
 .terminalCardBody :global(.terminal.xterm) {
   padding: 0;
   margin: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the

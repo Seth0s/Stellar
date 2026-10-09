@@ -34,6 +34,7 @@ describe("mcp-server: chave desconhecida no topo", () => {
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      requireIdentity: false,
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         seen.push(req);
         return { ok: true, echoed: req };
@@ -105,7 +106,7 @@ describe("mcp-server: chave desconhecida no topo", () => {
     const res = await call("list_cards", { qualquer_coisa: 1 });
     expect(res.isError).toBe(true);
     expect(textOf(res)).toContain('Unrecognized key: "qualquer_coisa"');
-    expect(textOf(res)).toContain("não aceita campo nenhum");
+    expect(textOf(res)).toContain("`authToken`");
     expect(seen).toHaveLength(0);
   });
 

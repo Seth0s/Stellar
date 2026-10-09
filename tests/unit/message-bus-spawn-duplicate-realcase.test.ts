@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { SPAWN_QUEUE_NOTICE_MIN_WAIT_MS } from "../../src/main/spawn-queue-notice-decision";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * O CASO REAL de `97924155` × `97924157` — item 3 do enunciado ("por que o
@@ -150,37 +151,47 @@ describe("caso real 97924155 × 97924157 (bf1fb0a7)", () => {
   });
 
   it("fila que despacha DEPOIS do watchdog: o cardId chega ao chamador pelo canal de entrega", async () => {
-    // Board no teto: a chamada real vai para a fila em vez de nascer na hora.
+    // Cap full: the call returns queued+spawnId immediately; the card is not
+    // born yet. The UP notice remains the backup channel when wait exceeds
+    // the notice floor (caller that did not poll get_spawn).
     const out = rig({ running: 14, cap: 14 });
-    const pending = bus!.handleRequest(REAL_CALL);
-    await flush();
-    expect(out.spawned).toHaveLength(0); // ainda na fila: nada nasceu
+    const queued = readBus<{ ok: boolean; queued?: boolean; spawnId: string }>(
+      await bus!.handleRequest(REAL_CALL),
+    );
+    expect(queued.ok).toBe(true);
+    expect(queued.queued).toBe(true);
+    expect(typeof queued.spawnId).toBe("string");
+    expect(out.spawned).toHaveLength(0); // still queued: nothing born
 
-    // 111s de espera (o caso real esperou 444s) e uma vaga abre. O teto da fila
-    // é 10min, então a entrada sobrevive inteira.
+    // 111s of wait (the real case waited 444s) then a slot opens. Queue
+    // ceiling is 10 min, so the entry survives intact.
     nowMs += 111_000;
     out.state.running = 13;
     bus!.notifyConcurrencyCapChanged("118");
-    const res = (await pending) as Record<string, unknown>;
-    expect(res.ok).toBe(true);
-    expect(out.spawned).toHaveLength(1);
     await flush();
+    expect(out.spawned).toHaveLength(1);
 
-    // O aviso: o MESMO cardId que a chamada abortada não conseguiu devolver.
+    const up = readBus<{ status: string; cardId?: string }>(await bus!.handleRequest({
+      cmd: "get_spawn",
+      spawnId: queued.spawnId,
+    }));
+    expect(up.status).toBe("up");
+    expect(up.cardId).toBe("97924157");
+
+    // Same cardId via the delivery channel — backup for callers that skip get_spawn.
     const notice = out.writes.find((w) => w.target === "97924064");
     expect(notice, `nada foi escrito para o chamador: ${JSON.stringify(out.writes)}`).toBeDefined();
-    expect(notice!.text).toContain(String(res.cardId));
+    expect(notice!.text).toContain(String(up.cardId));
     expect(notice!.text).toMatch(/do not spawn another/);
   });
 
-  it("espera curta NÃO gera aviso — o chamador recebeu a própria resposta", async () => {
+  it("espera curta NÃO gera aviso — o chamador já tem spawnId e receberá get_spawn", async () => {
     const out = rig({ running: 14, cap: 14 });
-    const pending = bus!.handleRequest(REAL_CALL);
+    await bus!.handleRequest(REAL_CALL);
     await flush();
     nowMs += SPAWN_QUEUE_NOTICE_MIN_WAIT_MS - 1_000; // abaixo do piso
     out.state.running = 13;
     bus!.notifyConcurrencyCapChanged("118");
-    await pending;
     await flush();
     expect(out.writes).toHaveLength(0);
   });

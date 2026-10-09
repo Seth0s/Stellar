@@ -359,9 +359,10 @@ export type CloseCardLinkedTask = {
 
 export type CloseCardTaskEffect =
   | { action: "allow-close" }
-  | { action: "conclude-task"; taskId: string; reason: "reviewer-signature" | "success-report" }
   /** The card closes and its link to the task is released; the task's STATUS is
-   * left exactly as it is. Nothing is concluded and nothing is reopened. */
+   * left exactly as it is. Nothing is concluded and nothing is reopened.
+   * close_card NEVER writes done/failed — that is judgment (linked reviewer,
+   * board orchestrator, or human), never a side effect of closing a card. */
   | { action: "release-link"; taskId: string }
   | { action: "refuse"; error: string };
 
@@ -385,8 +386,9 @@ export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCar
     `[de: stellar] close_card of "${targetCardId}" refused: the card is the ONLY live reviewer of task "${taskId}" ` +
     `(review="wanted") and has no verdict recorded on this task. ` +
     `Closing now traps the task with nobody to sign. ` +
-    `Record the verdict first (report with verdict aprovado/reprovado) and close right after — ` +
-    `a reviewer's aprovado concludes the task TOGETHER with the close. Nothing was closed.`
+    `Record the verdict first (report with verdict aprovado/reprovado), then write done/failed via ` +
+    `update_task (or ask the orchestrator/human) — close_card only releases the link and never concludes. ` +
+    `Nothing was closed.`
   );
 }
 
@@ -739,19 +741,20 @@ export function describeThirdPartyReleaseRefusal(taskId: string, requesterId: st
  * O que o fechamento do card deve fazer com UMA task aberta à qual ele
  * está ligado. Puro: o chamador só coleta fatos e aplica.
  *
+ * close_card NUNCA conclui task (dono 2026-10-09): fechar só libera o vínculo
+ * (ou permite fechar sem mexer no status). Done/failed só por julgamento —
+ * revisor vinculado (review=wanted), orquestrador marcado, ou humano — via
+ * update_task / request_task_status, nunca como efeito colateral do close.
+ * Caso real: fechar o card da V3 (faae5162, sem review) concluiu done só
+ * porque o implementador tinha reportado ok:true.
+ *
  * NÃO conhece `released`: uma participação liberada sai do conjunto VIVO
- * (`listTaskCardsForCard`) e portanto nunca chega aqui como vínculo — o
- * fechamento do card liberado deixa de ver a task e não a conclui (decisão 1
- * da task e8802e32). Ler a linha liberada do histórico seria justamente
- * reintroduzir o caso que a liberação existe para resolver.
+ * (`listTaskCardsForCard`) e portanto nunca chega aqui como vínculo.
  */
 export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCardTaskEffect {
   // Uma rodada que o fan-out antigo carimbou em OUTRA task (`declared_other_task`)
   // não é assinatura deste card NESTA task, e uma rodada indecidível
-  // (`undeclared_round`) não sustenta afirmação nenhuma sobre ela. Antes desta
-  // fatia as duas contavam como "já julgou" (o carimbo era lido como veredito
-  // real) — e o efeito era fechar uma task que ninguém tinha julgado. O
-  // predicado é o MESMO que a proposta de conclusão usa (uma definição só).
+  // (`undeclared_round`) não sustenta afirmação nenhuma sobre ela.
   const isRoundOfThisTask = isRoundAttributableToTask;
   const targetApprovedAsReviewer = (() => {
     for (let i = input.targetVerdicts.length - 1; i >= 0; i--) {
@@ -771,9 +774,9 @@ export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCard
 
   if (input.reviewWanted) {
     if (input.targetRole === TASK_CARD_REVIEWER_ROLE) {
-      // A assinatura viaja com o fechamento: o aprovado já está gravado, e
-      // recusar aqui só deixaria a task presa esperando clique humano.
-      if (targetApprovedAsReviewer) return { action: "conclude-task", taskId: input.taskId, reason: "reviewer-signature" };
+      // Verdict already on record: release the link. Status stays until an
+      // explicit judgment write (update_task) — close never writes done.
+      if (targetApprovedAsReviewer) return { action: "release-link", taskId: input.taskId };
       // Já julgou e não aprovou: o destino da task não depende mais deste
       // card (volta pro implementer/humano decidir) — fechar não prende nada.
       if (targetJudgedAsReviewer) return { action: "allow-close" };
@@ -784,30 +787,18 @@ export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCard
     return { action: "refuse", error: describeStrandedReviewTaskCloseRefusal(input.taskId, input.targetCardId) };
   }
 
-  // Without a review requirement the only thing that can conclude a task at
-  // close is the IMPLEMENTER's accepted success report of this task, in the
-  // round. A reviewer link on such a task has nothing of its own to sign.
+  // Sem review exigido: fechar NUNCA conclui. Revisor sem papel de julgamento
+  // aqui só fecha; implementer sem report de sucesso na rodada não sai sozinho.
   if (input.targetRole === TASK_CARD_REVIEWER_ROLE) return { action: "allow-close" };
   if (!input.lastReportOk) {
-    // The implementer closing its own card is leaving the task by itself, which
-    // `decideTaskCardRelease` never lets it do: refuse and say what to do.
     if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
       return { action: "refuse", error: describeCloseWithoutSuccessRefusal(input.taskId, input.targetCardId) };
     }
-    // Anyone else asking (orchestrator, outsider, human): no valid report means
-    // nothing to conclude. Release the link and leave the status alone — the
-    // task shows up as waiting for a card instead of being signed done.
     return { action: "release-link", taskId: input.taskId };
   }
-  // Mesmo portão de CAMADA 4: um implementer fechando o próprio card não
-  // ganha aqui o direito de julgar que `update_task` nega.
-  const judgment = decideJudgmentWrite({
-    proposedStatus: "done",
-    requesterRoleOnTask: input.requesterRoleOnTask,
-    reviewWanted: false,
-  });
-  if (judgment.action === "refuse") return { action: "refuse", error: judgment.error };
-  return { action: "conclude-task", taskId: input.taskId, reason: "success-report" };
+  // Success report (ok:true + final) is evidence the round finished — not a
+  // done stamp. Release the link; leave status for who may judge.
+  return { action: "release-link", taskId: input.taskId };
 }
 
 function requesterOrNull(requesterId: string | null | undefined): string | null {

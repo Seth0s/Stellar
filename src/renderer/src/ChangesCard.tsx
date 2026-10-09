@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
+import { decideChangesFooter } from "./card-footer-decision";
 import { ConfirmModal } from "./ConfirmModal";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
@@ -15,6 +16,7 @@ import styles from "./ChangesCard.module.css";
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */
 function ChangesCardInner({
+  cardId,
   rect,
   zoom,
   zIndex,
@@ -37,6 +39,7 @@ function ChangesCardInner({
   panX,
   panY,
 }: {
+  cardId: string;
   rect: Rect;
   zoom: number;
   zIndex: number;
@@ -137,11 +140,20 @@ function ChangesCardInner({
     if (r.outcome.verdict === "nao-compila") return t("changes.slice.verdictNo");
     return t("changes.slice.verdictMounted");
   };
+  const repoStatus = status?.repo ? status : null;
+  const changesFooter = decideChangesFooter({
+    repo: repoStatus !== null,
+    branch: repoStatus?.branch ?? "",
+    insertions: repoStatus?.insertions ?? 0,
+    deletions: repoStatus?.deletions ?? 0,
+    changedFiles: repoStatus?.entries.length ?? 0,
+  });
 
   return (
     <CardFrame
       className=""
       kind="changes"
+      cardId={cardId}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -162,11 +174,10 @@ function ChangesCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      headerContext={status?.repo ? `${root} · ${status.branch}` : root}
+      headerStatus={changesFooter.uncommitted ? <span data-tone="warn">não commitado</span> : null}
       headerContent={
         <>
-          <span className="card-head-label">
-            <Icon name="changes" size={14} />
-          </span>
           <span className="card-head-actions">
             <button onClick={onClose}>
               <Icon name="close" size={12} />
@@ -174,7 +185,13 @@ function ChangesCardInner({
           </span>
         </>
       }
-      footerContent={root}
+      footerContent={
+        <span className="card-foot-row">
+          {changesFooter.branch !== null && <span>{changesFooter.branch}</span>}
+          {changesFooter.insertions !== null && changesFooter.deletions !== null && <span><span data-tone="good">+{changesFooter.insertions}</span> / <span data-tone="danger">−{changesFooter.deletions}</span></span>}
+          {changesFooter.changedFiles !== null && <span>{changesFooter.changedFiles} arquivos</span>}
+        </span>
+      }
     >
       <div className={styles.changesCardBody}>
         {!status && <div className={styles.changesMsg}>{t("common.loading")}</div>}

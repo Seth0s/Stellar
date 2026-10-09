@@ -159,6 +159,7 @@ describe("card-health no bus", () => {
       card_id: "impl",
       board_id: "b1",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -170,7 +171,6 @@ describe("card-health no bus", () => {
       implicit_order: null,
       diverged_status: null,
       diverged_actor: null,
-      spawn_profile: null,
       created_at: 1,
       updated_at: 1,
     };
@@ -235,6 +235,7 @@ describe("card-health no bus", () => {
       card_id: "impl",
       board_id: "b1",
       cwd: null,
+      spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -246,7 +247,6 @@ describe("card-health no bus", () => {
       implicit_order: null,
       diverged_status: null,
       diverged_actor: null,
-      spawn_profile: null,
       created_at: 1,
       updated_at: 1,
     };

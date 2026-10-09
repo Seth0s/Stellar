@@ -79,8 +79,8 @@ describe("describeTrustPromptOutsideRootWarning", () => {
     const inside = describeTrustPromptOutsideRootWarning({ providerId: "antigravity", cwd: "/board/sub", root: "/board" });
     expect(inside).toContain("antigravity");
     expect(inside).toContain("/board/sub");
-    expect(inside).toContain("NOT confirmed");
+    expect(inside).toContain("unconfirmed");
     const noRoot = describeTrustPromptOutsideRootWarning({ providerId: "antigravity", cwd: "/elsewhere", root: null });
-    expect(noRoot).toContain("no declared root");
+    expect(noRoot).toContain("no declared board root");
   });
 });

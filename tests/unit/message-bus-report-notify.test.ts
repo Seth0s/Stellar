@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { readBus } from "../helpers/bus-response";
 
 // AGENT-half restore (2026-09-13): `report` persists JSON, wakes waiters,
 // AND enqueues a short PTY pointer at the notify target via
@@ -13,7 +14,7 @@ type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: str
 
 type FakeReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; updated_at: number };
 
-const POINTER_NEEDLE = "report available — call read_report";
+const POINTER_NEEDLE = "report available";
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   const reportsByCard = new Map<string, FakeReportRow[]>();
@@ -121,6 +122,7 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
     expect(bodyWrites[0][0]).toBe("spawner-1");
     expect(bodyWrites[0][1]).toContain("[de: Child One]");
     expect(bodyWrites[0][1]).toContain(POINTER_NEEDLE);
+    expect(bodyWrites[0][1]).toContain("read_report");
     // Ponteiro só — o corpo do relatório não vaza pro PTY.
     expect(bodyWrites[0][1]).not.toContain("done");
   });
@@ -204,10 +206,10 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
       report: { ok: true, result: "done", verdict: "aprovado" },
     } as BusRequest);
 
-    const stored = (await b.handleRequest({ cmd: "get_report", target: "cli-card" } as BusRequest)) as {
+    const stored = readBus<{
       report: unknown;
       verdict?: string | null;
-    };
+    }>(await b.handleRequest({ cmd: "get_report", target: "cli-card" } as BusRequest));
     expect(stored.verdict).toBe("aprovado");
     expect(stored.report).toEqual({ ok: true, result: "done" });
   });
@@ -219,7 +221,7 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
       listTaskCardsForCard: () => [{ task_id: taskId, card_id: "child-linked", role: "implementer" }],
     });
     await b.handleRequest({ cmd: "report", requesterId: "child-linked", report: { ok: true, verdict: "ship" } } as BusRequest);
-    const stored = (await b.handleRequest({ cmd: "get_report", target: "child-linked" } as BusRequest)) as { report: unknown };
+    const stored = readBus<{ report: unknown }>(await b.handleRequest({ cmd: "get_report", target: "child-linked" } as BusRequest));
     expect(stored.report).toEqual({ ok: true, verdict: "ship", taskId });
   });
 
@@ -229,7 +231,7 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
       listTaskCardsForCard: () => [],
     });
     await b.handleRequest({ cmd: "report", requesterId: "free-card", report: { ok: true } } as BusRequest);
-    const stored = (await b.handleRequest({ cmd: "get_report", target: "free-card" } as BusRequest)) as { report: unknown };
+    const stored = readBus<{ report: unknown }>(await b.handleRequest({ cmd: "get_report", target: "free-card" } as BusRequest));
     expect(stored.report).toEqual({ ok: true });
   });
 
@@ -252,7 +254,7 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
       ],
     });
     await b.handleRequest({ cmd: "report", requesterId: "child-own", report: { ok: true, taskId: declared } } as BusRequest);
-    const stored = (await b.handleRequest({ cmd: "get_report", target: "child-own" } as BusRequest)) as { report: unknown };
+    const stored = readBus<{ report: unknown }>(await b.handleRequest({ cmd: "get_report", target: "child-own" } as BusRequest));
     expect(stored.report).toEqual({ ok: true, taskId: declared });
   });
 
@@ -269,7 +271,7 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
     const bodies = written.filter(([, data]) => data !== "\r").map(([, data]) => data);
     expect(bodies.some((t) => t.includes(POINTER_NEEDLE))).toBe(true);
     expect(bodies.every((t) => !t.includes("secret") && !t.includes("xxxx"))).toBe(true);
-    const stored = (await b.handleRequest({ cmd: "get_report", target: "child-3" } as BusRequest)) as { report: unknown };
+    const stored = readBus<{ report: unknown }>(await b.handleRequest({ cmd: "get_report", target: "child-3" } as BusRequest));
     expect(stored.report).toEqual(bigReport);
   });
 
@@ -277,14 +279,14 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "reviewer-loop", updated_at: Date.now() }];
     const { bus: b, written } = makeBus({ listAllConnectors: () => connectors });
 
-    const r1 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-loop", report: { round: 1 } } as BusRequest)) as { seq: number };
-    const r2 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-loop", report: { round: 2 } } as BusRequest)) as { seq: number };
+    const r1 = readBus<{ seq: number }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-loop", report: { round: 1 } } as BusRequest));
+    const r2 = readBus<{ seq: number }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-loop", report: { round: 2 } } as BusRequest));
 
     expect(r2.seq).toBeGreaterThan(r1.seq);
     await waitForPointers(written, 2);
     const pointers = written.filter(([, data]) => data.includes(POINTER_NEEDLE));
     expect(pointers.length).toBeGreaterThanOrEqual(2);
-    const latest = (await b.handleRequest({ cmd: "get_report", target: "reviewer-loop" } as BusRequest)) as { report: unknown };
+    const latest = readBus<{ report: unknown }>(await b.handleRequest({ cmd: "get_report", target: "reviewer-loop" } as BusRequest));
     expect(latest.report).toEqual({ round: 2 });
   });
 });
@@ -314,7 +316,7 @@ describe("message-bus: read_report sequência monotônica (Parte 2b)", () => {
 
   it("dois relatórios seguidos: get_report com afterSeq do primeiro espera e devolve o SEGUNDO", async () => {
     const b = makeBus();
-    const r1 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-1", report: { round: 1 } } as BusRequest)) as { seq: number };
+    const r1 = readBus<{ seq: number }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-1", report: { round: 1 } } as BusRequest));
 
     const waitPromise = b.handleRequest({
       cmd: "get_report",
@@ -324,7 +326,7 @@ describe("message-bus: read_report sequência monotônica (Parte 2b)", () => {
     } as BusRequest) as Promise<{ ok: boolean; report: unknown; seq: number }>;
 
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const r2 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-1", report: { round: 2 } } as BusRequest)) as { seq: number };
+    const r2 = readBus<{ seq: number }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-1", report: { round: 2 } } as BusRequest));
 
     const waited = await waitPromise;
     expect(waited.ok).toBe(true);
@@ -348,7 +350,7 @@ describe("message-bus: read_report sequência monotônica (Parte 2b)", () => {
 
   it("afterSeq sem wait e sem relatório mais novo => erro explícito, não o relatório antigo", async () => {
     const b = makeBus();
-    const r1 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 1 } } as BusRequest)) as { seq: number };
+    const r1 = readBus<{ seq: number }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-3", report: { round: 1 } } as BusRequest));
 
     const res = (await b.handleRequest({ cmd: "get_report", target: "reviewer-3", afterSeq: r1.seq } as BusRequest)) as {
       ok: boolean;
@@ -360,12 +362,12 @@ describe("message-bus: read_report sequência monotônica (Parte 2b)", () => {
 
   it("sequência é crescente e atribuída pelo BUS mesmo que o `report` do chamador carregue seu próprio campo 'seq'/'round'", async () => {
     const b = makeBus();
-    const r1 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-4", report: { seq: 999, round: "final" } } as BusRequest)) as {
+    const r1 = readBus<{
       seq: number;
-    };
-    const r2 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-4", report: { seq: 999, round: "final" } } as BusRequest)) as {
+    }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-4", report: { seq: 999, round: "final" } } as BusRequest));
+    const r2 = readBus<{
       seq: number;
-    };
+    }>(await b.handleRequest({ cmd: "report", requesterId: "reviewer-4", report: { seq: 999, round: "final" } } as BusRequest));
 
     expect(typeof r1.seq).toBe("number");
     expect(typeof r2.seq).toBe("number");

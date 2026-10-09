@@ -22,7 +22,8 @@ import { openStore, type TaskRow, type BoardRow } from "../../src/main/store";
  * abandoná-las órfãs — a mesma classe de bug, fechada na origem.
  */
 function makeBoard(id: string, name: string): BoardRow {
-  return { id, name, project: "", cwd: "", created_at: Date.now(), updated_at: Date.now(), last_accessed_at: null, autonomous: false, concurrency_cap: null, orchestrator_card_id: null };
+  return { id, name, project: "", cwd: "",
+ created_at: Date.now(), updated_at: Date.now(), last_accessed_at: null, autonomous: false, concurrency_cap: null, orchestrator_card_id: null };
 }
 
 function makeTask(id: string, boardId: string | null): TaskRow {
@@ -35,6 +36,7 @@ function makeTask(id: string, boardId: string | null): TaskRow {
     card_id: null,
     board_id: boardId,
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,

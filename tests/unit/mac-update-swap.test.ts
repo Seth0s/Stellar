@@ -133,10 +133,16 @@ describe("performMacSwap — a orquestração, com a costura injetável", () => 
     const calls: string[] = [];
     const io: MacSwapIo = {
       sha512OfFile: async () => "sha",
-      extractZip: async () => calls.push("extract"),
+      extractZip: async () => {
+        calls.push("extract");
+      },
       pathIsWritable: async () => true,
-      writeScript: async (path) => calls.push(`write:${path}`),
-      spawnDetached: (path) => calls.push(`spawn:${path}`),
+      writeScript: async (path, _content) => {
+        calls.push(`write:${path}`);
+      },
+      spawnDetached: (path) => {
+        calls.push(`spawn:${path}`);
+      },
       ...over,
     };
     return { io, calls };
@@ -147,6 +153,7 @@ describe("performMacSwap — a orquestração, com a costura injetável", () => 
     currentBundle: FACTS.currentBundle,
     newVersion: "9.9.9",
     logPath: FACTS.logPath,
+    workDir: "/tmp/stellar-mac-swap-work",
   };
 
   it("caminho feliz: verifica -> extrai -> arma o script -> RECUSA seguir sem o app sair", async () => {

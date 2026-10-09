@@ -12,7 +12,6 @@ import {
   initialProvidersConfig,
   initialProvidersConfigJson,
   loadDynamicProviders,
-  measuredProviderRecipes,
   parseProviderSpec,
   parseProviderSpecs,
   parseSessionStore,
@@ -91,7 +90,7 @@ function setAtPath(root: Record<string, unknown>, path: string, value: unknown):
   const keys = path.split(".");
   let node: Record<string, unknown> | undefined = root;
   for (const key of keys.slice(0, -1)) {
-    const next = node?.[key];
+    const next: unknown = node?.[key];
     node = next !== null && typeof next === "object" ? (next as Record<string, unknown>) : undefined;
     if (!node) return;
   }
@@ -102,7 +101,7 @@ function deleteAtPath(root: Record<string, unknown>, path: string): void {
   const keys = path.split(".");
   let node: Record<string, unknown> | undefined = root;
   for (const key of keys.slice(0, -1)) {
-    const next = node?.[key];
+    const next: unknown = node?.[key];
     node = next !== null && typeof next === "object" ? (next as Record<string, unknown>) : undefined;
     if (!node) return;
   }
@@ -262,7 +261,25 @@ const MAX_MIDTURN: DynamicProviderSpec = {
   },
 };
 
-const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS, MAX_ONESHOT, MAX_MIDTURN];
+/** O ramo `mcp.mechanism: "unsupported-by-app"` — exige `reason`; sem esta
+ * base o anti-drift não cobre a obrigatoriedade condicional do reason. */
+const MAX_MCP_UNSUPPORTED: DynamicProviderSpec = {
+  ...(structuredClone(MAX_NONE) as DynamicProviderSpec),
+  id: "qa-contract-mcp-unsupported",
+  capacity: {
+    ...structuredClone(MAX_NONE).capacity,
+    role: "agent",
+    mcp: {
+      mechanism: "unsupported-by-app",
+      reason: "config lives in SQLite; app only writes JSON global-config files",
+    },
+    acbridgeOnPath: true,
+    effort: { mechanism: "none", reason: "no-flag" },
+    model: { mechanism: "flag", flag: "-m" },
+  },
+};
+
+const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS, MAX_ONESHOT, MAX_MIDTURN, MAX_MCP_UNSUPPORTED];
 
 describe("anti-drift: o schema publicado não pode divergir do parser", () => {
   it("as bases do teste são válidas pelo próprio validador", () => {
@@ -325,7 +342,17 @@ describe("anti-drift: o schema publicado não pode divergir do parser", () => {
 
   it("os enums do schema saem das MESMAS listas que o parser usa (amostra direta)", () => {
     const schema = JSON.stringify(providersConfigSchema());
-    for (const value of ["agent", "shell", "global-config", "stdio-command", "local-array", "positional", "unmeasured", "no-flag"]) {
+    for (const value of [
+      "agent",
+      "shell",
+      "global-config",
+      "unsupported-by-app",
+      "stdio-command",
+      "local-array",
+      "positional",
+      "unmeasured",
+      "no-flag",
+    ]) {
       expect(schema).toContain(`"${value}"`);
     }
   });
@@ -470,7 +497,9 @@ describe("a receita copiável no schema publicado", () => {
   it("a lista do app também está no SCHEMA `examples` (a forma completa, para um provider novo)", () => {
     // Com a sobrescrita parcial o `required` é só `id` — então o `examples`
     // passa a ser o único lugar do schema que mostra uma declaração COMPLETA.
-    expect(providersConfigSchema().properties.providers.items).toHaveProperty("examples");
+    const providersProp = (providersConfigSchema() as { properties: { providers: { items: unknown } } })
+      .properties.providers;
+    expect(providersProp.items).toEqual(expect.objectContaining({ examples: expect.any(Array) }));
     expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
   });
 
@@ -656,6 +685,11 @@ describe("recusas acionáveis: campo + valor aceito + valor recebido", () => {
       mutate: (s) =>
         setAtPath(s, "capacity.mcp", { mechanism: "global-config", configPath: "~/.x/mcp.json", serverShape: "stdio-command" }),
       expect: ["`capacity.mcp.configKey` must be", "got absent"],
+    },
+    {
+      name: "mcp unsupported-by-app sem reason",
+      mutate: (s) => setAtPath(s, "capacity.mcp", { mechanism: "unsupported-by-app" }),
+      expect: ["`capacity.mcp.reason` must be", "got absent"],
     },
     {
       name: "baseArgs com item vazio",

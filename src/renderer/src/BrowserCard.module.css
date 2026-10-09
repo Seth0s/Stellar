@@ -18,9 +18,9 @@
    voltar/avançar/recarregar/menu) só que agora ela também encolhe/cresce
    com o card de verdade, em vez de ficar travada num valor só. */
 .browserCard :global(.card-head) {
-  height: clamp(36px, 4.6cqw, 48px);
-  padding: 0 10px;
-  gap: 8px;
+  height: var(--card-head-height);
+  padding: var(--card-head-padding);
+  gap: var(--card-head-gap);
 }
 
 .browserCardAddress {
@@ -32,8 +32,8 @@
    * Pedido ao vivo (2026-09-09): URL centralizada, ferramentas nos
    * cantos — resolvido pelos TRÊS filhos diretos abaixo (não mais os 8
    * botões/input soltos de antes), com o grupo do meio em `flex: 1`. */
-  gap: 8px;
-  width: 100%;
+  gap: var(--card-head-inner-gap);
+  width: auto;
   /* Header responsivo (§2.1) — largura do PRÓPRIO card, não a viewport
    * inteira (um @media normal não serviria: dois cards do mesmo tipo em
    * larguras diferentes precisam colapsar independentemente). Electron
@@ -64,6 +64,27 @@
   justify-content: center;
   flex: 1;
   min-width: 0;
+}
+
+.browserCardUrlGroup input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--card-context);
+  font-family: var(--font-mono);
+  font-size: var(--card-context-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browserCardUrlGroup input:focus {
+  outline: 1px solid var(--card-focus);
+  outline-offset: 2px;
 }
 
 /* Grupo de ferramentas (favoritar/alvo/badges/kebab/fechar), à direita.
@@ -124,9 +145,9 @@
   background: var(--ink);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-4);
   padding: 5px 10px;
-  font-size: 11.5px;
+  font-size: var(--card-status-size);
   font-family: var(--font-mono);
 }
 
@@ -156,6 +177,17 @@
   border-color: var(--accent-browser);
 }
 
+.browserCard :global(.card-head) .browserCardOwner {
+  width: auto;
+  height: auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--card-status-size);
+}
+
 .browserCardConsoleBadge {
   display: flex;
   align-items: center;
@@ -175,6 +207,40 @@
 
 .browserCardConsoleBadge[data-severity="warning"] {
   background: var(--warn);
+}
+
+/* Active browser_route mocks — distinct from console errors so the owner
+   can see the page is intentionally stubbed. */
+.browserCardRoutesBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-4);
+  font-size: var(--text-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-accent);
+  background: var(--accent-browser);
+}
+
+/* persist: partition — Push API / durable cookies for THIS card only. */
+.browserCardPersistentBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-4);
+  font-size: var(--text-1);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--on-accent);
+  background: var(--good);
 }
 
 /* Fecha o Bug E — indicador persistente de emulação ativa, independente
@@ -213,6 +279,8 @@
 @container browser-header (max-width: 380px) {
   .browserCardAddress button.browserCardOwner,
   .browserCardConsoleBadge,
+  .browserCardRoutesBadge,
+  .browserCardPersistentBadge,
   .browserCardEmulationBadge {
     display: none;
   }

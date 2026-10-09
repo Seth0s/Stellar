@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { composerClearSequence } from "../../src/main/type-and-submit-decision";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * 1fcd36b limit: send_to_card writes from main, outside the renderer
@@ -81,9 +82,9 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
 
   it("entrega por send_to_card avisa uma vez no corpo, não no Enter", async () => {
     const { writes, inputs } = makeBus({ screenAfterWrite: "Working" });
-    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest)) as {
+    const sent = readBus<{
       id: string;
-    };
+    }>(await bus!.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest));
     await waitForDelivery(sent.id);
     expect(writes[0]).toBe("brief the worker");
     expect(writes).toContain("\r");
@@ -126,9 +127,9 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     } as unknown as Parameters<typeof createMessageBus>[1];
 
     bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
-    const sent = (await bus.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest)) as {
+    const sent = readBus<{
       id: string;
-    };
+    }>(await bus.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest));
     const deadline = Date.now() + 2000;
     for (;;) {
       const status = (await bus.handleRequest({ cmd: "get_delivery", id: sent.id } as BusRequest)) as { delivery?: string };
@@ -150,7 +151,7 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
       // turn_complete: must not count as a new turn.
       screenAfterWrite: brief,
     });
-    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest)) as { id: string };
+    const sent = readBus<{ id: string }>(await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest));
     await waitForDelivery(sent.id);
     expect(writes[0]).toBe(brief);
     expect(writes.filter((w) => w === "\r").length).toBeGreaterThan(1);
@@ -169,7 +170,7 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     const { writes } = makeBus({
       screenAfterWrite: (attempt) => attempt === 0 ? "" : `→ ${brief}\n  Working`,
     });
-    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest)) as { id: string };
+    const sent = readBus<{ id: string }>(await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest));
     await waitForDelivery(sent.id);
 
     const enters = writes.filter((w) => w === "\r").length;

@@ -161,6 +161,23 @@ describe("providers: ACBRIDGE_HINT prompt coverage", () => {
   });
 });
 
+describe("providers: codex buildArgs --no-daemon", () => {
+  const codex = providerById("codex")!;
+
+  it("emits --no-daemon for a fresh session, resume <id>, and resume --last", () => {
+    expect(codex.buildArgs({})).toContain("--no-daemon");
+    expect(codex.buildArgs({ resumeId: "sess-abc" })).toEqual(
+      expect.arrayContaining(["resume", "sess-abc", "--no-daemon"]),
+    );
+    expect(codex.buildArgs({ continueLast: true })).toEqual(
+      expect.arrayContaining(["resume", "--last", "--no-daemon"]),
+    );
+    // Subcommand stays first; clap accepts --no-daemon after it (codex resume --help).
+    expect(codex.buildArgs({ resumeId: "sess-abc" })[0]).toBe("resume");
+    expect(codex.buildArgs({ continueLast: true })[0]).toBe("resume");
+  });
+});
+
 describe("providers: capacity contract (§0)", () => {
   it("every provider declares capacity; delivery matches buildArgs", () => {
     for (const p of PROVIDERS) {
@@ -199,11 +216,14 @@ describe("providers: capacity contract (§0)", () => {
     expect(ACBRIDGE_HINT).not.toMatch(/https?:\/\//);
   });
 
-  it("ACBRIDGE_HINT states the single report rule: catalog has `report` → tool, else acbridge report with verdict", () => {
+  it("ACBRIDGE_HINT states the single report rule: catalog has `report` → tool, else acbridge report with estado", () => {
     expect(ACBRIDGE_HINT).toContain("`report`");
     expect(ACBRIDGE_HINT).toContain("catalog");
     expect(ACBRIDGE_HINT).toContain("acbridge report");
     expect(ACBRIDGE_HINT).toContain("`verdict`");
+    expect(ACBRIDGE_HINT).toContain("estado");
+    expect(ACBRIDGE_HINT).toMatch(/parcial/);
+    expect(ACBRIDGE_HINT).toMatch(/final/);
   });
 });
 
@@ -212,7 +232,7 @@ describe("providers: capacity contract (§0)", () => {
 // report is expected on. Discovery (how the agent LEARNS) stays separate
 // and is NOT flipped here: cursor is still `scrollback`.
 describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () => {
-  it("any MCP mechanism → mcp; none + acbridge → acbridge; neither → unreachable", () => {
+  it("registered MCP → mcp; none/unsupported + acbridge → acbridge; neither → unreachable", () => {
     const base = {
       role: "agent" as const,
       systemPrompt: { mechanism: "none" as const },
@@ -222,6 +242,21 @@ describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () 
     expect(deriveReportChannel({ ...base, mcp: { mechanism: "global-config" }, acbridgeOnPath: false })).toBe("mcp");
     expect(deriveReportChannel({ ...base, mcp: { mechanism: "none" }, acbridgeOnPath: true })).toBe("acbridge");
     expect(deriveReportChannel({ ...base, mcp: { mechanism: "none" }, acbridgeOnPath: false })).toBe("unreachable");
+    // unsupported-by-app is NOT a live MCP channel — same fallthrough as none.
+    expect(
+      deriveReportChannel({
+        ...base,
+        mcp: { mechanism: "unsupported-by-app", reason: "config lives in SQLite" },
+        acbridgeOnPath: true,
+      }),
+    ).toBe("acbridge");
+    expect(
+      deriveReportChannel({
+        ...base,
+        mcp: { mechanism: "unsupported-by-app", reason: "config lives in SQLite" },
+        acbridgeOnPath: false,
+      }),
+    ).toBe("unreachable");
   });
 
   it("every agent provider today expects mcp; bash expects acbridge", () => {
@@ -275,7 +310,9 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
       const args = spawnArgv(p, { brief: SENTINEL });
       const placed =
         briefMechanism === "flag"
-          ? Boolean(briefFlag) && args[args.indexOf(briefFlag)] === briefFlag && args[args.indexOf(briefFlag) + 1] === SENTINEL
+          ? typeof briefFlag === "string" &&
+            args[args.indexOf(briefFlag)] === briefFlag &&
+            args[args.indexOf(briefFlag) + 1] === SENTINEL
           : args.includes(SENTINEL);
       if (!placed) caught.push(p.id);
     }

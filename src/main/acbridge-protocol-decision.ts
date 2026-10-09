@@ -44,10 +44,12 @@
 // FORMA do request mudou, e um bus na 8 descartaria os dois campos em silêncio
 // (exatamente o que o carimbo existe para impedir). O número mora em DOIS
 // lugares: aqui e em `resources/bin/acbridge` (a constante `ACBRIDGE_PROTOCOL`).
-// BUMP 9→10 (task ff24b36d): `run_locked`/`gate_lock_status` são cmds NOVOS e
-// a FORMA de `gates` mudou (aceita `{cmd, exclusive}` além de string) — um bus
-// na 9 recusaria o objeto e não conheceria os cmds.
-export const ACBRIDGE_PROTOCOL = 10;
+// BUMP 12→13 (task 628bdfec): spawn-card CLI gained --reason and --persistent
+// (parity with MCP spawn_card.reason / persistent partition for Push API).
+// BUMP 13→14: authenticated socket peer ancestry is the only card identity;
+// AGENT_CANVAS_CARD_ID / clientCardId are not identity. Preserve spawn-card
+// flags from 13.
+export const ACBRIDGE_PROTOCOL = 14;
 
 /** Chave carimbada pelo acbridge no JSON do request. Removida antes do
  * dispatch — nenhum cmd do bus a vê. */
@@ -83,20 +85,13 @@ export function decideAcbridgeProtocol(check: ProtocolCheck, ours: number = ACBR
     case "match":
       return { accept: true };
     case "unstamped":
-      return {
-        accept: true,
-        warning:
-          `acbridge with no protocol stamp (older than protocol ${ours}) talking to a bus on protocol ${ours}. ` +
-          "The request is accepted, but the installed acbridge is behind the running Stellar — " +
-          "new fields and commands do not exist in it. Reinstall/rebuild the package, or run the acbridge from the repo.",
-      };
+      return { accept: true };
     case "acbridge-older":
       return {
-        accept: true,
-        warning:
-          `acbridge on protocol ${check.theirs}, bus on protocol ${ours}: the acbridge is behind. ` +
-          "The request is accepted (as a subset), but new commands/fields do not exist in that acbridge. " +
-          "Reinstall/rebuild the package, or run the acbridge from the repo.",
+        accept: false,
+        error:
+          `protocol mismatch: acbridge on protocol ${check.theirs}, bus on protocol ${ours}: the client predates authenticated socket identity. ` +
+          "Request refused. Reinstall/rebuild Stellar so the client and app use the same protocol.",
       };
     case "acbridge-newer":
       return {
@@ -114,12 +109,13 @@ export function decideAcbridgeProtocol(check: ProtocolCheck, ours: number = ACBR
   }
 }
 
-/** Devolve o request sem a chave de protocolo — o dispatcher nunca a vê,
- * então nenhum `cmd` precisa declará-la no tipo. */
+/** Removes protocol and transport identity envelope fields before dispatch. */
 export function stripProtocolStamp<T>(request: T): T {
   if (request === null || typeof request !== "object" || Array.isArray(request)) return request;
-  if (!Object.prototype.hasOwnProperty.call(request, PROTOCOL_KEY)) return request;
   const rest = { ...(request as Record<string, unknown>) };
   delete rest[PROTOCOL_KEY];
+  delete rest.clientCardId;
+  delete rest.clientBoardId;
+  delete rest.authToken;
   return rest as T;
 }

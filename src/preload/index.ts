@@ -81,6 +81,11 @@ const pty = {
     ipcRenderer.invoke("pty:write", id, data, origin),
   resize: (id: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke("pty:resize", id, cols, rows),
+  health: (id: string): Promise<{
+    lastActivityAt: number | null;
+    context: { usedTokens: number; windowTokens?: number; source: string; at: number } | null;
+    quota: { text: string; percent?: number; at: number } | null;
+  } | null> => ipcRenderer.invoke("pty:health", id),
   interrupt: (id: string): Promise<void> => ipcRenderer.invoke("pty:interrupt", id),
   kill: (id: string): Promise<void> => ipcRenderer.invoke("pty:kill", id),
   /** Marks every PTY of a board as RETAINED (`true` when leaving the board) or
@@ -456,6 +461,22 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
   /** BOARD PRESETS — a lista declarada (`data/board-presets.json`), servida
    * pelo main para a UI comparar e descrever. Passivo. */
   boardPresets: (): Promise<BoardPreset[]> => ipcRenderer.invoke("store:board-presets:list"),
+  /** Settings → Regras e gates: per-board context file (rules + gateToolPaths). */
+  boardContext: {
+    get: (
+      boardId: string,
+    ): Promise<
+      | { ok: true; rulesText: string; gateToolPaths: string[]; trapCount: number }
+      | { ok: false; error: string }
+    > => ipcRenderer.invoke("board-context:get", boardId),
+    setRules: (boardId: string, text: string): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("board-context:set-rules", boardId, text),
+    setGateToolPaths: (
+      boardId: string,
+      paths: string[],
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("board-context:set-gate-tool-paths", boardId, paths),
+  },
   favorites: {
     list: (): Promise<FavoriteRow[]> => ipcRenderer.invoke("store:favorites:list"),
     add: (url: string, title: string): Promise<void> => ipcRenderer.invoke("store:favorites:add", url, title),
@@ -561,6 +582,18 @@ const fs = {
     ipcRenderer.on("fs:changed", listener);
     return () => ipcRenderer.removeListener("fs:changed", listener);
   },
+  /**
+   * On-save Problems: run the open project's own `tsc` (subprocess in
+   * `root`). Never bundles the TypeScript compiler into main.
+   */
+  diagnoseProject: (
+    root: string,
+    relativePath: string,
+  ): Promise<
+    | { status: "ok"; diagnostics: Array<{ file: string; line: number; message: string; category: string }> }
+    | { status: "no-checker" }
+    | { status: "failed"; detail: string }
+  > => ipcRenderer.invoke("project:diagnose", root, relativePath),
 };
 
 export type GitEntry = { path: string; status: string; insertions: number; deletions: number };
@@ -626,6 +659,12 @@ export type GitSliceResult =
 
 const git = {
   status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke("git:status", cwd),
+  /** File contents at HEAD for side-by-side diff; null when absent. */
+  showHead: (cwd: string, filePath: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:show-head", cwd, filePath),
+  /** Unified `-U0` diff of one path against HEAD (empty when clean). */
+  diffHead: (cwd: string, filePath: string): Promise<string> =>
+    ipcRenderer.invoke("git:diff-head", cwd, filePath),
   /** A atribuição por ARQUIVO: declaração, janela e o que não se sabe. */
   attribution: (root: string): Promise<GitAttribution> =>
     ipcRenderer.invoke("git:attribution", root),
@@ -713,7 +752,18 @@ const browser = {
    * by) so `BrowserCard.tsx` can mirror the same multiplication locally
    * for `toCanvasPoint`'s click-mapping instead of a round-trip IPC call
    * on every resize. */
-  create: (id: string, url: string): Promise<{ scaleFactor: number }> => ipcRenderer.invoke("browser:create", id, url),
+  create: (
+    id: string,
+    url: string,
+    opts?: { persistent?: boolean },
+  ): Promise<{ scaleFactor: number; profileKind?: string; partition?: string }> =>
+    ipcRenderer.invoke("browser:create", id, url, opts),
+  getProfile: (
+    id: string,
+  ): Promise<
+    | { ok: true; kind: string; displayMode: string; partition: string }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("browser:get-profile", id),
   navigate: (id: string, url: string): Promise<void> => ipcRenderer.invoke("browser:navigate", id, url),
   back: (id: string): Promise<void> => ipcRenderer.invoke("browser:back", id),
   forward: (id: string): Promise<void> => ipcRenderer.invoke("browser:forward", id),
@@ -791,8 +841,8 @@ const browser = {
     ipcRenderer.on("browser:frame", listener);
     return () => ipcRenderer.removeListener("browser:frame", listener);
   },
-  onNavigate: (cb: (id: string, url: string) => void) => {
-    const listener = (_e: unknown, id: string, url: string) => cb(id, url);
+  onNavigate: (cb: (id: string, url: string, httpResponseCode?: number) => void) => {
+    const listener = (_e: unknown, id: string, url: string, httpResponseCode?: number) => cb(id, url, httpResponseCode);
     ipcRenderer.on("browser:did-navigate", listener);
     return () => ipcRenderer.removeListener("browser:did-navigate", listener);
   },
@@ -825,6 +875,64 @@ const browser = {
       cb(id, level, message);
     ipcRenderer.on("browser:console-message", listener);
     return () => ipcRenderer.removeListener("browser:console-message", listener);
+  },
+  /** Active browser_route mocks for this card — drives the header badge. */
+  onRoutesChanged: (
+    cb: (
+      id: string,
+      routes: Array<{
+        id: string;
+        urlPattern: string;
+        method: string | null;
+        status: number;
+        timesRemaining: number | null;
+        hitCount: number;
+        hasBodyFile: boolean;
+      }>,
+    ) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      id: string,
+      routes: Array<{
+        id: string;
+        urlPattern: string;
+        method: string | null;
+        status: number;
+        timesRemaining: number | null;
+        hitCount: number;
+        hasBodyFile: boolean;
+      }>,
+    ) => cb(id, routes);
+    ipcRenderer.on("browser:routes-changed", listener);
+    return () => ipcRenderer.removeListener("browser:routes-changed", listener);
+  },
+  /** Active device emulation — badge + canvas frame (inspector or agent). */
+  onEmulationChanged: (
+    cb: (
+      id: string,
+      emulation: {
+        width: number;
+        height: number;
+        deviceScaleFactor: number;
+        mobile: boolean;
+        source: "inspector" | "agent";
+      } | null,
+    ) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      id: string,
+      emulation: {
+        width: number;
+        height: number;
+        deviceScaleFactor: number;
+        mobile: boolean;
+        source: "inspector" | "agent";
+      } | null,
+    ) => cb(id, emulation);
+    ipcRenderer.on("browser:emulation-changed", listener);
+    return () => ipcRenderer.removeListener("browser:emulation-changed", listener);
   },
   onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean, targetCardId?: string) => void) => {
     const listener = (
@@ -931,6 +1039,15 @@ const browser = {
     id: string,
     params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null,
   ): Promise<void> => ipcRenderer.invoke("browser:set-device-emulation", id, params),
+  getDeviceEmulation: (
+    id: string,
+  ): Promise<{
+    width: number;
+    height: number;
+    deviceScaleFactor: number;
+    mobile: boolean;
+    source: "inspector" | "agent";
+  } | null> => ipcRenderer.invoke("browser:get-device-emulation", id),
   /** Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — `session.fetch()` no
    * processo main (browser-registry.ts's `fetchSource`), não `evalJs`:
    * sem CORS e sem o teto de 20k chars do round-trip de página. */
@@ -992,6 +1109,8 @@ export type SpawnCardAskParams = {
   mediaType?: "image" | "pdf";
   /** Original source path for the consent dialog. */
   path?: string;
+  /** `kind: "browser"` — durable profile partition (cookies / Push API). */
+  persistent?: boolean;
 };
 /** DESIGN-BACKLOG.md item 60, peça 1 — one queued spawn_agent request. */
 export type SpawnQueueEntry = { id: string; requesterId: string; provider: string; reason?: string; requestedAt: number };
@@ -1058,11 +1177,12 @@ const spawn = {
  * `get_task` por task — ver seu comentário grande). */
 export type TaskBoardItem = {
   id: string;
-  /** Stored briefing. Appends after create are concatenated here with a
-   * visible `[stellar:added …]` marker (`parseTaskPrompt` in
-   * `src/task-prompt-decision.ts`) so the Fila edit modal can split
-   * original vs later text without a second column. */
-  prompt: string | null;
+  /** Preview of the original briefing for the queue row. The full briefing
+   * is read on demand by the detail modal. */
+  promptPreview: string;
+  promptTruncated: boolean;
+  /** Set only by frozen sprint snapshots, preserving their historical prompt. */
+  promptSnapshot?: string | null;
   provider: string | null;
   status: string;
   cardId: string | null;
@@ -1195,6 +1315,16 @@ export type TaskBoardItem = {
   /** LIVE progress of a gate run (the runner's in-memory registry, not the
    * database). `null` = no gate running now. */
   gateProgress: { index: number; total: number; command: string } | null;
+  /** Declared territory paths from the task contract. `null` = undeclared. */
+  territory: string[] | null;
+  /** Screen-turn latch from the live PTY (`working` | `ended` | `unknown`).
+   * Absent when no live card is linked. */
+  screenTurnState: "working" | "ended" | "unknown" | null;
+  /** Last measured action line from the card output tail; null when unknown. */
+  recentAction: string | null;
+  /** Optional supersede metadata from `result_json` (title/reason for Agora). */
+  supersededTitle: string | null;
+  supersededReason: string | null;
 };
 /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — mesmo padrão de
  * `spawn.onQueueChanged` acima (carga inicial via `listByBoard`, depois
@@ -1206,6 +1336,8 @@ export type TaskBoardItem = {
  * fica pra depois, ver DESIGN-BACKLOG.md). */
 const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
+  getPrompt: (taskId: string): Promise<{ ok: true; prompt: string | null } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:get-prompt", taskId),
   /** GAVETA (task 377a6029) — a fila de tasks RESERVADAS deste card, em ordem. */
   listReservations: (
     cardId: string,
@@ -1907,6 +2039,11 @@ export type ProvidersPageRow = {
   mcpEnabled: boolean;
   mcpConfigPath: string | null;
   mcpConfigKey: string | null;
+  /** True when capacity.mcp.mechanism is "unsupported-by-app" — the CLI has
+   * MCP, but Stellar cannot write that config shape. Distinct from
+   * mcpEnabled=false (= no MCP / mechanism "none"). */
+  mcpUnsupportedByApp: boolean;
+  mcpUnsupportedReason: string | null;
   source: "file" | "app";
   /** A SOBRESCRITA desta linha sobre a declaração do app (task edf3b047) —
    * a pergunta que o badge "do app" sozinho não respondia.

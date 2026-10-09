@@ -1,27 +1,27 @@
 /**
- * CASA DE TRABALHO — a DECISÃO do sync, sem I/O (A3b, BACKEND_V1.md §5.4).
+ * WORK HOME — the sync DECISION, no I/O (BACKEND_V1.md §5.4).
  *
- * O empurrão ("push") manda o manifesto INTEIRO para o servidor, então o
- * problema é o merge de três vias por PATH entre o LOCAL (o que a máquina tem
- * agora), o REMOTO (a última revisão do servidor) e a BASE (a última revisão
- * sincronizada aqui):
+ * A push sends the WHOLE manifest to the server, so the problem is a
+ * three-way merge per PATH between LOCAL (what the machine has now),
+ * REMOTE (the server's latest revision) and BASE (the last revision
+ * synced here):
  *
- *   base    local        remoto       resultado
- *   —       presente     ausente      entra (novo local)
- *   —       ausente      presente     mantém remoto (outro device criou)
- *   A       ==base       !=base       mantém REMOTO (só o remoto mudou)
- *   A       !=base       ==base       LOCAL vence (só o local mudou)
- *   A       !=base       !=base       CONFLITO (os dois mudaram)
- *   A       ausente      ==base       REMOÇÃO (apagamos local, remoto intacto)
- *   A       ausente      !=base       CONFLITO (apagamos, remoto mudou)
- *   A       ausente      ausente      REMOÇÃO (já sumiu dos dois)
+ *   base    local        remote       outcome
+ *   —       present      absent       enter (new local)
+ *   —       absent       present      keep remote (created by another device)
+ *   A       ==base       !=base       keep REMOTE (only remote changed)
+ *   A       !=base       ==base       LOCAL wins (only local changed)
+ *   A       !=base       !=base       CONFLICT (both changed)
+ *   A       absent       ==base       REMOVAL (deleted locally, remote intact)
+ *   A       absent       !=base       CONFLICT (deleted locally, remote changed)
+ *   A       absent       absent       REMOVAL (already gone from both sides)
  *
- * O `409` é o MESMO problema: o servidor devolve o manifesto atual e a gente
- * roda `planPush` de novo contra ele — os arquivos que só o remoto mudou entram
- * sozinhos; os que os dois mudaram viram CONFLITO para a UI escolher
- * (manter local / remoto / os dois). Revisões diferentes nunca conflitam.
+ * A `409` is the SAME problem: the server returns the current manifest and
+ * `planPush` runs again against it — files that only remote changed come in
+ * on their own; files both sides changed become CONFLICTs for the UI to
+ * choose (keep local / remote / both). Different revisions never conflict.
  *
- * Puro: sem fs, sem rede. A casca com I/O é `work-home-sync.ts`.
+ * Pure: no fs, no network. The I/O shell is `work-home-sync.ts`.
  */
 
 import {
@@ -39,15 +39,15 @@ export type PushConflict = {
 };
 
 export type PushPlan = {
-  /** Manifesto a enviar, já com o remoto preservado onde ele venceu. Conflitos
-   *  ficam com a versão LOCAL por padrão (o chamador resolve ou pergunta). */
+  /** Manifest to send, with remote already preserved where it won. Conflicts
+   *  keep the LOCAL version by default (the caller resolves or asks). */
   manifest: WorkHomeManifest;
   conflicts: PushConflict[];
-  /** Shas dos arquivos (não-deleted) que o envio referencia — para o check/upload. */
+  /** Shas of the (non-deleted) files the send references — for check/upload. */
   shas: string[];
 };
 
-/** Merge de três vias por path → o manifesto a enviar + os conflitos reais. */
+/** Three-way merge per path → the manifest to send + the real conflicts. */
 export function planPush(
   local: WorkHomeManifest,
   remote: WorkHomeManifest | null,
@@ -101,7 +101,7 @@ export function planPush(
       continue;
     }
 
-    // só na base: sumiu dos dois lados.
+    // base only: gone from both sides.
     if (B) removals.push(path);
   }
 
@@ -111,11 +111,11 @@ export function planPush(
 }
 
 /**
- * Aplica as escolhas da UI sobre os conflitos do push. `remote` é o manifesto
- * remoto que gerou o conflito (para achar a versão remota). Escolha ausente
- * mantém a versão LOCAL (o default do `planPush`). `both` no push é resolvido
- * na CHEGADA (dois arquivos) — aqui vale como "manter local" no manifesto e a
- * UI trata o sufixo ao aplicar o remoto.
+ * Applies the UI's choices over the push conflicts. `remote` is the remote
+ * manifest that produced the conflict (to find the remote version). A missing
+ * choice keeps the LOCAL version (the `planPush` default). `both` on push is
+ * resolved on ARRIVAL (two files) — here it acts as "keep local" in the
+ * manifest, and the UI handles the suffix when applying the remote.
  */
 export function resolvePushConflicts(input: {
   manifest: WorkHomeManifest;

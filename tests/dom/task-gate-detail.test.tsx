@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import type { TaskBoardItem } from "../../src/preload/index";
 import type { DiffCaptureEvidence } from "../../src/main/gate-runner";
 import { setLocale } from "../../src/shared/i18n";
 
 /**
- * The detail modal's observed-diff list, past the grouping threshold: rows are
- * grouped by folder, and the untracked note is an icon with its text as tooltip
- * instead of a second line. Below the threshold the list stays flat.
+ * TaskDetailV3 "Mudanças" tab: folder grouping past the threshold and the
+ * untracked note as an icon with tooltip on the same row (HEAD behavior;
+ * prototype only shows the tab button).
  */
 
 vi.mock("@renderer/useTerminal", () => ({
@@ -36,7 +36,8 @@ const ID = "d00a03fa-1111-2222-3333-444444444444";
 function task(over: Partial<TaskBoardItem> = {}): TaskBoardItem {
   return {
     id: ID,
-    prompt: "faz X",
+    promptPreview: "faz X",
+    promptTruncated: false,
     provider: "claude",
     status: "running",
     cardId: null,
@@ -101,6 +102,7 @@ beforeEach(() => {
     onChanged: () => () => {},
     onSprintsChanged: () => () => {},
     onScopeChanged: () => () => {},
+    getPrompt: async () => ({ ok: true, prompt: "faz X" }),
     updatePrompt: async () => ({ ok: true }),
     respondStatusAsk: async () => ({ ok: true }),
     create: async () => ({ ok: true, taskId: "x" }),
@@ -113,12 +115,16 @@ beforeEach(() => {
   (window as unknown as { bus?: Record<string, unknown> }).bus = {
     gateLockStatus: async () => ({ ok: true, locks: [] }),
   };
+  (window as unknown as { pty?: Record<string, unknown> }).pty = {
+    health: async () => null,
+  };
 });
 
 function stub(tasks: TaskBoardItem[]) {
   const noop = () => {};
   return (
     <TaskCard
+      cardId="fila-test"
       rect={{ x: 0, y: 0, w: 700, h: 400 }}
       zoom={1}
       zIndex={1}
@@ -127,7 +133,6 @@ function stub(tasks: TaskBoardItem[]) {
       concurrencyCapRaw={null}
       activeBoardId="b1"
       boardNames={{ b1: "Maestro" }}
-      taskCountsByBoard={{ b1: 2 }}
       onChange={noop}
       onCommit={noop}
       onRaise={noop}
@@ -141,7 +146,16 @@ function stub(tasks: TaskBoardItem[]) {
   );
 }
 
-describe("detalhe: lista de arquivos do diff", () => {
+async function openChangesTab() {
+  const tab = await waitFor(() => {
+    const el = Array.from(document.querySelectorAll("button")).find((b) => /Mudanças/i.test(b.textContent ?? ""));
+    expect(el).toBeTruthy();
+    return el!;
+  });
+  fireEvent.click(tab);
+}
+
+describe("detalhe V3: lista de arquivos do diff", () => {
   it("acima do limiar: agrupa por pasta e o untracked vira ícone com tooltip na MESMA linha", async () => {
     nextEvidence = evidence([
       ...Array.from({ length: 13 }, (_, i) => ({ path: `src/main/f${i}.ts`, status: " M" })),
@@ -149,6 +163,7 @@ describe("detalhe: lista de arquivos do diff", () => {
       { path: "novo/arquivo.ts", status: "??" },
     ]);
     render(stub([task()]));
+    await openChangesTab();
 
     await waitFor(() => {
       expect(document.querySelector('[data-part="task-diff-files"]')).toBeTruthy();
@@ -169,6 +184,7 @@ describe("detalhe: lista de arquivos do diff", () => {
       { path: "src/main/b.ts", status: " M" },
     ]);
     render(stub([task()]));
+    await openChangesTab();
 
     await waitFor(() => {
       expect(document.querySelector('[data-part="task-diff-files"]')).toBeTruthy();

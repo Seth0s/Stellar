@@ -127,7 +127,10 @@ describe("contador de agentes do Topbar", () => {
     render(topbarStub());
 
     expect(document.querySelector(".topbar-title [data-role='topbar-agents']")).toBeNull();
-    expect(document.querySelector(".topbar > [data-role='topbar-agents']")).toBeTruthy();
+    // Lives in `.topbar-leading` (with the board-mount progress chip), still a
+    // direct control under `.topbar` — never nested inside `.topbar-title`.
+    expect(document.querySelector(".topbar [data-role='topbar-agents']")).toBeTruthy();
+    expect(document.querySelector(".topbar-leading [data-role='topbar-agents']")).toBeTruthy();
   });
 
   it("não há mais indicador de board: sobra o número, que já diz o fato", () => {
@@ -154,12 +157,12 @@ describe("contador de agentes do Topbar", () => {
     );
     expect(boardAgentRoles).toHaveBeenCalledWith("b1");
 
-    const rows = [...document.querySelectorAll("[data-role='topbar-agent-row']")];
+    const rows = Array.from(document.querySelectorAll("[data-role='topbar-agent-row']"));
     expect(rows.map((r) => r.getAttribute("data-card-id"))).toEqual(["4242", "4243"]);
 
     // Nome do card + UM papel por task viva (papel não é atributo do card).
     expect(rows[0].textContent).toContain("Spawn limpo");
-    const roles = [...rows[0].querySelectorAll("[data-role='topbar-agent-role']")].map(
+    const roles = Array.from(rows[0].querySelectorAll("[data-role='topbar-agent-role']")).map(
       (r) => r.textContent,
     );
     expect(roles).toHaveLength(2);

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
+import { decideBrowserFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import { BrowserInspector, type EmulationZoom } from "./BrowserInspector";
@@ -223,7 +224,9 @@ function BrowserCardInner({
   zIndex,
   visible,
   url,
+  persistent = false,
   ownerCardId,
+  ownerCardLabel,
   onUrlCommit,
   interactionMode,
   selected,
@@ -245,6 +248,7 @@ function BrowserCardInner({
   panX,
   panY,
   shortcutOverridesRef,
+  onMountReady,
 }: {
   id: string;
   rect: Rect;
@@ -252,7 +256,10 @@ function BrowserCardInner({
   zIndex: number;
   visible: boolean;
   url: string;
+  /** persist: partition (Push API / durable cookies). Badge in the header. */
+  persistent?: boolean;
   ownerCardId: string | null;
+  ownerCardLabel?: string | null;
   /** Writes the card's CURRENT url back (debounced), so a background
    * unload/reload returns to where the user was. Omitted in isolation tests. */
   onUrlCommit?: (url: string) => void;
@@ -291,6 +298,8 @@ function BrowserCardInner({
   /** Follow-up fase C — ref estável; address-bar lê o override atual sem
    * re-render do card. */
   shortcutOverridesRef: MutableRefObject<ShortcutOverrides>;
+  /** Board mount queue: fired once after the offscreen BrowserWindow is created. */
+  onMountReady?: () => void;
 }) {
   // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
   // (see its doc comment) — lets the verify harness prove `React.memo`
@@ -407,6 +416,7 @@ function BrowserCardInner({
    * óptico, decisão do usuário).
    */
   const [readZoom, setReadZoom] = useState(1);
+  const [httpStatusCode, setHttpStatusCode] = useState<number | null>(null);
   const readZoomRef = useRef(1);
   readZoomRef.current = readZoom;
 
@@ -436,6 +446,10 @@ function BrowserCardInner({
   // (no reading UI for that yet, just the "something needs attention"
   // signal CentralByte's own console badge gives).
   const [consoleCounts, setConsoleCounts] = useState({ error: 0, warning: 0 });
+  /** Active browser_route mocks — owner-visible so a mocked page is obvious. */
+  const [mockRoutes, setMockRoutes] = useState<
+    Array<{ id: string; urlPattern: string; method: string | null; status: number }>
+  >([]);
   // Próxima rodada §3 — favoritos GLOBAIS (decisão explícita do usuário,
   // não por board). `pageTitle` finalmente consome `window.browser.onTitle`
   // (exposto no preload desde sempre, nunca lido por nada até agora) —
@@ -454,6 +468,43 @@ function BrowserCardInner({
     return () => {
       off();
     };
+  }, [id]);
+
+  useEffect(() => {
+    const off = window.browser.onRoutesChanged((msgId, routes) => {
+      if (msgId !== id) return;
+      setMockRoutes(routes.map((r) => ({ id: r.id, urlPattern: r.urlPattern, method: r.method, status: r.status })));
+    });
+    return () => {
+      off();
+    };
+  }, [id]);
+
+  // Agent browser_set_viewport (and inspector) publish here — keeps the
+  // header badge + contentSizeRef in sync even when BrowserInspector is
+  // closed. Fit zoom matches the inspector's default display mode.
+  useEffect(() => {
+    const off = window.browser.onEmulationChanged((msgId, emulation) => {
+      if (msgId !== id) return;
+      if (!emulation) {
+        contentSizeRef.current = computeContentSize(rectRef.current.w, rectRef.current.h);
+        setEmulatedFrame(null);
+        return;
+      }
+      contentSizeRef.current = {
+        w: Math.max(1, Math.round(emulation.width * emulation.deviceScaleFactor)),
+        h: Math.max(1, Math.round(emulation.height * emulation.deviceScaleFactor)),
+      };
+      setEmulatedFrame((prev) => ({
+        width: emulation.width,
+        height: emulation.height,
+        zoom: prev?.zoom ?? "fit",
+      }));
+    });
+    return () => {
+      off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -490,8 +541,12 @@ function BrowserCardInner({
   useEffect(() => {
     if (!createdRef.current) {
       createdRef.current = true;
-      void window.browser.create(id, url).then(({ scaleFactor }) => {
+      // Profile kind is fixed at create — persist: vs ephemeral partition.
+      void window.browser.create(id, url, { persistent }).then(({ scaleFactor }) => {
         scaleFactorRef.current = scaleFactor;
+        onMountReady?.();
+      }).catch(() => {
+        onMountReady?.();
       });
     }
     return () => {
@@ -503,9 +558,10 @@ function BrowserCardInner({
   }, [id]);
 
   useEffect(() => {
-    const offNav = window.browser.onNavigate((navId, navUrl) => {
+    const offNav = window.browser.onNavigate((navId, navUrl, statusCode) => {
       if (navId !== id) return;
       setBar(navUrl);
+      if (typeof statusCode === "number") setHttpStatusCode(statusCode >= 0 ? statusCode : null);
       // Same "console clears on navigate" convention real DevTools uses —
       // counts from the previous page aren't meaningful for this one.
       setConsoleCounts({ error: 0, warning: 0 });
@@ -1106,11 +1162,23 @@ function BrowserCardInner({
   }
 
   const consoleBadgeCount = consoleCounts.error + consoleCounts.warning;
+  const browserFooter = decideBrowserFooter({
+    httpStatusCode,
+    viewport: emulatedFrame ?? {
+      width: Math.round(contentSizeRef.current.w / (scaleFactorRef.current * BROWSER_SUPERSAMPLE)),
+      height: Math.round(contentSizeRef.current.h / (scaleFactorRef.current * BROWSER_SUPERSAMPLE)),
+    },
+    zoom: readZoom,
+    consoleErrors: consoleCounts.error,
+    consoleWarnings: consoleCounts.warning,
+    visible,
+  });
 
   return (
     <CardFrame
       className={styles.browserCard}
       kind="browser"
+      cardId={id}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -1131,6 +1199,45 @@ function BrowserCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      headerContext={
+        <div className={styles.browserCardUrlGroup} data-role="browser-address-context">
+          <input
+            value={bar}
+            aria-label={t("browser.navigate")}
+            onChange={(e) => setBar(e.target.value)}
+            onKeyDown={(e) => {
+              if (matchesShortcut(e.nativeEvent, "browser.navigate", shortcutOverridesRef.current)) {
+                e.preventDefault();
+                void window.browser.navigate(id, bar);
+              }
+            }}
+          />
+        </div>
+      }
+      headerStatus={ownerCardId ? (
+        <button
+          type="button"
+          className={styles.browserCardOwner}
+          data-role="browser-owner"
+          title={t("browser.openedByCardTitle", { id: ownerCardId })}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onFocusOwner}
+        >
+          agente: {ownerCardLabel || ownerCardId}
+        </button>
+      ) : null}
+      footerContent={
+        <span className="card-foot-row">
+          {httpStatusCode !== null && (
+            <span className="card-foot-status" data-tone={browserFooter.statusTone ?? undefined}>
+              {httpStatusCode}
+            </span>
+          )}
+          <span>{browserFooter.viewportLabel}</span>
+          <span data-tone={consoleCounts.error > 0 ? "danger" : consoleCounts.warning > 0 ? "warn" : undefined}>{browserFooter.consoleLabel}</span>
+          {browserFooter.paused && <span>pausado fora da tela</span>}
+        </span>
+      }
       headerContent={
         <div className={styles.browserCardAddress} data-role="browser-address">
           {/* Pedido ao vivo (2026-09-09, captura em mãos: "os itens
@@ -1155,36 +1262,7 @@ function BrowserCardInner({
               <Icon name="reload" size={12} />
             </button>
           </div>
-          <div className={styles.browserCardUrlGroup}>
-            <input
-              value={bar}
-              onChange={(e) => setBar(e.target.value)}
-              onKeyDown={(e) => {
-                // Rodada 3 review — matched ⇒ preventDefault. Sem isto,
-                // rebindar navigate pra Ctrl+P (etc.) navega E abre o
-                // diálogo nativo do Chromium (Imprimir) no mesmo keydown.
-                if (matchesShortcut(e.nativeEvent, "browser.navigate", shortcutOverridesRef.current)) {
-                  e.preventDefault();
-                  void window.browser.navigate(id, bar);
-                }
-              }}
-            />
-          </div>
           <div className={styles.browserCardToolsGroup}>
-            {ownerCardId && (
-              // DESIGN-BACKLOG.md §2.1 Item E — clicável agora: pan/raise
-              // até o card que abriu este navegador (`jumpToCard` via
-              // `onFocusOwner`), não só uma etiqueta informativa.
-              <button
-                className={styles.browserCardOwner}
-                data-role="browser-owner"
-                title={t("browser.openedByCardTitle", { id: ownerCardId })}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={onFocusOwner}
-              >
-                #{ownerCardId}
-              </button>
-            )}
             {consoleBadgeCount > 0 && (
               <span
                 className={styles.browserCardConsoleBadge}
@@ -1193,6 +1271,31 @@ function BrowserCardInner({
                 title={t("browser.consoleSummary", { errors: consoleCounts.error, warnings: consoleCounts.warning })}
               >
                 {consoleBadgeCount}
+              </span>
+            )}
+            {mockRoutes.length > 0 && (
+              <span
+                className={styles.browserCardRoutesBadge}
+                data-role="browser-routes-badge"
+                title={
+                  t("browser.routesBadge", { count: mockRoutes.length }) +
+                  "\n" +
+                  mockRoutes
+                    .slice(0, 8)
+                    .map((r) => t("browser.routesBadgeDetail", { pattern: r.urlPattern, status: r.status }))
+                    .join("\n")
+                }
+              >
+                {mockRoutes.length}
+              </span>
+            )}
+            {persistent && (
+              <span
+                className={styles.browserCardPersistentBadge}
+                data-role="browser-persistent-badge"
+                title={t("browser.persistentBadge")}
+              >
+                {t("browser.persistentBadgeShort")}
               </span>
             )}
             {/* Fecha o Bug E (relatado ao vivo): `emulatedFrame` e
@@ -1320,6 +1423,19 @@ function BrowserCardInner({
             {t("browser.consoleSummary", { errors: consoleCounts.error, warnings: consoleCounts.warning })}
           </div>
         )}
+        {mockRoutes.length > 0 && (
+          <div className={styles.browserCardMenuInfo} data-role="browser-routes-menu">
+            {t("browser.routesBadge", { count: mockRoutes.length })}
+            {mockRoutes.slice(0, 5).map((r) => (
+              <div key={r.id}>{t("browser.routesBadgeDetail", { pattern: r.urlPattern, status: r.status })}</div>
+            ))}
+          </div>
+        )}
+        {persistent && (
+          <div className={styles.browserCardMenuInfo} data-role="browser-persistent-menu">
+            {t("browser.persistentBadge")}
+          </div>
+        )}
         {emulatedFrame && (
           <button
             onClick={() => {
@@ -1336,7 +1452,9 @@ function BrowserCardInner({
             {t("browser.emulationActive", { w: emulatedFrame.width, h: emulatedFrame.height })}
           </button>
         )}
-        {(ownerCardId || consoleBadgeCount > 0 || emulatedFrame) && <div className={styles.browserCardFavDivider} />}
+        {(ownerCardId || consoleBadgeCount > 0 || mockRoutes.length > 0 || emulatedFrame) && (
+          <div className={styles.browserCardFavDivider} />
+        )}
         <button
           onClick={() => {
             setInspectorFocusPoint(null);

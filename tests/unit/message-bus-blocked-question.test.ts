@@ -52,13 +52,13 @@ describe("blocked: a pergunta estruturada (puros)", () => {
     expect(blockedQuestionFromResultJson(null)).toBeNull();
   });
 
-  it("a resposta nomeia a escolha; a recusa ensina o que falta; o aviso não é silêncio", () => {
+  it("a resposta e o aviso são linhas curtas com ferramenta para ver os detalhes", () => {
     const q = normalizeBlockedQuestion(question, 1, null)!;
-    expect(describeBlockedAnswer(q, "cascade", null)).toContain("Cascata");
-    expect(describeBlockedAnswer(q, "", "faça como antes")).toContain("faça como antes");
+    expect(describeBlockedAnswer("t1")).toContain("get_task");
+    expect(describeBlockedAnswer("t1")).not.toMatch(/[\r\n]/);
     expect(describeBlockedWithoutQuestion()).toContain("question");
     expect(describeBlockedNotice("t1", q, 0)).toContain("BLOCKED");
-    expect(describeBlockedNotice("t1", q, 0)).toContain("will NOT unblock by itself");
+    expect(describeBlockedNotice("t1", q, 0)).toContain("answer_blocked_task");
   });
 
   it("a Fila lê a pergunta de forma defensiva e mostra a idade", () => {
@@ -81,6 +81,7 @@ function modernTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "64",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -183,13 +184,14 @@ describe("blocked: o ciclo fecha (update_task → get_task → answer_blocked)",
 
     const answered = await bus.handleRequest({ cmd: "answer_blocked", taskId: "t1", optionId: "per-card", note: "isso" } as BusRequest);
     expect(answered).toMatchObject({ ok: true, delivered: true, status: "pending" });
-    // a resposta NOMEIA a escolha — é o texto que segue para o card.
-    expect(String(answered.answer)).toContain("Por card");
-    expect(String(answered.answer)).toContain("isso");
+    // The selected answer stays in task data; the card receives only a pointer.
+    expect(String(answered.answer)).toContain("get_task");
+    expect(String(answered.answer)).not.toContain("isso");
     // a pergunta saiu; o status voltou; a resposta ficou registrada na task.
     expect(blockedQuestionFromResultJson(st.task.result_json)).toBeNull();
     expect(st.task.status).toBe("pending");
     expect(String(st.task.result_json)).toContain("per-card");
+    expect(String(st.task.result_json)).toContain("isso");
   });
 
   it("card morto: a resposta NÃO se perde (registrada) e delivered=false", async () => {

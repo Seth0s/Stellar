@@ -90,7 +90,12 @@ function ompSpec(overrides: Partial<DynamicProviderSpec["capacity"]["session"]> 
         ...overrides,
       },
       systemPrompt: { mechanism: "flag", flag: "-s" },
-      mcp: { mechanism: "none" },
+      // omp keeps MCP settings in SQLite (agent.db), not a JSON file the app
+      // knows how to write — honest absence of registration, not "no MCP".
+      mcp: {
+        mechanism: "unsupported-by-app",
+        reason: "Oh My Pi stores MCP settings in SQLite (agent.db / settings); Stellar only writes JSON global-config files",
+      },
       acbridgeOnPath: true,
       effort: { mechanism: "flag", flag: "--thinking", values: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"] },
       model: { mechanism: "flag", flag: "-m" },

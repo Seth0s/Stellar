@@ -100,6 +100,48 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   return { repo: true, branch, insertions, deletions, entries };
 }
 
+/**
+ * Working-tree file bytes as committed at HEAD. Missing path / no HEAD →
+ * `null` (honest absence — the editor shows an empty "antes" pane).
+ */
+export async function gitShowHead(cwd: string, filePath: string): Promise<string | null> {
+  let root: string;
+  try {
+    root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  } catch {
+    return null;
+  }
+  const rel = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  try {
+    return await git(root, ["show", `HEAD:${rel}`]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Unified diff of one path against HEAD (`-U0` for precise hunks). Empty
+ * string when clean or unavailable.
+ */
+export async function gitDiffHeadUnified(cwd: string, filePath: string): Promise<string> {
+  let root: string;
+  try {
+    root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  } catch {
+    return "";
+  }
+  const rel = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  try {
+    return await git(root, ["diff", "-U0", "HEAD", "--", rel]);
+  } catch {
+    try {
+      return await git(root, ["diff", "-U0", "--", rel]);
+    } catch {
+      return "";
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // VERIFICAÇÃO DE UMA FATIA EM ÁRVORE LIMPA (task 56604aca, fase 1) — o shell.
 //

@@ -73,6 +73,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: null,
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -107,7 +108,6 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
       callbacksWithOverrides({
-        getTask: (id: string) => (id === "dep-done" ? dep : undefined),
         // `onTaskDone` reads listTasks AFTER the dep upsert, so the list
         // must already show the dep as done — with the stale `running`
         // row the `allDone` check bailed first and this test passed
@@ -152,6 +152,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: "card-impl",
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -205,6 +206,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: "impl",
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -260,6 +262,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: "impl",
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: JSON.stringify({ failureKind: "julgada", error: "desistiu" }),
       deps_json: null,
       retry_count: 0,
@@ -308,6 +311,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: "impl-innocent",
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -381,6 +385,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       card_id: "impl-innocent",
       board_id: "b1",
       cwd: null,
+    spawn_profile: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

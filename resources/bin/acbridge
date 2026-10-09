@@ -57,11 +57,6 @@ delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
 
 const sockPath = process.env.AGENT_CANVAS_SOCK;
-const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
-// Same auto-fill class as ownCardId: when this card was spawned for a
-// task, the PTY env already has the full id (pty-registry.ts). `report`
-// stamps it onto the JSON so the agent does not copy a truncated id
-// from a briefing. Absent when the spawn had no task — first-class.
 const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 
 // Versão do protocolo JSON-line que este script fala. O agente executa o
@@ -81,7 +76,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // BUMP 9→10 (task ff24b36d): cmds novos (`run_locked`, `gate_lock_status`) e
 // `gates` passa a aceitar `{cmd, exclusive}` além de string. Mesmo literal em
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois.
-const ACBRIDGE_PROTOCOL = 10;
+const ACBRIDGE_PROTOCOL = 14;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -120,7 +115,7 @@ const USAGE =
   "usage: acbridge <version | list | send <cardId> <message...> [--link-task <taskId> --link-role <role>] | get-delivery <id> | open <url> | " +
   "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
   "update-card-content [--append] <cardId> <text...> | " +
-  "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
+  "snapshot [cardId | x y w h] [--out path] [--full-page] [--width N] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] [--file <path>] <cardId> [text...] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | " +
@@ -131,24 +126,32 @@ const USAGE =
   "concurrency-status [cap] | board-mode <cardId> | unreported-work [limit] | " +
   "gate-lock [--scope repo|machine] [--timeout <ms>] -- <command...> | " +
   "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] [--reason <text>] [--idempotency-key <key>] | " +
-  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
+  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] [--reason <text>] [--persistent] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
   "browser-snapshot <cardId> | browser-console <cardId> [level] | " +
   "browser-network <cardId> [failed] | browser-wait-for <cardId> <text|selector> <value...> | " +
   "browser-navigate <cardId> <path|url> [--expect <selector>] | " +
+  "browser-set-viewport <cardId> <w> <h> [--mobile|--desktop] [--dpr N] | browser-set-viewport --reset <cardId> | " +
+  "browser-screenshot <cardId> [--out path] [--full-page|--selector S|--ref R] [--width N] | " +
   "browser-eval <cardId> <js...>>";
 
 // DESIGN-BACKLOG.md §2.1 points 3–4 — printed with bare `acbridge` usage.
 // Capability without MCP/system-prompt is real on bash cards; identity of
 // a hand-launched nested agent is a known gap (claim-card declined).
 const BASH_CARD_NOTE =
-  "note: inside a bash card, this CLI is on PATH but hand-launched agents " +
-  "do not get `stellar` MCP tools or the environment system-prompt — prefer " +
-  "a provider card. Actions here are attributed to AGENT_CANVAS_CARD_ID " +
-  "(the bash card); nested-agent identity is a known gap.";
+  "note: this CLI is on PATH inside a card. The app attributes requests from " +
+  "the socket peer process and its PTY ancestry; AGENT_CANVAS_CARD_ID is not identity.";
 
-const [, , cmd, ...rest] = process.argv;
+// Keep in lockstep with REPORT_ESTADO_AGENT_HINT (report-estado-decision.ts) —
+// this script cannot import from src/main.
+const REPORT_PAYLOAD_NOTE =
+  'report JSON: put estado: "parcial" | "final" (omit = parcial — never finished); ' +
+  "only you mark final. Declare decisaoTomada as soon as you decide (one or two " +
+  "sentences) — do not wait until the end. Formal verdict (if any) goes inside the JSON.";
+
+const args = process.argv.slice(2);
+const [cmd, ...rest] = args;
 
 let request;
 if (cmd === "version") {
@@ -184,16 +187,11 @@ if (cmd === "version") {
   if ((linkTaskId === undefined) !== (linkRole === undefined)) {
     fail("send: --link-task and --link-role go TOGETHER — pass both (to link on delivery) or neither (nothing is linked). No role is ever inferred.");
   }
-  // DESIGN-BACKLOG.md item 61 — same auto-fill as `report`'s ownCardId
-  // above, no new flag needed: whenever this runs inside a real card
-  // (AGENT_CANVAS_CARD_ID set), the delivered text gets a sender label
-  // automatically. Omitted (not failed) when unset — unlike `report`,
-  // `send` still works from outside a card context, just unprefixed.
+  // The bus derives the sender from this socket's authenticated peer.
   request = {
     cmd: "send",
     target,
     text: msgParts.join(" "),
-    ...(ownCardId ? { requesterId: ownCardId } : {}),
     ...(linkTaskId ? { linkTaskId } : {}),
     ...(linkRole ? { linkRole } : {}),
   };
@@ -204,34 +202,124 @@ if (cmd === "version") {
 } else if (cmd === "open") {
   const [url] = rest;
   if (!url) fail("usage: acbridge open <url>");
-  request = { cmd: "open", url, requesterId: ownCardId };
+  request = { cmd: "open", url };
 } else if (cmd === "close-card") {
   const [target, ...reasonParts] = rest;
   if (!target) fail("usage: acbridge close-card <cardId> [reason...]");
-  request = { cmd: "close_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined, requesterId: ownCardId };
+  request = { cmd: "close_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined };
 } else if (cmd === "delete-card") {
   // Pendentes #188 — reaches a card on ANY board, not just the one
   // currently loaded (close-card can't: no live UI on any other board).
   const [target, ...reasonParts] = rest;
   if (!target) fail("usage: acbridge delete-card <cardId> [reason...]");
-  request = { cmd: "delete_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined, requesterId: ownCardId };
+  request = { cmd: "delete_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined };
 } else if (cmd === "update-card-content") {
   const append = rest[0] === "--append";
   const [target, ...textParts] = append ? rest.slice(1) : rest;
   if (!target || textParts.length === 0) fail("usage: acbridge update-card-content [--append] <cardId> <text...>");
-  request = { cmd: "update_card_content", target, content: textParts.join(" "), mode: append ? "append" : "replace", requesterId: ownCardId };
+  request = { cmd: "update_card_content", target, content: textParts.join(" "), mode: append ? "append" : "replace" };
 } else if (cmd === "snapshot") {
-  if (rest.length === 0) {
-    request = { cmd: "snapshot" };
-  } else if (rest.length === 1) {
-    request = { cmd: "snapshot", target: rest[0] };
-  } else if (rest.length === 4) {
-    const [x, y, w, h] = rest.map(Number);
-    if ([x, y, w, h].some(Number.isNaN)) fail("snapshot: x/y/w/h must be numbers");
-    request = { cmd: "snapshot", rect: { x, y, w, h } };
-  } else {
-    fail("usage: acbridge snapshot [cardId | x y w h]");
+  // Flags anywhere; positionals are either empty, one cardId, or x y w h.
+  let outPath = undefined;
+  let fullPage = false;
+  let snapWidth = undefined;
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--out") {
+      if (rest[i + 1] === undefined) fail("snapshot: --out needs a path");
+      outPath = rest[++i];
+    } else if (a === "--full-page") {
+      fullPage = true;
+    } else if (a === "--width") {
+      if (rest[i + 1] === undefined) fail("snapshot: --width needs a number");
+      snapWidth = Number(rest[++i]);
+      if (Number.isNaN(snapWidth)) fail("snapshot: --width must be a number");
+    } else if (a.startsWith("--")) {
+      fail(`snapshot: unknown flag ${a}`);
+    } else {
+      positional.push(a);
+    }
   }
+  const snapExtra = {
+    ...(outPath !== undefined ? { out: outPath } : {}),
+    ...(fullPage ? { fullPage: true } : {}),
+    ...(snapWidth !== undefined ? { width: snapWidth } : {}),
+  };
+  if (positional.length === 0) {
+    request = { cmd: "snapshot", ...snapExtra };
+  } else if (positional.length === 1) {
+    request = { cmd: "snapshot", target: positional[0], ...snapExtra };
+  } else if (positional.length === 4) {
+    const [x, y, w, h] = positional.map(Number);
+    if ([x, y, w, h].some(Number.isNaN)) fail("snapshot: x/y/w/h must be numbers");
+    request = { cmd: "snapshot", rect: { x, y, w, h }, ...snapExtra };
+  } else {
+    fail("usage: acbridge snapshot [cardId | x y w h] [--out path] [--full-page] [--width N]");
+  }
+} else if (cmd === "browser-set-viewport") {
+  const reset = rest[0] === "--reset";
+  if (reset) {
+    const target = rest[1];
+    if (!target) fail("usage: acbridge browser-set-viewport --reset <cardId>");
+    request = { cmd: "browser_set_viewport", target, reset: true, requesterId: ownCardId };
+  } else {
+    const [target, wStr, hStr, ...more] = rest;
+    if (!target || wStr === undefined || hStr === undefined) {
+      fail("usage: acbridge browser-set-viewport <cardId> <width> <height> [--mobile|--desktop] [--dpr N]");
+    }
+    const width = Number(wStr);
+    const height = Number(hStr);
+    if ([width, height].some(Number.isNaN)) fail("browser-set-viewport: width/height must be numbers");
+    let mobile = undefined;
+    let deviceScaleFactor = undefined;
+    for (let i = 0; i < more.length; i++) {
+      if (more[i] === "--mobile") mobile = true;
+      else if (more[i] === "--desktop") mobile = false;
+      else if (more[i] === "--dpr") {
+        deviceScaleFactor = Number(more[++i]);
+        if (Number.isNaN(deviceScaleFactor)) fail("browser-set-viewport: --dpr must be a number");
+      } else fail(`browser-set-viewport: unknown flag ${more[i]}`);
+    }
+    request = { cmd: "browser_set_viewport", target, width, height, mobile, deviceScaleFactor, requesterId: ownCardId };
+  }
+} else if (cmd === "browser-screenshot") {
+  let outPath = undefined;
+  let fullPage = false;
+  let selector = undefined;
+  let ref = undefined;
+  let snapWidth = undefined;
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--out") {
+      if (rest[i + 1] === undefined) fail("browser-screenshot: --out needs a path");
+      outPath = rest[++i];
+    } else if (a === "--full-page") fullPage = true;
+    else if (a === "--selector") {
+      if (rest[i + 1] === undefined) fail("browser-screenshot: --selector needs a value");
+      selector = rest[++i];
+    } else if (a === "--ref") {
+      if (rest[i + 1] === undefined) fail("browser-screenshot: --ref needs a value");
+      ref = rest[++i];
+    } else if (a === "--width") {
+      snapWidth = Number(rest[++i]);
+      if (Number.isNaN(snapWidth)) fail("browser-screenshot: --width must be a number");
+    } else if (a.startsWith("--")) fail(`browser-screenshot: unknown flag ${a}`);
+    else positional.push(a);
+  }
+  const target = positional[0];
+  if (!target) fail("usage: acbridge browser-screenshot <cardId> [--out path] [--full-page|--selector S|--ref R] [--width N]");
+  request = {
+    cmd: "browser_screenshot",
+    target,
+    fullPage: fullPage || undefined,
+    selector,
+    ref,
+    out: outPath,
+    width: snapWidth,
+    requesterId: ownCardId,
+  };
 } else if (cmd === "page-text") {
   const [target] = rest;
   if (!target) fail("usage: acbridge page-text <cardId>");
@@ -275,31 +363,17 @@ if (cmd === "version") {
   if (filePath === null && textParts.length === 0) fail(usage);
   if (filePath !== null && textParts.length > 0) fail("write-sticky: pass --file or text, not both");
   const mode = append ? "append" : "replace";
-  // `requesterId` faltava aqui e está presente em `update-card-content`,
-  // que DELEGA pra este mesmo comando: sem ele o auto-conector nunca era
-  // desenhado por esta via, e `--file` não teria root nenhum contra o
-  // qual confinar o caminho (o cwd sai do card chamador).
-  const stickyBase = { cmd: "write_sticky", target, mode, ...(ownCardId ? { requesterId: ownCardId } : {}) };
-  if (filePath !== null && !ownCardId) {
-    fail("write-sticky --file: AGENT_CANVAS_CARD_ID is not set — no card root to confine the path against; pass the text inline instead");
-  }
+  const stickyBase = { cmd: "write_sticky", target, mode };
   request = filePath !== null ? { ...stickyBase, path: filePath } : { ...stickyBase, content: textParts.join(" ") };
 } else if (cmd === "card-status") {
   const [target] = rest;
   if (!target) fail("usage: acbridge card-status <cardId>");
   request = { cmd: "card_status", target };
 } else if (cmd === "turn-complete") {
-  // Prototipo (2026-09-06) — chamado por um hook `Stop` (providers.ts's
-  // buildArgs do claude, --settings efêmero), nunca por um humano/agente
-  // diretamente. Sem argumentos: `cardId` vem só do próprio
-  // AGENT_CANVAS_CARD_ID do processo que roda o hook, mesmo auto-fill de
-  // `report` acima.
-  if (!ownCardId) fail("turn-complete: AGENT_CANVAS_CARD_ID is not set — not running inside agent-canvas?");
-  request = { cmd: "turn_complete", cardId: ownCardId };
+  request = { cmd: "turn_complete" };
 } else if (cmd === "report") {
   const [json] = rest;
-  if (!json) fail("usage: acbridge report <json>");
-  if (!ownCardId) fail("report: AGENT_CANVAS_CARD_ID is not set — not running inside agent-canvas?");
+  if (!json) fail("usage: acbridge report <json>\n" + REPORT_PAYLOAD_NOTE);
   let report;
   try {
     report = JSON.parse(json);
@@ -328,7 +402,7 @@ if (cmd === "version") {
       report = rest;
     }
   }
-  request = { cmd: "report", requesterId: ownCardId, report, ...(verdict ? { verdict } : {}) };
+  request = { cmd: "report", report, ...(verdict ? { verdict } : {}) };
 } else if (cmd === "read-report") {
   const [target, waitTimeoutMsStr] = rest;
   if (!target) fail("usage: acbridge read-report <cardId> [waitTimeoutMs]");
@@ -345,7 +419,7 @@ if (cmd === "version") {
       fail("create-task: argument must be valid JSON");
     }
   }
-  request = { cmd: "create_task", ...fields, ...(ownCardId ? { requesterId: ownCardId } : {}) };
+  request = { cmd: "create_task", ...fields };
 } else if (cmd === "update-task") {
   const [taskId, json] = rest;
   if (!taskId || !json) fail("usage: acbridge update-task <taskId> <json>");
@@ -355,7 +429,7 @@ if (cmd === "version") {
   } catch {
     fail("update-task: argument must be valid JSON");
   }
-  request = { cmd: "update_task", taskId, ...fields, ...(ownCardId ? { requesterId: ownCardId } : {}) };
+  request = { cmd: "update_task", taskId, ...fields };
 } else if (cmd === "request-task-status") {
   const [taskId, status, ...reasonParts] = rest;
   if (!taskId || !status) fail("usage: acbridge request-task-status <taskId> <status> [reason...]");
@@ -364,7 +438,6 @@ if (cmd === "version") {
     taskId,
     status,
     reason: reasonParts.length > 0 ? reasonParts.join(" ") : undefined,
-    ...(ownCardId ? { requesterId: ownCardId } : {}),
   };
 } else if (cmd === "list-tasks") {
   // Same filters/projection as MCP list_tasks (list-tasks-query.ts). Flags
@@ -396,7 +469,7 @@ if (cmd === "version") {
       view = rest[++i];
       if (view !== "summary" && view !== "full") fail('usage: acbridge list-tasks --view summary|full');
     } else {
-      fail(`${USAGE}\n${BASH_CARD_NOTE}`);
+      fail(`${USAGE}\n${BASH_CARD_NOTE}\n${REPORT_PAYLOAD_NOTE}`);
     }
   }
   request = { cmd: "list_tasks", boardId, status, since, hasCard, view };
@@ -411,7 +484,7 @@ if (cmd === "version") {
   // normalizado aqui.
   const [taskId, cardId, role] = rest;
   if (!taskId || !cardId) fail("usage: acbridge link-task-card <taskId> <cardId> [implementer|reviewer]");
-  request = { cmd: "link_task_card", taskId, cardId, role, requesterId: ownCardId };
+  request = { cmd: "link_task_card", taskId, cardId, role };
 } else if (cmd === "list-connectors") {
   request = { cmd: "list_connectors" };
 } else if (cmd === "set-connector-kind") {
@@ -421,7 +494,7 @@ if (cmd === "version") {
   // chamador identificado desde que `spawned` decide o roteamento do push
   // de report; ver connector-kind-authorization.ts. Mesma fonte que todo
   // outro cmd mutante daqui já usa.
-  request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr, requesterId: ownCardId };
+  request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr };
 } else if (cmd === "set-connector-label") {
   // Espelha set-connector-kind acima (mesmo trio uso/parse/saída), com uma
   // diferença: `kind` é enum de 1 palavra, `label` é texto livre — junta o
@@ -504,25 +577,32 @@ if (cmd === "version") {
     fail(
       "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] [--reason <text>] [--idempotency-key <key>]",
     );
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, isolation, reason, idempotencyKey, requesterId: ownCardId };
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, isolation, reason, idempotencyKey };
 } else if (cmd === "spawn-card") {
   // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
   // optional trailing flags, stripped out before the positional kind/
   // cwdOrUrl below so existing callers (no flags) parse identically to
-  // before.
+  // before. `--reason` is required by the bus when this CLI runs from a
+  // card (same gate as spawn-agent); `--persistent` is browser-only
+  // (persist: partition for Push API / durable cookies).
   const positional = [];
-  let anchorCardId, side;
+  let anchorCardId, side, reason, persistent;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--anchor") anchorCardId = rest[++i];
     else if (rest[i] === "--side") side = rest[++i];
+    else if (rest[i] === "--reason") reason = rest[++i];
+    else if (rest[i] === "--persistent") persistent = true;
     else positional.push(rest[i]);
   }
   const [kind, cwdOrUrl] = positional;
-  if (!kind) fail("usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>]");
+  if (!kind)
+    fail(
+      "usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] [--reason <text>] [--persistent]",
+    );
   request =
     kind === "browser"
-      ? { cmd: "spawn_card", kind, url: cwdOrUrl, requesterId: ownCardId, anchorCardId, side }
-      : { cmd: "spawn_card", kind, cwd: cwdOrUrl, requesterId: ownCardId, anchorCardId, side };
+      ? { cmd: "spawn_card", kind, url: cwdOrUrl, anchorCardId, side, reason, persistent }
+      : { cmd: "spawn_card", kind, cwd: cwdOrUrl, anchorCardId, side, reason };
 } else if (cmd === "browser-click") {
   // Selector-only via the CLI (unlike the MCP `browser_click` tool,
   // which also takes raw x/y) — a human/script typing this by hand has
@@ -584,7 +664,7 @@ if (cmd === "version") {
   }
   const [target, url] = positional;
   if (!target || !url) fail("usage: acbridge browser-navigate <cardId> <path|url> [--expect <selector>]");
-  request = { cmd: "browser_navigate", target, url, expectSelector, requesterId: ownCardId };
+  request = { cmd: "browser_navigate", target, url, expectSelector };
 } else if (cmd === "browser-eval") {
   const [target, ...jsParts] = rest;
   // `--timeout <ms>` como primeiros pedaços: limite próprio do eval (paridade
@@ -624,19 +704,18 @@ if (cmd === "version") {
     cwd: process.cwd(),
     scope,
     timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
-    // NÃO manda taskId: `ownTaskId` do env pode estar velho (um shell aninhado
-    // herda o de outro card) e o bus recusaria a chamada inteira por "no such
-    // task". O holder é derivado do VÍNCULO do card no bus, que é o dono da
-    // verdade.
-    requesterId: ownCardId,
+    // The bus derives the card and task holder from the authenticated peer.
   };
 } else {
-  fail(`${USAGE}\n${BASH_CARD_NOTE}`);
+  fail(`${USAGE}\n${BASH_CARD_NOTE}\n${REPORT_PAYLOAD_NOTE}`);
 }
 
 // Carimbo em TODO request, num lugar só — nenhum ramo acima precisa
 // lembrar. O bus tira a chave antes do dispatch.
-request = { ...request, protocol: ACBRIDGE_PROTOCOL };
+request = {
+  ...request,
+  protocol: ACBRIDGE_PROTOCOL,
+};
 
 /** Uma conexão de ida-e-volta (uma linha de request, uma de resposta). */
 function sendOnce(req) {
@@ -725,7 +804,7 @@ async function main() {
     // terminais, então o tipo do card passa a ser a informação que decide
     // o que dá pra fazer com ele, e o rótulo é um alvo válido em qualquer
     // comando que aceita <cardId>.
-    const others = (res.cards ?? []).filter((c) => c.id !== ownCardId);
+    const others = res.cards ?? [];
     if (others.length === 0) console.log("(no other cards open)");
     else for (const c of others) console.log([c.id, c.kind ?? "terminal", c.label ?? "-", c.provider ?? "", c.url ?? c.cwd ?? ""].join("\t"));
   } else if (cmd === "send") {
@@ -743,10 +822,12 @@ async function main() {
     console.log(res.cardId ? `opened: ${rest[0]}\t${res.cardId}` : `opened: ${rest[0]}`);
   } else if (cmd === "close-card" || cmd === "delete-card") {
     console.log(`${cmd === "delete-card" ? "deleted" : "closed"}: ${rest[0]}`);
-  } else if (cmd === "snapshot") {
+  } else if (cmd === "snapshot" || cmd === "browser-screenshot") {
     // Just the path, nothing else — meant to be read directly (Claude
     // Code's own Read tool renders an image path), not parsed.
     console.log(res.path);
+  } else if (cmd === "browser-set-viewport") {
+    console.log(JSON.stringify(res));
   } else if (cmd === "page-text") {
     console.log(res.text);
     if (res.truncated) process.stderr.write("acbridge: page text truncated\n");

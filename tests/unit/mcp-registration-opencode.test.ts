@@ -1,32 +1,23 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { interpolatedMcpUrl, registerDeclaredProvider } from "../../src/main/mcp-registration";
+import { join } from "node:path";
+import { registerDeclaredProvider } from "../../src/main/mcp-registration";
 import { loadDynamicProviders } from "../../src/main/providers-dynamic";
 
 /**
- * Task 7d3be060 — A IGUALDADE DA ENTRADA MCP DO OPENCODE, PROVADA.
- *
- * Até a migração, `registerOpencode` escrevia À MÃO
- * `{ type: "remote", url }` em `~/.config/opencode/opencode.json` (chave `mcp`),
- * com a sintaxe `{env:}` — a MEDIDA: com `${env:}` o opencode recusa com
- * "Invalid MCP URL". A função foi removida; o caminho DECLARADO
- * (`serverShape: "remote-url"` + `urlSyntax: "brace-env"`) tem de produzir a
- * MESMA entrada. Antes disto a igualdade era por INSPEÇÃO; aqui é asserção.
+ * OpenCode MCP registration after peer-identity migration: stdio local
+ * command (stellar-mcp shim), never a remote URL with ?card=.
  */
 
 const SHIM = "/x/stellar-mcp";
-/** O literal HISTÓRICO do escritor à mão: nenhum `command`, `type:"remote"`. */
-const OC_URL = "{env:AGENT_CANVAS_MCP_URL}?card={env:AGENT_CANVAS_CARD_ID}";
 
-describe("opencode: a entrada MCP pelo caminho DECLARADO é a mesma do escritor à mão", () => {
+describe("opencode: declared MCP entry is local stdio (peer identity)", () => {
   let home: string;
   let file: string;
   const previousHome = process.env.AGENT_CANVAS_REGISTRATION_HOME;
 
   beforeAll(() => {
-    // O opencode é um provider GENÉRICO agora: sem o registro, não há declaração.
     loadDynamicProviders(mkdtempSync(join(tmpdir(), "stellar-oc-dyn-")));
   });
 
@@ -43,23 +34,13 @@ describe("opencode: a entrada MCP pelo caminho DECLARADO é a mesma do escritor 
     else process.env.AGENT_CANVAS_REGISTRATION_HOME = previousHome;
   }
 
-  it("brace-env produz a URL que a CLI aceita (a sintaxe MEDIDA do opencode)", () => {
-    expect(interpolatedMcpUrl("brace-env")).toBe(OC_URL);
-    // O controle: a OUTRA sintaxe é justamente a que a CLI recusa.
-    expect(interpolatedMcpUrl("dollar-env")).not.toBe(OC_URL);
-  });
-
-  it("a entrada é { type: 'remote', url } — IDÊNTICA, e sem `command` nenhum", () => {
+  it("a entrada é { type: 'local', command: [shim], enabled: true }", () => {
     setup();
     try {
-      const handwritten = { type: "remote", url: interpolatedMcpUrl("brace-env") };
       expect(registerDeclaredProvider("opencode", SHIM)).toEqual({ status: "ok", changed: true });
       const entry = read().mcp.stellar;
-      expect(entry).toEqual(handwritten); // igualdade com o literal do escritor à mão
-      expect(entry).toEqual({ type: "remote", url: OC_URL });
-      expect(entry.command).toBeUndefined(); // zero-processo: nenhum shim
-      expect(entry.enabled).toBeUndefined();
-      expect(Object.keys(entry).sort()).toEqual(["type", "url"]);
+      expect(entry).toEqual({ type: "local", command: [SHIM], enabled: true });
+      expect(entry.url).toBeUndefined();
     } finally {
       restore();
     }

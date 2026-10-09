@@ -32,6 +32,7 @@ function evidence(over: Partial<DiffCaptureEvidence> = {}): DiffCaptureEvidence 
     filesTruncated: false,
     total: 0,
     outsideTerritory: 0,
+    territoryDeclared: true,
     note: "o app observa MUDANÇA, nunca AUTORIA: a árvore é compartilhada.",
     ...over,
   };

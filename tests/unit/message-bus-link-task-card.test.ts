@@ -39,6 +39,7 @@ function task(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: "impl",
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -99,7 +100,8 @@ describe("message-bus: link_task_card", () => {
     const existing = opts.existing === undefined ? task() : (opts.existing ?? undefined);
     const openCards: CardStub[] =
       opts.openCards ??
-      ["impl", "rev"].map((id) => ({ id, kind: "terminal", provider: "claude", cwd: "", label: null }));
+      ["impl", "rev"].map((id) => ({ id, kind: "terminal", provider: "claude", cwd: "",
+ label: null }));
     const upserted: TaskRow[] = [];
     const linked: Array<{ taskId: string; cardId: string; role: string }> = [];
     const reserved: Array<{ taskId: string; cardId: string }> = [];
@@ -292,7 +294,8 @@ describe("message-bus: link_task_card", () => {
     const writes: Array<[string, string]> = [];
     const { res, linked } = await run(
       { taskId: "t-link", cardId: "c-chat", role: "reviewer" },
-      { openCards: [{ id: "c-chat", kind: "chat", provider: "", cwd: "", label: null }], writes },
+      { openCards: [{ id: "c-chat", kind: "chat", provider: "", cwd: "",
+ label: null }], writes },
     );
     await flushDelivery();
 

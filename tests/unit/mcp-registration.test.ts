@@ -31,6 +31,8 @@ import { PROVIDERS } from "../../src/main/providers";
 // `AGENT_CANVAS_REGISTRATION_HOME` redireciona `~` para o `~/.cursor/mcp.json`
 // real nunca ser tocado por um teste.
 
+const SHIM = "/opt/Stellar/resources/bin/stellar-mcp";
+
 describe("mcp-registration: registerCursor idempotency (two directions)", () => {
   let home: string;
   let file: string;
@@ -52,18 +54,19 @@ describe("mcp-registration: registerCursor idempotency (two directions)", () => 
     return JSON.parse(readFileSync(file, "utf8"));
   }
 
-  it("entry shape: remote url interpolado do ambiente do card — nenhum comando, nenhum processo", () => {
-    expect(cursorServerEntry()).toEqual({
-      url: "${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}",
+  it("entry shape: stdio shim receives only relay connection settings, never a card id", () => {
+    expect(cursorServerEntry(SHIM)).toEqual({
+      command: SHIM,
+      env: { AGENT_CANVAS_MCP_URL: "${env:AGENT_CANVAS_MCP_URL}", AGENT_CANVAS_NODE: "${env:AGENT_CANVAS_NODE}" },
     });
   });
 
   it("no file → writes the current entry (changed: true)", () => {
-    expect(registerCursor()).toEqual({ status: "ok", changed: true });
-    expect(read().mcpServers.stellar).toEqual(cursorServerEntry());
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
+    expect(read().mcpServers.stellar).toEqual(cursorServerEntry(SHIM));
   });
 
-  it("old stdio entry (command + env, pre-2026-10-01) → rewritten to remote url (changed: true)", () => {
+  it("old URL entry → rewritten to authenticated stdio shim (changed: true)", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
     writeFileSync(
       file,
@@ -76,26 +79,26 @@ describe("mcp-registration: registerCursor idempotency (two directions)", () => 
         },
       }),
     );
-    expect(registerCursor()).toEqual({ status: "ok", changed: true });
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
     // `command`/`env` da entrada antiga somem — deixá-los seria ambíguo.
-    expect(read().mcpServers.stellar).toEqual(cursorServerEntry());
+    expect(read().mcpServers.stellar).toEqual(cursorServerEntry(SHIM));
   });
 
   it("current entry → not rewritten (changed: false), byte-identical file", () => {
-    expect(registerCursor().changed).toBe(true);
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
     const before = readFileSync(file, "utf8");
-    expect(registerCursor()).toEqual({ status: "ok", changed: false });
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: false });
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
-  it("entry with a wrong url (literal, not interpolated) → rewritten", () => {
+  it("entry with a wrong command → rewritten", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
     writeFileSync(
       file,
       JSON.stringify({ mcpServers: { stellar: { url: "http://127.0.0.1:1234/mcp?card=x" } } }),
     );
-    expect(registerCursor()).toEqual({ status: "ok", changed: true });
-    expect(read().mcpServers.stellar).toEqual(cursorServerEntry());
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
+    expect(read().mcpServers.stellar).toEqual(cursorServerEntry(SHIM));
   });
 
   it("preserves other servers, other top-level keys, and user-added keys on our entry", () => {
@@ -110,22 +113,22 @@ describe("mcp-registration: registerCursor idempotency (two directions)", () => 
         },
       }),
     );
-    expect(registerCursor().changed).toBe(true);
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
     const cfg = read() as Record<string, unknown> & { mcpServers: Record<string, Record<string, unknown>> };
     expect(cfg.somethingElse).toBe(true);
     // Outro servidor REMOTO (que já era url) fica intacto.
     expect(cfg.mcpServers.other).toEqual({ url: "http://example.invalid/mcp" });
-    // `disabled` (chave do usuário) sobrevive; `command`/`env` saem.
-    expect(cfg.mcpServers.stellar).toEqual({ ...cursorServerEntry(), disabled: false });
+    // User-added `disabled` and environment keys survive; the Stellar shim fields are refreshed.
+    expect(cfg.mcpServers.stellar).toEqual({ ...cursorServerEntry(SHIM), env: { ...cursorServerEntry(SHIM).env, USER_EXTRA: "1" }, disabled: false });
     // E as chaves do usuário não fazem o próximo run achar que mudou.
-    expect(registerCursor()).toEqual({ status: "ok", changed: false });
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: false });
   });
 
   it("corrupted file → treated as absent, entry written", () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
     writeFileSync(file, "{ not json");
-    expect(registerCursor()).toEqual({ status: "ok", changed: true });
-    expect(read().mcpServers.stellar).toEqual(cursorServerEntry());
+    expect(registerCursor(SHIM)).toEqual({ status: "ok", changed: true });
+    expect(read().mcpServers.stellar).toEqual(cursorServerEntry(SHIM));
   });
 });
 
@@ -151,14 +154,15 @@ describe("RODADA 4 — a sintaxe de interpolação é DECLARADA por provider, n�
     expect(interpolatedMcpUrl("brace-env")).toBe(OC_URL);
   });
 
-  it("declaredUrlSyntax lê a DECLARAÇÃO: cursor=dollar, opencode=brace, desconhecido=dollar (conservador)", () => {
+  it("declaredUrlSyntax lê a DECLARAÇÃO: cursor=dollar; opencode local-array tem fallback conservador", () => {
     expect(declaredUrlSyntax("cursor")).toBe("dollar-env");
-    expect(declaredUrlSyntax("opencode")).toBe("brace-env");
+    // OpenCode no longer declares a remote URL — peer identity uses stdio local-array.
+    expect(declaredUrlSyntax("opencode")).toBe("dollar-env");
     expect(declaredUrlSyntax("no-such-provider")).toBe("dollar-env");
   });
 });
 
-describe("RODADA 4 — opencode vira servidor REMOTO (zero processo por card)", () => {
+describe("RODADA 4 — opencode usa servidor local stdio (peer identity)", () => {
   let home: string;
   let file: string;
   const previousHome = process.env.AGENT_CANVAS_REGISTRATION_HOME;
@@ -181,13 +185,13 @@ describe("RODADA 4 — opencode vira servidor REMOTO (zero processo por card)", 
 
   // Task 7d3be060 — o opencode virou provider GENÉRICO: NÃO existe mais
   // `REGISTRARS.opencode`. Quem escreve é o caminho DECLARADO
-  // (`registerDeclaredProvider` + `serverShape: "remote-url"`), e a entrada
+  // (`registerDeclaredProvider` + `serverShape: "local-array"`), e a entrada
   // produzida é a MESMA. Os dois testes abaixo passaram a exercitar esse
   // caminho — a garantia (zero-processo, `{type:"remote"}`, nenhum comando)
   // continua a mesma; mudou QUEM a emite.
-  it("escreve {type:'remote', url:<brace-env>} — a sintaxe MEDIDA do opencode, e NENHUM comando", () => {
+  it("escreve a entrada stdio declarada do opencode", () => {
     expect(registerDeclaredProvider("opencode", "/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
-    expect(read().mcp.stellar).toEqual({ type: "remote", url: OC_URL });
+    expect(read().mcp.stellar).toEqual({ type: "local", command: ["/x/stellar-mcp"], enabled: true });
   });
 
   it("idempotente na entrada remota; a entrada stdio antiga ({type:'local'}) é reescrita", () => {
@@ -199,7 +203,7 @@ describe("RODADA 4 — opencode vira servidor REMOTO (zero processo por card)", 
       JSON.stringify({ mcp: { stellar: { type: "local", command: ["/old/stellar-mcp"], enabled: true } } }),
     );
     expect(registerDeclaredProvider("opencode", "/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
-    expect(read().mcp.stellar).toEqual({ type: "remote", url: OC_URL });
+    expect(read().mcp.stellar).toEqual({ type: "local", command: ["/x/stellar-mcp"], enabled: true });
   });
 });
 

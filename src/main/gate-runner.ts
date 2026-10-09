@@ -96,7 +96,7 @@
 import { spawn, execFile, type SpawnOptions } from "node:child_process";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join, resolve, sep } from "node:path";
 import { effectivePath } from "./user-env";
 import { buildSandboxedBashArgs, findSandboxBinary } from "./sandbox";
 import { describeTaskCwdOutsideRootExecution, isPathInsideRoot } from "./task-dispatch-decision";
@@ -109,7 +109,14 @@ import {
   type DeclaredFiles,
   type GateIsolationDispute,
 } from "./gate-isolation-decision";
-import { prepareGateIsolation, teardownGateIsolation, type GateIsolationMount, type GateIsolationPrep } from "./gate-isolation";
+import {
+  findNestedRepositoriesForPaths,
+  prepareGateIsolation,
+  teardownGateIsolation,
+  type GateIsolationMount,
+  type GateIsolationPrep,
+} from "./gate-isolation";
+import { loadCatalogFromCwd } from "./workspace-catalog";
 import {
   systemGateToolPathProbes,
   validateGateToolPaths,
@@ -190,6 +197,7 @@ export function withRepoGateLock<T>(key: string, fn: () => Promise<T>, holder: G
 export type GateFailureKind =
   | "ok"
   | "test-failed"
+  | "gate_env_error"
   | "command-not-found"
   | "not-executable"
   | "timeout"
@@ -254,11 +262,22 @@ export type GateRunEvidence = {
    */
   isolation?: GateIsolationEvidence;
   /**
-   * The board-declared tool directories this run considered: the ones mounted
-   * read-only, and the ones refused with a reason. Absent when the board
-   * declared none.
+   * The board root, catalog workspace, and additional gate-tool paths this
+   * run considered: the ones mounted read-only, and the ones refused with a
+   * reason.
    */
   gateToolPaths?: GateToolPathEvidence;
+  /**
+   * Path attribution of a red run: `task_failed` vs `gate_inconclusive` vs
+   * `gate_env_error`. Stamped by the bus after measurement (pure classify in
+   * `gate-notice-decision.ts`). Absent on old rows.
+   */
+  attribution?: {
+    class: "ok" | "task_failed" | "gate_inconclusive" | "gate_env_error";
+    reason: string | null;
+    errorPaths: string[];
+    perGate: string;
+  };
 };
 
 /** Spawn SEM shell no host: o comando de um gate só vira argv de
@@ -319,6 +338,13 @@ export type RunTaskGatesInput = {
    * "in progress" state.
    */
   onProgress?: (progress: GateProgress | null) => void;
+  /**
+   * Server-assigned report `seq` that triggered this run. One evaluation per
+   * seq: a second call with the same seq returns the cached promise/result
+   * and never re-runs the suite (measured: duplicate contradiction notices
+   * on the same report).
+   */
+  reportSeq?: number | null;
 };
 
 /** LIVE state of a gate run, per task. It never reaches the database: what
@@ -342,21 +368,55 @@ export function gateProgressForTask(taskId: string): GateProgress | null {
 }
 
 const inFlightRuns = new Map<string, Promise<GateRunEvidence>>();
+/**
+ * Completed evaluations keyed by `taskId:reportSeq` — never re-fire the same
+ * report for the same task. Seq alone is wrong: unit tests reseed the report
+ * counter per store, and a bare-seq cache handed a later task the previous
+ * task's green evidence (measured: message-bus-gate-evidence ok:true on a
+ * failing gate).
+ */
+const completedByReportSeq = new Map<string, GateRunEvidence>();
+
+function reportEvalKey(taskId: string, reportSeq: number): string {
+  return `${taskId}:${reportSeq}`;
+}
+
+function runFlightKey(input: RunTaskGatesInput): string {
+  return input.reportSeq != null ? `seq:${reportEvalKey(input.taskId, input.reportSeq)}` : `task:${input.taskId}`;
+}
 
 /**
  * Roda os gates declarados de uma task, serializados contra o mesmo
- * repositório. Se já existe uma execução em voo para a MESMA task,
- * devolve a mesma promessa (um agente que reporta duas vezes não
- * enfileira a suíte duas vezes).
+ * repositório. With `reportSeq`, a second call for the SAME task+seq returns
+ * the cached evidence and does not re-run. Without seq, concurrent calls for
+ * the same task still share one in-flight promise.
  */
 export function runTaskGates(input: RunTaskGatesInput): Promise<GateRunEvidence> {
-  const existing = inFlightRuns.get(input.taskId);
+  if (input.reportSeq != null) {
+    const done = completedByReportSeq.get(reportEvalKey(input.taskId, input.reportSeq));
+    if (done) return Promise.resolve(done);
+  }
+  const key = runFlightKey(input);
+  const existing = inFlightRuns.get(key);
   if (existing) return existing;
-  const run = execute(input).finally(() => {
-    inFlightRuns.delete(input.taskId);
-  });
-  inFlightRuns.set(input.taskId, run);
+  const run = execute(input)
+    .then((evidence) => {
+      if (input.reportSeq != null) {
+        completedByReportSeq.set(reportEvalKey(input.taskId, input.reportSeq), evidence);
+      }
+      return evidence;
+    })
+    .finally(() => {
+      inFlightRuns.delete(key);
+    });
+  inFlightRuns.set(key, run);
   return run;
+}
+
+/** Test seam — clears seq/task flight caches between cases. */
+export function resetGateRunCachesForTests(): void {
+  inFlightRuns.clear();
+  completedByReportSeq.clear();
 }
 
 /** AGENT-FACING — DO NOT TRANSLATE. Recusa visível quando não há bubblewrap:
@@ -416,16 +476,68 @@ function refusalEvidence(command: string, reason: string): GateCommandEvidence {
 export function classifyGateFailure(input: {
   exitCode: number | null;
   timedOut: boolean;
+  command?: string;
+  stdout?: string;
+  stderr?: string;
+  sandboxed?: boolean;
   /** true quando o comando sequer foi tentado (recusa por sandbox/raiz/cwd). */
   notRun?: boolean;
 }): GateFailureKind {
   if (input.notRun) return "not-run";
   if (input.timedOut) return "timeout";
   if (input.exitCode === null) return "not-run";
+  const output = `${input.stdout ?? ""}\n${input.stderr ?? ""}`;
+  if (hasTestFailureSignal(output)) return "test-failed";
   if (input.exitCode === 0) return "ok";
+  if (hasGateEnvironmentFailure({ ...input, output })) return "gate_env_error";
   if (input.exitCode === 127) return "command-not-found";
   if (input.exitCode === 126) return "not-executable";
   return "test-failed";
+}
+
+function hasTestFailureSignal(output: string): boolean {
+  return (
+    /^\s*FAIL(?:ED)?\b/im.test(output) ||
+    /^\s*FAILED\b/im.test(output) ||
+    /^\s*--- FAIL:/m.test(output) ||
+    /^\s*\d+\s+failed\b/im.test(output) ||
+    /\bTests?:\s*\d+\s+failed\b/i.test(output) ||
+    /\bTests?\s+\d+\s+failed\b/i.test(output) ||
+    /\bAssertionError\b/i.test(output)
+  );
+}
+
+function hasGateEnvironmentFailure(input: {
+  command?: string;
+  output: string;
+  sandboxed?: boolean;
+}): boolean {
+  const missingPath =
+    /(?:No such file or directory|File or directory does not exist|Arquivo ou diretório inexistente|can't open file|ENOENT)/i;
+  const executable = extractExecutable(input.command ?? "")?.split(/[\\/]/).pop();
+  const shellDiagnostic = input.output.split(/\r?\n/).some((line) => {
+    if (!missingPath.test(line)) return false;
+    if (/^\s*(?:bash|sh|cd|env):/i.test(line)) return true;
+    if (/^\s*python(?:3(?:\.\d+)?)?:\s+can't open file/i.test(line)) return true;
+    const normalizedLine = line.trimStart().toLowerCase();
+    const normalizedExecutable = executable?.toLowerCase();
+    return (
+      normalizedExecutable !== undefined &&
+      (normalizedLine.startsWith(`${normalizedExecutable}:`) || normalizedLine.startsWith(`${normalizedExecutable} `))
+    );
+  });
+  if (shellDiagnostic) return true;
+
+  const browserRunner = /\b(?:playwright|lhci|lighthouse|browserType\.launch)\b/i.test(
+    `${input.command ?? ""}\n${input.output}`,
+  );
+  const missingBrowser =
+    /(?:Chrome installation not found|(?:chrome|chromium|firefox|webkit) (?:installation|executable) not found|executable (?:doesn't|does not) exist|executable not found|browser executable not found)/i.test(
+      input.output,
+    );
+  if (browserRunner && missingBrowser) return true;
+
+  return input.sandboxed === true && /Read-only file system/i.test(input.output);
 }
 
 /** O 1º executável do PRIMEIRO comando de um encadeamento shell — pulando
@@ -727,8 +839,8 @@ export type GateIsolationEvidence = {
   note: string;
 };
 
-/** The board-declared tool directories for this run: mounted read-only, and
- * refused with a reason. See `gate-tool-paths.ts`. */
+/** Approved external paths for this run: mounted read-only, or refused with
+ * a reason. See `gate-tool-paths.ts`. */
 export type GateToolPathEvidence = {
   accepted: string[];
   rejected: GateToolPathRefusal[];
@@ -870,17 +982,27 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
   const pathValue = input.pathValue ?? effectivePath();
   const env = { ...process.env, PATH: pathValue };
+  const declaredRoot =
+    typeof input.declaredRoot === "string" && input.declaredRoot.trim().length > 0 ? input.declaredRoot : null;
   // Resolvido UMA vez por run: o binário que confina todos os comandos (o
   // mesmo que a tool `bash` do chat usa). Sem ele, NADA roda — ver abaixo.
   const sandboxBinary = input.sandboxBinary !== undefined ? input.sandboxBinary : findSandboxBinary();
 
-  // BOARD-DECLARED TOOL PATHS: a tool shared by the repositories of a
-  // workspace is invisible under bwrap's `--tmpfs $HOME` unless the board
-  // declares it. Validation is pure and only ever accepts specific, existing,
-  // absolute directories; the accepted ones are mounted READ-ONLY below, the
-  // refused ones are reported in the evidence instead of being mounted.
-  const toolPathValidation = validateGateToolPaths(input.gateToolPaths ?? null, systemGateToolPathProbes());
-  const toolBinds: GateIsolationMount[] = toolPathValidation.accepted.map((p) => ({ src: p, dest: p, ro: true }));
+  // The sandbox hides HOME and /tmp. Re-expose the board's declared root and
+  // the workspace root named by ai/workspace.yaml as read-only paths, alongside
+  // any additional board-declared gate tools.
+  const catalog = declaredRoot ? await loadCatalogFromCwd(requestedCwd) : null;
+  const workspaceRoot =
+    catalog && !("error" in catalog) && declaredRoot && isPathInsideRoot(declaredRoot, catalog.workspaceRoot)
+      ? catalog.workspaceRoot
+      : null;
+  const approvedGatePaths = [workspaceRoot, declaredRoot, ...(input.gateToolPaths ?? [])].filter(
+    (path): path is string => typeof path === "string" && path.length > 0,
+  );
+  const toolPathValidation = validateGateToolPaths(approvedGatePaths, systemGateToolPathProbes());
+  const toolBinds: GateIsolationMount[] = [...toolPathValidation.accepted]
+    .sort((a, b) => a.split(sep).length - b.split(sep).length)
+    .map((p) => ({ src: p, dest: p, ro: true }));
 
   // HOLDER (task ff24b36d) — quem segura o lock, para a Fila e para o aviso de
   // fila do `gate-lock`. Nomeia a TASK (id curto) e o card implementer.
@@ -895,8 +1017,6 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   // `cwd` DECIDE ONDE. Um caminho fora da raiz declarada do board é recusa
   // POR COMANDO, pela mesma razão do sandbox: a evidência diz qual comando
   // deixou de rodar, em vez de rodá-lo em outro lugar.
-  const declaredRoot =
-    typeof input.declaredRoot === "string" && input.declaredRoot.trim().length > 0 ? input.declaredRoot : null;
   let refusalReason: string | null = null;
   if (declaredRoot === null) {
     // SEM RAIZ DECLARADA NÃO SE EXECUTA (decisão do dono, 2026-09-21): raiz
@@ -927,6 +1047,20 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   // when there is isolation to do — never for a `shared`, which uses no set.
   let decision = baseDecision;
   if (baseDecision.mode === "isolated" && gitRoot) {
+    const nestedRepositories = await findNestedRepositoriesForPaths({
+      sourceRoot: gitRoot,
+      paths: [...baseDecision.files, ...(input.territory ?? [])],
+    });
+    if (nestedRepositories.length > 0) {
+      decision = decideGateIsolation({
+        cardId: input.cardId ?? null,
+        declared: input.declaredFiles ?? null,
+        gitRoot,
+        nestedRepositories,
+      });
+    }
+  }
+  if (decision.mode === "isolated" && gitRoot) {
     const declaredTerritory = input.territory ?? [];
     if (declaredTerritory.length > 0) {
       const dirty = await listDirtyPaths(gitRoot, input.gitFn);
@@ -1014,7 +1148,7 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     } else {
       const sandbox = sandboxBinary;
       // Mounts the sandbox needs beyond the re-bound root: the isolation
-      // `node_modules` (RW) and the board's tool directories (READ-ONLY). Both
+      // `node_modules` (RW) and approved board/workspace paths (READ-ONLY). Both
       // kinds are emitted after `--tmpfs $HOME` in `buildSandboxedBashArgs`,
       // the only position that re-exposes a path under `$HOME`.
       const isolationMounts: readonly GateIsolationMount[] = prepared && prepared.ok ? prepared.mounts : [];
@@ -1089,7 +1223,7 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     window: labelGateWindow(capturedDiff, ok),
     // The tree the gates were measured in.
     isolation,
-    // The board-declared tool directories: accepted (read-only) and refused.
+    // Approved external paths: mounted (read-only) or refused.
     gateToolPaths: toolPathValidation,
   };
 }
@@ -1141,7 +1275,14 @@ function runOne(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const failureKind = classifyGateFailure({ exitCode, timedOut });
+      const failureKind = classifyGateFailure({
+        exitCode,
+        timedOut,
+        command: ranCommand,
+        stdout: out.toString(),
+        stderr: err.toString(),
+        sandboxed: true,
+      });
       done({
         command: declaredCommand,
         normalizedCommand: ranCommand === declaredCommand ? null : ranCommand,

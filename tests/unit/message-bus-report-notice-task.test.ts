@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
-import { REPORT_AVAILABLE_POINTER_BODY } from "../../src/main/agent-facing-authorship";
 
 /**
  * The report notice names the task the REPORT declared; with no declaration it
@@ -73,7 +72,7 @@ describe("message-bus: report notice names the declared / active task", () => {
 
   async function reportLines(written: Array<[string, string]>): Promise<string[]> {
     await new Promise((r) => setTimeout(r, 400));
-    return written.filter(([, d]) => d.includes(REPORT_AVAILABLE_POINTER_BODY)).map(([, d]) => d);
+    return written.filter(([, d]) => d.includes("report available")).map(([, d]) => d);
   }
 
   it("a report that DECLARES task B is announced as B, not the older A", async () => {

@@ -136,11 +136,21 @@ export const NON_TEXT_INPUT_TYPES = [
  * Corpo que roda DENTRO da página: descreve o alvo (o elemento do seletor, ou
  * o que está focado quando não há seletor) para a decisão acima.
  */
-export function typeTargetFactsSource(selector: string | null): string {
+export function typeTargetFactsSource(selector: string | null, frameSelector: string | null = null): string {
   const sel = selector === null ? "null" : JSON.stringify(selector);
+  const frameJson = frameSelector === null ? "null" : JSON.stringify(frameSelector);
   return `(() => {
     const sel = ${sel};
-    const el = sel === null ? document.activeElement : document.querySelector(sel);
+    const frameSel = ${frameJson};
+    let root = document;
+    let viewDoc = document;
+    if (frameSel) {
+      const frame = document.querySelector(frameSel);
+      if (!frame || !frame.contentDocument) return { __noMatch: true };
+      root = frame.contentDocument;
+      viewDoc = frame.contentDocument;
+    }
+    const el = sel === null ? viewDoc.activeElement : root.querySelector(sel);
     if (!el) return { __noMatch: true };
     const tag = String(el.tagName || "").toLowerCase();
     const type = tag === "input" ? String(el.type || "text").toLowerCase() : null;
@@ -155,7 +165,7 @@ export function typeTargetFactsSource(selector: string | null): string {
         editable: editable,
         readOnly: Boolean(el.readOnly),
         disabled: Boolean(el.disabled),
-        focused: document.activeElement === el,
+        focused: viewDoc.activeElement === el,
       },
     };
   })()`;
@@ -177,11 +187,23 @@ export function typeTargetFactsSource(selector: string | null): string {
  * `input`/`textarea` usa `setSelectionRange`; para `contenteditable`, um
  * `Range` sobre o conteúdo.
  */
-export function typeSelectContentSource(selector: string | null): string {
+export function typeSelectContentSource(selector: string | null, frameSelector: string | null = null): string {
   const sel = selector === null ? "null" : JSON.stringify(selector);
+  const frameJson = frameSelector === null ? "null" : JSON.stringify(frameSelector);
   return `(() => {
     const sel = ${sel};
-    const el = sel === null ? document.activeElement : document.querySelector(sel);
+    const frameSel = ${frameJson};
+    let root = document;
+    let viewDoc = document;
+    let view = window;
+    if (frameSel) {
+      const frame = document.querySelector(frameSel);
+      if (!frame || !frame.contentDocument) return { __noMatch: true };
+      root = frame.contentDocument;
+      viewDoc = frame.contentDocument;
+      view = frame.contentWindow || window;
+    }
+    const el = sel === null ? viewDoc.activeElement : root.querySelector(sel);
     if (!el) return { __noMatch: true };
     if (typeof el.focus === "function") el.focus();
     const tag = String(el.tagName || "").toLowerCase();
@@ -192,9 +214,9 @@ export function typeSelectContentSource(selector: string | null): string {
         return { __value: { selected: len } };
       }
       if (el.isContentEditable === true) {
-        const range = document.createRange();
+        const range = viewDoc.createRange();
         range.selectNodeContents(el);
-        const selection = window.getSelection();
+        const selection = view.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
         return { __value: { selected: String(selection.toString() || "").length } };

@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { runTaskGates } from "../../src/main/gate-runner";
 import { findSandboxBinary } from "../../src/main/sandbox";
 
@@ -18,6 +19,7 @@ import { findSandboxBinary } from "../../src/main/sandbox";
  */
 
 const BWRAP = findSandboxBinary();
+const execFileAsync = promisify(execFile);
 const GIT_AVAILABLE = (() => {
   try {
     execFileSync("git", ["--version"], { stdio: "ignore" });
@@ -67,25 +69,27 @@ describe("gate tool paths: the sandbox argv", () => {
     });
 
     expect(evidence.ok).toBe(true);
-    expect(evidence.gateToolPaths?.accepted).toEqual([tool]);
+    expect(evidence.gateToolPaths?.accepted).toContain(cwd);
+    expect(evidence.gateToolPaths?.accepted).toContain(tool);
     const args = seen[0]!.args;
     const at = args.indexOf(tool);
     expect(at).toBeGreaterThan(-1);
     expect(args[at - 1]).toBe("--ro-bind");
     expect(args[at + 1]).toBe(tool);
+    expect(at).toBeGreaterThan(args.indexOf("--tmpfs"));
   });
 
   it.skipIf(!GIT_AVAILABLE)("the isolated gate also receives the same bind", async () => {
     const repo = tempDir("stellar-gtp-iso-");
     const worktreeRoot = tempDir("stellar-gtp-isowt-");
-    execFileSync("git", ["-C", repo, "init", "-q"]);
-    execFileSync("git", ["-C", repo, "config", "user.email", "t@example.com"]);
-    execFileSync("git", ["-C", repo, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", repo, "init", "-q"]);
+    await execFileAsync("git", ["-C", repo, "config", "user.email", "t@example.com"]);
+    await execFileAsync("git", ["-C", repo, "config", "user.name", "Test"]);
     writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
     mkdirSync(join(repo, ".stellar"), { recursive: true });
     writeFileSync(join(repo, ".stellar", "worktree.json"), JSON.stringify({ worktreeRoot }));
-    execFileSync("git", ["-C", repo, "add", "-A"]);
-    execFileSync("git", ["-C", repo, "commit", "-qm", "base"]);
+    await execFileAsync("git", ["-C", repo, "add", "-A"]);
+    await execFileAsync("git", ["-C", repo, "commit", "-qm", "base"]);
     writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
 
     const tool = tempDir("stellar-gtp-isotool-");
@@ -128,7 +132,7 @@ describe.skipIf(!BWRAP)("gate tool paths: real sandbox", () => {
     });
     expect(without.ok).toBe(false);
     expect(without.commands[0]!.exitCode).not.toBe(0);
-    expect(without.gateToolPaths?.accepted).toEqual([]);
+    expect(without.gateToolPaths?.accepted).toEqual([repo]);
 
     const withPath = await runTaskGates({
       taskId: "gtp-with",
@@ -141,7 +145,7 @@ describe.skipIf(!BWRAP)("gate tool paths: real sandbox", () => {
     });
     expect(withPath.ok).toBe(true);
     expect(withPath.commands[0]!.stdout).toContain("GATE_TOOL_RAN");
-    expect(withPath.gateToolPaths?.accepted).toEqual([tool]);
+    expect(withPath.gateToolPaths?.accepted).toContain(tool);
   });
 
   it("refuses a relative, an absent and a broad-home path, and mounts none", async () => {
@@ -158,7 +162,7 @@ describe.skipIf(!BWRAP)("gate tool paths: real sandbox", () => {
     });
 
     expect(evidence.ok).toBe(true);
-    expect(evidence.gateToolPaths?.accepted).toEqual([]);
+    expect(evidence.gateToolPaths?.accepted).toEqual([repo]);
     const rejected = evidence.gateToolPaths?.rejected ?? [];
     expect(rejected.map((r) => r.reason).sort()).toEqual(["home-root", "not-found", "relative"]);
     for (const r of rejected) expect(r.message.length).toBeGreaterThan(0);

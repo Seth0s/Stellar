@@ -1,4 +1,5 @@
 import type { CardDeliveryState } from "./type-and-submit-decision";
+import { APP_NOTICE } from "./agent-facing-notices";
 
 /**
  * DESIGN-BACKLOG.md §2.1 SINAL 3 — watchdog for the gap between
@@ -392,5 +393,5 @@ export function looksLikeReportShape(output: string, reportSchemaKeys: readonly 
  * the tool. It belongs to the agent-facing catalogue by convention; it lives
  * here so the fix is testable in the same pure module. */
 export function screenReportPointerBody(): string {
-  return "ended the turn with a report ON SCREEN but never called the report tool — read the card (or ask it to call report).";
+  return APP_NOTICE.idleWithoutReport({ kind: "screen-report" });
 }

@@ -1,4 +1,7 @@
 import { app, BrowserWindow, type Session } from "electron";
+import { readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
+import { randomUUID } from "node:crypto";
 import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 import { createFocusGate, decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
@@ -23,21 +26,59 @@ import {
   type SnapshotControlFacts,
 } from "./browser-snapshot-target-decision";
 import { decideTypeMode, typeSelectContentSource, typeTargetFactsSource, type TypeTargetFacts } from "./browser-type-mode-decision";
-import { decidePageTextRequest } from "./browser-page-text-decision";
+import { DEFAULT_DIALOG_SCOPE_SELECTOR, decidePageTextRequest } from "./browser-page-text-decision";
+import { buildErrorContext, type BrowserErrorContext } from "./browser-error-context-decision";
 import {
   awaitExpressionSource,
+  describeEvalThrown,
   describeEvalTimeout,
   normalizeEvalTimeout,
+  unwrapEvalRaw,
 } from "./browser-eval-timeout-decision";
 import {
   decideNavigateArrival,
   decideNavigatePrecheck,
+  decideSpaNotFound,
   navigateInAppSource,
   normalizeRoute,
   viewFingerprintSource,
   type NavigateSignal,
   type ViewFingerprint,
 } from "./browser-navigate-decision";
+import {
+  decideViewport,
+  type EmulationSummary,
+  type ViewportInput,
+} from "./browser-viewport-decision";
+import {
+  decideScreenshot,
+  type ScreenshotInput,
+  type ScreenshotMode,
+} from "./browser-screenshot-decision";
+import {
+  decideBrowserPartition,
+  decideDisplayMode,
+  type BrowserProfileKind,
+  type DisplayMode,
+} from "./browser-profile-decision";
+import {
+  actionStatesEqual,
+  actionTargetStateSource,
+  decideLocator,
+  describeUnchangedAction,
+  stampLocatorSource,
+  type ActionTargetState,
+  type LocatorInput,
+} from "./browser-locator-decision";
+import {
+  afterRouteHit,
+  decideRouteAccept,
+  matchRequest,
+  removeRoutes,
+  summarizeRoute,
+  type ActiveRoute,
+  type RouteInput,
+} from "./browser-route-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -104,7 +145,36 @@ export type PageElement = {
    * pelo padrão de checkbox/rádio customizado). */
   via?: "label";
   value?: string;
+  /** True when the element's click point is outside the viewport (below the fold). */
+  offscreen?: boolean;
+  /** Bounding box in CSS pixels when `includeBoxes` was requested. */
+  box?: { x: number; y: number; w: number; h: number };
+  /** Visible textContent slice when `includeText` was requested (non-interactive nodes). */
+  text?: string;
 };
+
+export type PageSnapshotOpts = {
+  includeText?: boolean;
+  includeBoxes?: boolean;
+  /** CSS selector root; when omitted, an open dialog is preferred if present. */
+  scope?: string;
+  ref?: string;
+  /** CSS selector of an iframe — snapshot runs inside its contentDocument. */
+  frame?: string;
+};
+
+/** How an agent names a click/type/query target (CSS, snapshot ref, role, or text). */
+export type BrowserTargetOpts = {
+  selector?: string;
+  ref?: string;
+  role?: string;
+  name?: string;
+  text?: string;
+  /** CSS selector of an iframe whose contentDocument holds the target. */
+  frame?: string;
+};
+
+export type RefHandle = { role: string; name: string; tag: string };
 export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
 /** Aba Application do mini-inspector — ver `getCookies` abaixo pro porquê
  * de vir de `session.cookies.get` (main process) e não de `evalJs`. */
@@ -151,10 +221,33 @@ type Entry = {
   console: ConsoleEntry[];
   network: NetworkEntry[];
   /** DESIGN-BACKLOG.md §2.1 — sessão CDP do inspector embutido, ver
-   * browser-cdp.ts. `null` a maior parte da vida do card — só existe
-   * entre `attachInspector`/`detachInspector` (mount/unmount do
-   * `BrowserInspector.tsx`), nunca durante a vida inteira do card. */
+   * browser-cdp.ts. Also attached on demand for trusted pointer clicks
+   * (`Input.dispatchMouseEvent`) when the inspector is not open. */
   cdp: CdpSession | null;
+  /** Last snapshot ref → role+name+tag, so a re-render that drops
+   * `data-stellar-ref` can still be re-bound. Cleared on main-frame
+   * navigation. */
+  refHandles: Map<string, RefHandle>;
+  /** Active browser_route mocks for THIS card's partition only. Cleared
+   * on destroy; never shared across cards. */
+  routes: ActiveRoute[];
+  /** True while session.protocol.handle is installed for http/https. */
+  routeHandlersInstalled: boolean;
+  /**
+   * Active device emulation (inspector or browser_set_viewport). `null`
+   * when the card uses its ordinary layout size. The header badge and
+   * click mapping read this via `onEmulationChanged`.
+   */
+  emulation: EmulationSummary | null;
+  /**
+   * Last non-emulated body size from `resize()` — used when reset leaves
+   * device emulation so media queries return to the card's real box.
+   */
+  lastLayoutSize: { w: number; h: number } | null;
+  /** Ephemeral (default) or persist: partition — see decideBrowserPartition. */
+  profileKind: BrowserProfileKind;
+  /** Active CSS display-mode emulation (standalone for PWA/iOS branches). */
+  displayMode: DisplayMode;
   /** Pendentes #188 (UA+touch) — UA de ORIGEM do `webContents`, guardado
    * na hora em que a emulação mobile liga pela primeira vez (via
    * `wc.getUserAgent()`, nunca reconstruído). `null` quando não há
@@ -593,7 +686,7 @@ export function buildMobileUserAgent(desktopUserAgent: string): string {
  * no more `raise()`.
  */
 export function createBrowserRegistry(callbacks: {
-  onNavigate: (id: string, url: string) => void;
+  onNavigate: (id: string, url: string, httpResponseCode?: number) => void;
   onTitle: (id: string, title: string) => void;
   onLoading: (id: string, loading: boolean) => void;
   onFrame: (id: string, jpeg: Buffer, width: number, height: number, region: BrowserFrameRegion) => void;
@@ -628,6 +721,15 @@ export function createBrowserRegistry(callbacks: {
    * autodescreve pelo `method`, um canal por domínio só duplicaria esse
    * discriminante. Ver `browser-cdp.ts`'s doc comment. */
   onCdpEvent: (id: string, method: string, params: unknown) => void;
+  /** Active browser_route list for the card header badge (owner-visible). */
+  onRoutesChanged: (id: string, routes: ReturnType<typeof summarizeRoute>[]) => void;
+  /** Active device emulation for the card header badge + canvas frame. */
+  onEmulationChanged: (id: string, emulation: EmulationSummary | null) => void;
+  /** Persistent vs ephemeral profile — header badge for the owner. */
+  onProfileChanged: (
+    id: string,
+    profile: { kind: BrowserProfileKind; displayMode: DisplayMode },
+  ) => void;
 }) {
   const entries = new Map<string, Entry>();
   /** `webRequest` só reporta o `webContentsId`; isto o traduz de volta pro
@@ -672,12 +774,42 @@ export function createBrowserRegistry(callbacks: {
     });
   }
 
-  function create(id: string, url: string): { scaleFactor: number } {
+  function installPartitionPermissions(ses: Session, persistent: boolean) {
+    // Partition sessions do NOT inherit defaultSession handlers. Persistent
+    // cards need notifications for the Push API; ephemeral stays denied
+    // (Chromium also blocks Push in temporary partitions).
+    ses.setPermissionRequestHandler((_wc, permission, callback) => {
+      if (permission === "notifications" && persistent) {
+        callback(true);
+        return;
+      }
+      if (permission === "fullscreen" || permission === "pointerLock") {
+        callback(true);
+        return;
+      }
+      callback(false);
+    });
+    ses.setPermissionCheckHandler((_wc, permission) => {
+      if (permission === "notifications" && persistent) return true;
+      return permission === "fullscreen" || permission === "pointerLock";
+    });
+  }
+
+  function create(
+    id: string,
+    url: string,
+    opts?: { persistent?: boolean },
+  ): { scaleFactor: number; profileKind: BrowserProfileKind; partition: string } {
     // Normalize first: the throw used to happen after `entries.set` and
     // inside `void loadURL(...)`, so a refused scheme left a blank card
     // and the error never reached the caller.
     const normalized = normalizeUrl(url);
     const scaleFactor = callbacks.getScaleFactor();
+    const partitionDecision = decideBrowserPartition(id, opts?.persistent === true);
+    if (partitionDecision.action === "refuse") {
+      throw new Error(partitionDecision.error);
+    }
+    const { kind: profileKind, partition } = partitionDecision;
     const win = new BrowserWindow({
       show: false,
       width: 720,
@@ -687,20 +819,14 @@ export function createBrowserRegistry(callbacks: {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
-        // Documentado ao vivo (2026-09-03) — sem `partition`, Electron usa
-        // `session.defaultSession` pra QUALQUER BrowserWindow, então todo
-        // card de navegador aberto (não só os de um board, TODOS) compartilha
-        // cookies/localStorage/service workers entre si. Achado direto:
-        // não dava pra simular 2 usuários logados ao mesmo tempo em cards
-        // separados — só sequencial (login → ação → logout → outro login)
-        // no MESMO card. Um nome de partição único POR CARD isola cada um
-        // (Electron cria a sessão isolada sob demanda). Sem prefixo
-        // `persist:` de propósito — efêmera, morre com o card/app, do
-        // mesmo jeito que uma aba anônima nova; nada aqui pede que um login
-        // sobreviva a fechar e reabrir o card.
-        partition: `stellar-browser-${id}`,
+        // Unique partition PER CARD — never session.defaultSession and
+        // never a shared owner profile. persist: enables Push API / SW;
+        // ephemeral matches Chromium temporary (incognito-like) and
+        // dies with the process.
+        partition,
       },
     });
+    installPartitionPermissions(win.webContents.session, profileKind === "persistent");
     const wc = win.webContents;
     // Caps the max paint rate across every open browser card — Chromium
     // only actually emits `paint` on real change (scroll, animation, load),
@@ -818,7 +944,10 @@ export function createBrowserRegistry(callbacks: {
       if (win.isFullScreen()) win.setFullScreen(false);
     });
 
-    wc.on("did-navigate", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
+    wc.on("did-navigate", (_e, navUrl, httpResponseCode) => {
+      entries.get(id)?.refHandles.clear();
+      callbacks.onNavigate(id, navUrl, httpResponseCode);
+    });
     wc.on("did-navigate-in-page", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     wc.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));
     wc.on("did-start-loading", () => callbacks.onLoading(id, true));
@@ -858,6 +987,13 @@ export function createBrowserRegistry(callbacks: {
       cdp: null,
       originalUserAgent: null,
       networkEnableRefs: 0,
+      refHandles: new Map(),
+      routes: [],
+      routeHandlersInstalled: false,
+      emulation: null,
+      lastLayoutSize: null,
+      profileKind,
+      displayMode: "browser",
     };
     // The grace applies to the flag the paint handler and `applyFrameRate` read.
     entry.focusGate = createFocusGate((focused) => {
@@ -872,8 +1008,9 @@ export function createBrowserRegistry(callbacks: {
     // silenciosamente desligaria o primeiro).
     wcIdToCardId.set(wc.id, id);
     ensureNetworkTap(wc.session);
+    callbacks.onProfileChanged(id, { kind: profileKind, displayMode: "browser" });
     void wc.loadURL(normalized);
-    return { scaleFactor };
+    return { scaleFactor, profileKind, partition };
   }
 
   function navigate(id: string, url: string) {
@@ -1097,32 +1234,34 @@ export function createBrowserRegistry(callbacks: {
    * emulação, então `viewSize`/`screenSize` competem com o content size
    * real em vez de complementá-lo. Redimensionar o content size de
    * verdade (o que a página mede) já É a emulação, sem precisar da API. */
+  function publishEmulation(id: string) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    callbacks.onEmulationChanged(id, entry.emulation);
+  }
+
+  /**
+   * Apply or clear device emulation. `source` owns the state: inspector
+   * unmount passes `"inspector"` and is a no-op when an agent owns the
+   * viewport (browser_set_viewport must survive closing the panel — the
+   * header badge is the visible off-ramp). Agent reset passes `"agent"`
+   * and always clears.
+   */
   function setDeviceEmulation(
     id: string,
     params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null,
+    source: EmulationSummary["source"] = "inspector",
   ) {
     const entry = entries.get(id);
     if (!entry) return;
     const wc = entry.win.webContents;
     if (!params) {
-      // Não restaura o content size/zoom do supersample aqui de propósito
-      // — quem desliga a emulação (BrowserInspector.tsx) sempre chama
-      // `resize()` de novo logo em seguida com o tamanho real do card,
-      // que já recalcula os dois juntos (ver doc comment de `resize`
-      // abaixo). Restaurar às cegas aqui SEM saber o `w`/`h` atual do
-      // card deixaria o content size (mudado abaixo, pro tamanho do
-      // preset) sem zoom nenhum compensando.
-      //
-      // Pendentes #188 (UA+touch) — o UA/touch/client-hints, ao contrário
-      // do content size, PRECISAM ser desfeitos aqui: se ninguém desligar,
-      // a página fica presa servida como mobile (UA+hints) e reportando
-      // touch dentro de um card agora desktop. Restaura o UA de ORIGEM
-      // guardado (nunca reconstruído) e recarrega — sem reload a página já
-      // rodando com JS/CSS de layout mobile não vira desktop sozinha,
-      // mesmo o próximo request já saindo com o UA certo. `baseUA` é lido
-      // ANTES de zerar `entry.originalUserAgent` — `applyMobileCdpOverrides`
-      // abaixo precisa da string de origem mesmo depois do campo já
-      // refletir "mobile desligado".
+      // Inspector cleanup must not wipe an agent-owned viewport.
+      if (entry.emulation && entry.emulation.source !== source && source === "inspector") {
+        return;
+      }
+      // UA/touch/client-hints must be undone here. Read baseUA before
+      // clearing originalUserAgent — applyMobileCdpOverrides needs it.
       if (entry.originalUserAgent !== null) {
         const baseUA = entry.originalUserAgent;
         wc.setUserAgent(baseUA);
@@ -1130,17 +1269,17 @@ export function createBrowserRegistry(callbacks: {
         wc.reload();
         void applyMobileCdpOverrides(entry, baseUA, false);
       }
+      entry.emulation = null;
+      publishEmulation(id);
+      // Restore the card's last layout box when known (agent reset and
+      // inspector close). Inspector also calls resize() — idempotent.
+      if (entry.lastLayoutSize) {
+        resize(id, entry.lastLayoutSize.w, entry.lastLayoutSize.h);
+      }
       return;
     }
-    // Pendentes #188 (UA+touch) — `params.mobile` chegava até aqui e era
-    // IGNORADO (achado do doc comment acima, "modo responsivo real"); é o
-    // sinal natural pra decidir UA+touch+hints, então passa a ser usado. Só
-    // troca o UA (e recarrega) numa TRANSIÇÃO real desktop→mobile ou
-    // mobile→desktop — `entry.originalUserAgent !== null` já significa
-    // "mobile ligado agora" (ver doc comment do campo), então trocar
-    // tamanho/DPR dentro do MESMO estado mobile (ex: girar, DPR, Mobile→
-    // Tablet) não deve recarregar a página nem reenviar CDP à toa a cada
-    // clique — touch e client hints já ficam corretos desde a transição.
+    // Reload only on a real desktop↔mobile transition; size/DPR changes
+    // inside the same mobile state must not churn the page.
     if (params.mobile && entry.originalUserAgent === null) {
       const baseUA = wc.getUserAgent();
       entry.originalUserAgent = baseUA;
@@ -1154,38 +1293,144 @@ export function createBrowserRegistry(callbacks: {
       wc.reload();
       void applyMobileCdpOverrides(entry, baseUA, false);
     }
-    // Touch (`setTouchEmulationEnabled`, liga `navigator.maxTouchPoints` e
-    // as media features `pointer: coarse`/`hover: none`) só na TRANSIÇÃO
-    // acima, dentro de `applyMobileCdpOverrides` — DE PROPÓSITO sem
-    // `setEmitTouchEventsForMouse`: esse segundo sintetizaria eventos de
-    // toque a PARTIR do mouse, o que arrisca degradar rolagem por wheel e
-    // seleção de texto no card (ver briefing da tarefa) — risco que só se
-    // prova com o app aberto, e sem ganho aqui: o objetivo é o
-    // layout/servidor mobile, não interação por toque de verdade num card
-    // que só recebe mouse/teclado do host. Se o CDP ainda não tinha anexado
-    // na hora da transição (corrida com `attachInspector`, ou DevTools real
-    // roubou o debugger), `attachInspector` acima reaplica isto assim que
-    // (re)anexar — `entry.originalUserAgent` já reflete o estado mobile
-    // nessa hora.
-    // Achado ao vivo (2026-09-07, pedido explícito do usuário: "espero que
-    // o size de resolução seja de verdade"): até aqui `deviceScaleFactor`
-    // era só um número decorativo no dropdown de DPR — `setContentSize`
-    // usava `params.width/height` puros, então um preset "Mobile" (DPR 3)
-    // e um "Desktop" (DPR 1) do MESMO tamanho lógico rasterizavam
-    // IDENTICOS, sem nenhum ganho real de nitidez. Mesma técnica já usada
-    // por `resize()` abaixo (supersample fixo pra navegação normal):
-    // `setZoomFactor(factor)` + `setContentSize(w×factor, h×factor)` juntos
-    // — nunca só um dos dois (bug 1 do doc comment de `resize`) — faz a
-    // página ACREDITAR que seu viewport CSS continua largura/altura lógica
-    // (zoom cancela o "mais conteúdo cabe"), enquanto o paint buffer real
-    // fica `deviceScaleFactor`× maior, exatamente o que um DPR de
-    // dispositivo real significa. Sem cap extra (BROWSER_MAX_DENSITY é
-    // sobre supersample AUTOMÁTICO de navegação comum, não sobre um DPR de
-    // preset escolhido explicitamente pelo usuário; o próprio seletor já
-    // limita a 1x/2x/3x).
+    // Zoom factor and content size must move together — content size alone
+    // would change how much page fits; zoom alone would not grow the buffer.
     const factor = Math.max(1, params.deviceScaleFactor);
     wc.setZoomFactor(factor);
     entry.win.setContentSize(Math.max(1, Math.round(params.width * factor)), Math.max(1, Math.round(params.height * factor)));
+    entry.emulation = {
+      width: params.width,
+      height: params.height,
+      deviceScaleFactor: params.deviceScaleFactor,
+      mobile: params.mobile,
+      source,
+    };
+    publishEmulation(id);
+  }
+
+  function getDeviceEmulation(id: string): EmulationSummary | null {
+    return entries.get(id)?.emulation ?? null;
+  }
+
+  function getProfile(
+    id: string,
+  ): { ok: true; kind: BrowserProfileKind; displayMode: DisplayMode; partition: string } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const partition =
+      entry.profileKind === "persistent" ? `persist:stellar-browser-${id}` : `stellar-browser-${id}`;
+    return {
+      ok: true,
+      kind: entry.profileKind,
+      displayMode: entry.displayMode,
+      partition,
+    };
+  }
+
+  async function setDisplayMode(
+    id: string,
+    modeInput: unknown,
+  ): Promise<
+    | { ok: true; mode: DisplayMode; matchMedia: boolean }
+    | { ok: false; error: string }
+  > {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const decision = decideDisplayMode({ mode: modeInput });
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+
+    // CDP Emulation.setEmulatedMedia — display-mode is a media feature the
+    // page's matchMedia('(display-mode: standalone)') reads.
+    const attached = await attachInspector(id);
+    if (!attached.ok) {
+      return { ok: false, error: `browser_set_display_mode needs CDP: ${attached.error}` };
+    }
+    try {
+      if (decision.mode === "standalone") {
+        // Features-only (no media:) — Puppeteer/Playwright style. Passing
+        // media:"screen" alone left matchMedia('(display-mode: standalone)')
+        // false on Chromium 148 / Electron 42.
+        await entry.cdp!.send("Emulation.setEmulatedMedia", {
+          features: [{ name: "display-mode", value: "standalone" }],
+        });
+      } else {
+        await entry.cdp!.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    } catch (err) {
+      return { ok: false, error: `Emulation.setEmulatedMedia failed: ${String(err)}` };
+    }
+    entry.displayMode = decision.mode;
+    callbacks.onProfileChanged(id, { kind: entry.profileKind, displayMode: entry.displayMode });
+    let matchMedia: boolean;
+    try {
+      matchMedia = Boolean(
+        await entry.win.webContents.executeJavaScript(
+          `window.matchMedia('(display-mode: standalone)').matches`,
+        ),
+      );
+    } catch {
+      matchMedia = false;
+    }
+    if (decision.mode === "standalone" && !matchMedia) {
+      // Fallback: some Electron builds ignore display-mode in setEmulatedMedia.
+      // Override matchMedia for the standalone query so PWA/iOS branches run.
+      try {
+        await entry.win.webContents.executeJavaScript(`(() => {
+          if (window.__stellarDisplayModePatched) return true;
+          window.__stellarDisplayModePatched = true;
+          window.__stellarDisplayMode = 'standalone';
+          const orig = window.matchMedia.bind(window);
+          window.matchMedia = (query) => {
+            const m = orig(query);
+            if (/display-mode\\s*:\\s*standalone/i.test(String(query))) {
+              return Object.create(m, { matches: { get: () => window.__stellarDisplayMode === 'standalone' } });
+            }
+            return m;
+          };
+          return true;
+        })()`);
+        matchMedia = true;
+      } catch (err) {
+        return { ok: false, error: `display-mode standalone applied via CDP but matchMedia stayed false: ${String(err)}` };
+      }
+    }
+    if (decision.mode === "browser") {
+      try {
+        await entry.win.webContents.executeJavaScript(
+          `(() => { window.__stellarDisplayMode = 'browser'; return true; })()`,
+        );
+      } catch {
+        /* ignore — patch may not exist yet */
+      }
+    }
+    return { ok: true, mode: decision.mode, matchMedia };
+  }
+
+  function setViewport(
+    id: string,
+    input: ViewportInput,
+  ):
+    | { ok: true; emulation: EmulationSummary | null }
+    | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const decision = decideViewport(input);
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+    if (decision.action === "reset") {
+      setDeviceEmulation(id, null, "agent");
+      return { ok: true, emulation: null };
+    }
+    setDeviceEmulation(
+      id,
+      {
+        width: decision.width,
+        height: decision.height,
+        deviceScaleFactor: decision.deviceScaleFactor,
+        mobile: decision.mobile,
+      },
+      "agent",
+    );
+    return { ok: true, emulation: entry.emulation };
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
@@ -1242,6 +1487,14 @@ export function createBrowserRegistry(callbacks: {
   function resize(id: string, w: number, h: number, _zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
+    // Always remember the card's layout box so reset can restore it —
+    // even while emulation owns the paint buffer.
+    entry.lastLayoutSize = { w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)) };
+    if (entry.emulation) {
+      // Device emulation owns content size; a layout resize must not
+      // clobber the emulated CSS viewport (media queries would jump).
+      return;
+    }
     // `factor` é o fator TOTAL de densidade — content size E zoom da
     // página são sempre o MESMO número (nunca duas fontes de verdade
     // separadas, achado ao vivo/bug 1 acima). `BROWSER_MAX_DENSITY` teta o
@@ -1464,6 +1717,7 @@ export function createBrowserRegistry(callbacks: {
     id: string,
     selector?: string,
     maxChars?: number,
+    opts?: { scope?: string; ref?: string },
   ): Promise<
     | {
         ok: true;
@@ -1472,13 +1726,36 @@ export function createBrowserRegistry(callbacks: {
         /** Total REAL antes do corte — é o número que a frase de truncamento usa. */
         totalChars: number;
         scope: "body" | "selector";
+        scopeSource?: "selector" | "scope" | "ref" | "dialog";
         selector?: string;
       }
     | { ok: false; error: string }
   > {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
-    const decision = decidePageTextRequest({ selector, maxChars });
+    const explicit =
+      (typeof selector === "string" && selector.trim().length > 0) ||
+      (typeof opts?.scope === "string" && opts.scope.trim().length > 0) ||
+      (typeof opts?.ref === "string" && opts.ref.trim().length > 0);
+    let dialogPresent = false;
+    if (!explicit) {
+      try {
+        dialogPresent = Boolean(
+          await entry.win.webContents.executeJavaScript(
+            `!!document.querySelector(${JSON.stringify(DEFAULT_DIALOG_SCOPE_SELECTOR)})`,
+          ),
+        );
+      } catch {
+        dialogPresent = false;
+      }
+    }
+    const decision = decidePageTextRequest({
+      selector,
+      scope: opts?.scope,
+      ref: opts?.ref,
+      maxChars,
+      dialogPresent,
+    });
     // LEITURA NUNCA INVENTA: com seletor, um `querySelector` que não casa é
     // RESPOSTA NOMEADA (não um texto vazio, que pareceria "elemento vazio").
     const expr =
@@ -1502,11 +1779,39 @@ export function createBrowserRegistry(callbacks: {
         truncated,
         totalChars,
         scope: decision.scope.scope,
-        ...(decision.scope.scope === "selector" ? { selector: decision.scope.selector } : {}),
+        ...(decision.scope.scope === "selector"
+          ? { selector: decision.scope.selector, scopeSource: decision.scope.source }
+          : {}),
       };
     } catch (err) {
       return { ok: false, error: String(err) };
     }
+  }
+
+  /** Facts for timeout/error payloads — url, visible text, console, failed network. */
+  async function collectErrorContext(id: string): Promise<BrowserErrorContext | null> {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    let url = "";
+    let title = "";
+    let visibleTextRaw = "";
+    try {
+      url = entry.win.webContents.getURL();
+      title = entry.win.webContents.getTitle();
+      const raw: unknown = await entry.win.webContents.executeJavaScript(
+        `(document.body ? document.body.innerText : "")`,
+      );
+      visibleTextRaw = typeof raw === "string" ? raw : "";
+    } catch {
+      // Best-effort: still return console/network even if the page probe failed.
+    }
+    return buildErrorContext({
+      url,
+      title,
+      visibleTextRaw,
+      console: entry.console,
+      network: entry.network,
+    });
   }
 
   // DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa" —
@@ -1516,28 +1821,174 @@ export function createBrowserRegistry(callbacks: {
   // `executeJavaScript`, mesmo primitivo já usado por `getPageText`) dão
   // controle real, sem depender do humano estar olhando pra clicar.
 
-  /** Um clique de verdade é down+up, não só um dos dois — e um `mouseMove`
-   * antes garante que a página viu o cursor "chegar" no elemento (hover)
-   * antes do clique, igual uma interação humana real.
-   *
-   * ACHADO AO VIVO (2026-09-19) — um `browser_click` real num botão de
-   * upload abriu o seletor de arquivo NATIVO do SO e levou o card (e a
-   * sessão efêmera dele) junto antes de o resultado ser lido; pareceu
-   * crash do Stellar. `sendClick` continua sendo só o envio cru; quem
-   * chama por uma TOOL (`clickSelector`/`clickAtPoint`) passa primeiro por
-   * `nativeDialogGuard`, que recusa antes de mandar o primeiro
-   * `sendInputEvent`. O clique do HUMANO não passa por aqui — ele entra
-   * por `browser:input-mouse` → `sendMouseEvent` (main/index.ts), e um
-   * humano na frente da máquina consegue responder o diálogo; o agente
-   * não. Ver `browser-native-dialog-decision.ts` pro porquê de o guard ser
-   * ANTES do clique. */
-  function sendClick(id: string, x: number, y: number): { ok: true } | { ok: false; error: string } {
+  /**
+   * Attach CDP for trusted pointer input. Reuses the inspector session when
+   * present; otherwise creates a lightweight one (Radix Tabs/Popover/Select
+   * listen for pointerdown/mousedown — sendInputEvent alone was not enough).
+   */
+  async function ensureInputCdp(id: string): Promise<{ ok: true; cdp: CdpSession } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
-    sendMouseEvent(id, { type: "mouseMove", x, y });
-    sendMouseEvent(id, { type: "mouseDown", x, y, button: "left", clickCount: 1 });
-    sendMouseEvent(id, { type: "mouseUp", x, y, button: "left", clickCount: 1 });
+    if (!entry.cdp) {
+      entry.cdp = createCdpSession(entry.win.webContents, () => {
+        /* input-only attach: events are unused */
+      });
+    }
+    const attached = await entry.cdp.attach();
+    if (!attached.ok) return attached;
+    return { ok: true, cdp: entry.cdp };
+  }
+
+  /**
+   * Trusted pointer+mouse down/up via CDP Input.dispatchMouseEvent (CSS px).
+   * Fallback: sendInputEvent in DIP when CDP cannot attach (e.g. DevTools
+   * already owns the debugger).
+   *
+   * Tool callers (`clickSelector`/`clickAtPoint`) run `nativeDialogGuard`
+   * before the first event — a real agent click on a file-upload control
+   * once opened the OS native picker and tore the ephemeral card down before
+   * the result was read. Human clicks go through `browser:input-mouse` →
+   * `sendMouseEvent` and can answer that dialog; the agent cannot. See
+   * `browser-native-dialog-decision.ts`.
+   */
+  async function sendClick(
+    id: string,
+    xCss: number,
+    yCss: number,
+    viewport?: { width: number; height: number },
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    entry.win.webContents.focus();
+    const x = Math.round(xCss * 100) / 100;
+    const y = Math.round(yCss * 100) / 100;
+    const cdp = await ensureInputCdp(id);
+    if (cdp.ok) {
+      const base = { x, y, button: "left" as const, clickCount: 1, pointerType: "mouse" as const };
+      const moved = await cdp.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...base, buttons: 0 });
+      if (!moved.ok) return moved;
+      const pressed = await cdp.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...base, buttons: 1 });
+      if (!pressed.ok) return pressed;
+      const released = await cdp.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...base, buttons: 0 });
+      if (!released.ok) return released;
+      return { ok: true };
+    }
+    // Fallback: Electron sendInputEvent speaks DIP, not CSS px.
+    const scale = viewport ? dipScaleFor(id, viewport) : 1;
+    const xDip = xCss * scale;
+    const yDip = yCss * scale;
+    sendMouseEvent(id, { type: "mouseMove", x: xDip, y: yDip });
+    sendMouseEvent(id, { type: "mouseDown", x: xDip, y: yDip, button: "left", clickCount: 1 });
+    sendMouseEvent(id, { type: "mouseUp", x: xDip, y: yDip, button: "left", clickCount: 1 });
     return { ok: true };
+  }
+
+  /**
+   * Turn role/name/text/ref/selector (+ optional frame) into a CSS selector the
+   * click settle path can query. Stamps a temporary attribute for non-CSS finds.
+   * Dead snapshot refs fall back to the last role+name+tag handle.
+   */
+  async function resolveTargetSelector(
+    id: string,
+    opts: BrowserTargetOpts,
+  ): Promise<{ ok: true; selector: string; describe: string; frame: string | null } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const frame =
+      typeof opts.frame === "string" && opts.frame.trim().length > 0 ? opts.frame.trim() : null;
+    const locator = decideLocator({
+      selector: opts.selector,
+      ref: opts.ref,
+      role: opts.role,
+      name: opts.name,
+      text: opts.text,
+    } satisfies LocatorInput);
+    if (locator.kind === "refuse") return { ok: false, error: locator.error };
+
+    if (locator.kind === "css") {
+      return { ok: true, selector: locator.selector, describe: locator.describe, frame };
+    }
+
+    if (locator.kind === "ref") {
+      const live = await runInPage<{ ok: true }>(
+        id,
+        locator.selector,
+        `(() => {
+          const frameSel = ${frame === null ? "null" : JSON.stringify(frame)};
+          let root = document;
+          if (frameSel) {
+            const f = document.querySelector(frameSel);
+            if (!f || !f.contentDocument) return { __noMatch: true };
+            root = f.contentDocument;
+          }
+          const el = root.querySelector(${JSON.stringify(locator.selector)});
+          if (!el) return { __noMatch: true };
+          return { __value: { ok: true } };
+        })()`,
+      );
+      if (live.ok) {
+        return { ok: true, selector: locator.selector, describe: locator.describe, frame };
+      }
+      const handle = entry.refHandles.get(locator.ref);
+      if (!handle) {
+        return {
+          ok: false,
+          error:
+            `no element matches ${locator.describe}` +
+            (frame ? ` inside frame ${JSON.stringify(frame)}` : "") +
+            ` — the data-stellar-ref stamp is gone (re-render/navigation) and no stable role+name handle was remembered. Call browser_snapshot again, or target by role/name/text/selector.`,
+        };
+      }
+      const stamp = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+      const rebound = await runInPage<{ selector: string }>(
+        id,
+        locator.selector,
+        stampLocatorSource(
+          { kind: "role", role: handle.role, name: handle.name || null, describe: locator.describe },
+          frame,
+          stamp,
+        ),
+      );
+      if (!rebound.ok) {
+        return {
+          ok: false,
+          error:
+            `no element matches ${locator.describe} (stable handle role=${JSON.stringify(handle.role)} name=${JSON.stringify(handle.name)} also missed). Call browser_snapshot again.`,
+        };
+      }
+      return {
+        ok: true,
+        selector: rebound.value.selector,
+        describe: `${locator.describe} (rebound via role+name)`,
+        frame,
+      };
+    }
+
+    const stamp = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const stamped = await runInPage<{ selector: string; role: string | null; name: string; tag: string }>(
+      id,
+      locator.describe,
+      stampLocatorSource(locator, frame, stamp),
+    );
+    if (!stamped.ok) {
+      return {
+        ok: false,
+        error:
+          `no element matches ${locator.describe}` +
+          (frame ? ` inside frame ${JSON.stringify(frame)}` : "") +
+          `.`,
+      };
+    }
+    return { ok: true, selector: stamped.value.selector, describe: locator.describe, frame };
+  }
+
+  async function readActionState(
+    id: string,
+    selector: string,
+    frame: string | null,
+  ): Promise<ActionTargetState | null> {
+    const probed = await runInPage<ActionTargetState>(id, selector, actionTargetStateSource(selector, frame));
+    return probed.ok ? probed.value : null;
   }
 
   /** O fator px-lógicos -> DIP. A página reporta o proprio viewport em px
@@ -1611,7 +2062,9 @@ export function createBrowserRegistry(callbacks: {
   /** Resultado de um clique: quando `ok`, o alvo vai NOMEADO (tag/id/role/
    * texto) junto das coordenadas — `{ok, x, y}` sozinho é indistinguível de
    * "acertou outra coisa", que é o defeito que este caminho veio consertar.
-   * Quando não, `clicked: false` e uma frase que nomeia o fato medido. */
+   * Quando não, `clicked: false` e uma frase que nomeia o fato medido.
+   * `after` is the target's observed state after the click; `warning` also
+   * covers "nothing changed". */
   type ClickOutcome =
     | {
         ok: true;
@@ -1621,6 +2074,7 @@ export function createBrowserRegistry(callbacks: {
         target: ClickTargetDescriptor;
         matched: number;
         warning: string | null;
+        after: ActionTargetState | null;
       }
     | { ok: false; clicked: false; error: string };
 
@@ -1632,8 +2086,7 @@ export function createBrowserRegistry(callbacks: {
    * intenção a comparar, então a resposta diz o que FOI atingido (ou recusa,
    * quando não há nada ali / o ponto está fora da viewport). A guarda de
    * diálogo nativo continua saindo da MESMA amostra que já localizou o ponto
-   * — o elemento que a inspeção vê é exatamente o que o `mouseDown`/`mouseUp`
-   * vai acertar. */ 
+   * — o elemento que a inspeção vê é exatamente o que o clique vai acertar. */
   async function clickAtPoint(id: string, x: number, y: number): Promise<ClickOutcome> {
     const sampled = await runInPage<ClickSample>(id, null, clickPointSource(x, y));
     if (!sampled.ok) return clickRefusal(sampled.error);
@@ -1651,8 +2104,7 @@ export function createBrowserRegistry(callbacks: {
       const guard = nativeDialogGuard(sample.hitFacts, `the point (${x}, ${y})`);
       if (!guard.ok) return clickRefusal(guard.error);
     }
-    const scale = dipScaleFor(id, sample.viewport);
-    const sent = sendClick(id, sample.point.x * scale, sample.point.y * scale);
+    const sent = await sendClick(id, sample.point.x, sample.point.y, sample.viewport);
     if (!sent.ok) return clickRefusal(sent.error);
     return {
       ok: true,
@@ -1662,6 +2114,7 @@ export function createBrowserRegistry(callbacks: {
       target: verdict.target,
       matched: 0,
       warning: null,
+      after: null,
     };
   }
 
@@ -1746,16 +2199,21 @@ export function createBrowserRegistry(callbacks: {
    * de mouse de verdade — o caminho aqui continua sendo
    * `Input.dispatchMouseEvent` via `sendClick`.
    */
-  async function clickSelector(id: string, selector: string): Promise<ClickOutcome> {
-    const describe = `selector ${JSON.stringify(selector)}`;
+  async function clickSelector(
+    id: string,
+    selector: string,
+    frame: string | null = null,
+    describeOverride?: string,
+  ): Promise<ClickOutcome> {
+    const describe = describeOverride ?? `selector ${JSON.stringify(selector)}`;
     // 1. resolve + rola + espera estabilizar
-    const resolved = await runInPage<ClickSample>(id, selector, clickResolveSource(selector));
+    const resolved = await runInPage<ClickSample>(id, selector, clickResolveSource(selector, frame));
     if (!resolved.ok) return clickRefusal(resolved.error);
     // 2. re-resolve imediatamente antes do disparo
-    const current = await runInPage<ClickSample>(id, selector, clickVerifySource(selector));
+    const current = await runInPage<ClickSample>(id, selector, clickVerifySource(selector, frame));
     if (!current.ok) return clickRefusal(current.error);
     const target = current.value.target ?? resolved.value.target;
-    if (!target) return clickRefusal(`no element matches selector ${JSON.stringify(selector)}`);
+    if (!target) return clickRefusal(`no element matches ${describe}`);
     // 3. a frase que o medido sustenta
     const verdict = decideClickVerdict({
       intent: { kind: "element", describe, target, matched: current.value.matched },
@@ -1778,9 +2236,17 @@ export function createBrowserRegistry(callbacks: {
       const guard = nativeDialogGuard(fact, describe);
       if (!guard.ok) return clickRefusal(guard.error);
     }
-    const scale = dipScaleFor(id, current.value.viewport);
-    const sent = sendClick(id, current.value.point.x * scale, current.value.point.y * scale);
+    const before = await readActionState(id, selector, frame);
+    const sent = await sendClick(id, current.value.point.x, current.value.point.y, current.value.viewport);
     if (!sent.ok) return clickRefusal(sent.error);
+    // Let the widget commit (Radix open/close, controlled inputs).
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const after = await readActionState(id, selector, frame);
+    let warning = verdict.warning;
+    if (before && after && actionStatesEqual(before, after)) {
+      const unchanged = describeUnchangedAction("click", before, after);
+      warning = warning ? `${warning} ${unchanged}` : unchanged;
+    }
     return {
       ok: true,
       clicked: true,
@@ -1788,25 +2254,55 @@ export function createBrowserRegistry(callbacks: {
       y: current.value.point.y,
       target: verdict.target,
       matched: verdict.matched,
-      warning: verdict.warning,
+      warning,
+      after,
     };
   }
 
-  /** `selector` given: focus that field first (via `clickSelector`) so
-   * the typed text lands where the caller actually meant, instead of
-   * whatever happened to be focused already. Uses `insertText` — same
-   * IME-safe, "whole string at once" method item 26 already established
-   * (see its own doc comment above), never synthesized char by char. */
+  async function clickTarget(id: string, opts: BrowserTargetOpts): Promise<ClickOutcome> {
+    if (
+      !opts.ref &&
+      !opts.selector &&
+      !opts.role &&
+      !opts.text &&
+      (opts as { x?: number }).x === undefined
+    ) {
+      /* role/text/selector/ref handled below */
+    }
+    const resolved = await resolveTargetSelector(id, opts);
+    if (!resolved.ok) return clickRefusal(resolved.error);
+    return clickSelector(id, resolved.selector, resolved.frame, resolved.describe);
+  }
+
+  /** `selector`/role/text/ref given: focus that field first (via click) so
+   * the typed text lands where the caller actually meant. Uses `insertText` —
+   * IME-safe, whole string at once. `replace: true` on an empty field just
+   * types (fill semantics) — refusing empty was the measured friction. */
   async function typeText(
     id: string,
     text: string,
-    selector?: string,
+    selectorOrOpts?: string | BrowserTargetOpts,
     replace = false,
-  ): Promise<{ ok: true; replaced: boolean } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; replaced: boolean; after: ActionTargetState | null; warning: string | null }
+    | { ok: false; error: string }
+  > {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
-    if (selector) {
-      const clicked = await clickSelector(id, selector);
+    const opts: BrowserTargetOpts =
+      typeof selectorOrOpts === "string"
+        ? { selector: selectorOrOpts }
+        : selectorOrOpts ?? {};
+    let selector: string | undefined;
+    let frame: string | null = null;
+    let describe = "the focused element";
+    if (opts.selector || opts.ref || opts.role || opts.text) {
+      const resolved = await resolveTargetSelector(id, opts);
+      if (!resolved.ok) return resolved;
+      selector = resolved.selector;
+      frame = resolved.frame;
+      describe = resolved.describe;
+      const clicked = await clickSelector(id, selector, frame, describe);
       if (!clicked.ok) return clicked;
     }
     // A decisão de poder SUBSTITUIR é pura e vem dos fatos da página: um
@@ -1814,9 +2310,13 @@ export function createBrowserRegistry(callbacks: {
     // `insertText` seguinte substituiria a página inteira (ver
     // `browser-type-mode-decision.ts`). O append não consulta nada — o
     // caminho de hoje fica exatamente como era.
-    const describe = selector ? `selector ${JSON.stringify(selector)}` : "the focused element";
+    const factsSelector = selector ?? null;
     const readFacts = async () => {
-      const probe = await runInPage<TypeTargetFacts>(id, selector ?? null, typeTargetFactsSource(selector ?? null));
+      const probe = await runInPage<TypeTargetFacts>(
+        id,
+        factsSelector,
+        typeTargetFactsSource(factsSelector, frame),
+      );
       return probe.ok ? probe.value : null;
     };
     let facts = await readFacts();
@@ -1833,26 +2333,43 @@ export function createBrowserRegistry(callbacks: {
     }
     const decision = decideTypeMode({ replace, describe, facts });
     if (decision.action === "refuse") return { ok: false, error: decision.error };
+    const before = selector ? await readActionState(id, selector, frame) : null;
     if (decision.replace) {
       // Foco + seleção do conteúdo, na MESMA avaliação da página (sem corrida
       // com o foco assíncrono do clique), e o `insertText` que já existia
       // entra por cima: substitui em UM `beforeinput` de `insertText`, com
       // ZERO tecla sintética — IME-safe (ver `typeSelectContentSource`).
-      const selected = await runInPage<{ selected: number }>(id, selector ?? null, typeSelectContentSource(selector ?? null));
+      const selected = await runInPage<{ selected: number }>(
+        id,
+        factsSelector,
+        typeSelectContentSource(factsSelector, frame),
+      );
       if (!selected.ok) return { ok: false, error: selected.error };
       if (!(selected.value.selected > 0)) {
-        // Recusar é melhor que concatenar em silêncio: o defeito que este
-        // parâmetro existe para consertar é EXATAMENTE o append silencioso.
-        return {
-          ok: false,
-          error:
-            `browser_type refused with \`replace: true\`: ${describe} is empty or its content could not be selected, so ` +
-            `there was nothing to replace and typing would append. Nothing was typed.`,
-        };
+        // Empty field: replace:true is fill — just type. Only refuse when the
+        // field HAD content we failed to select (would silently append).
+        const empty =
+          before?.value === "" ||
+          before?.value === null ||
+          (typeof before?.value === "string" && before.value.length === 0);
+        if (!empty && before?.value != null) {
+          return {
+            ok: false,
+            error:
+              `browser_type refused with \`replace: true\`: ${describe} has content that could not be selected, so ` +
+              `typing would append instead of replace. Nothing was typed.`,
+          };
+        }
       }
     }
     insertText(id, text);
-    return { ok: true, replaced: decision.replace };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const after = selector ? await readActionState(id, selector, frame) : null;
+    let warning: string | null = null;
+    if (before && after && actionStatesEqual(before, after)) {
+      warning = describeUnchangedAction("type", before, after);
+    }
+    return { ok: true, replaced: decision.replace, after, warning };
   }
 
   /** `selector` given: scrolls that element's own container (a nested
@@ -1907,24 +2424,54 @@ export function createBrowserRegistry(callbacks: {
   /** Lets an agent inspect what's really on the page (existence, text,
    * form value, link target, checked/disabled state, real on-screen
    * rect) without depending on a screenshot — same `executeJavaScript`
-   * primitive as `getPageText`, just scoped to one element. */
-  async function query(id: string, selector: string): Promise<({ ok: true } & QueryResult) | { ok: false; error: string }> {
-    const found = await withSelector<QueryResult>(
+   * primitive as `getPageText`, just scoped to one element. Accepts
+   * selector/ref/role/text and optional `frame` (iframe CSS selector). */
+  async function query(
+    id: string,
+    selectorOrOpts: string | BrowserTargetOpts,
+  ): Promise<({ ok: true } & QueryResult) | { ok: false; error: string }> {
+    const opts: BrowserTargetOpts =
+      typeof selectorOrOpts === "string" ? { selector: selectorOrOpts } : selectorOrOpts;
+    const resolved = await resolveTargetSelector(id, opts);
+    if (!resolved.ok) {
+      if (/no element matches/i.test(resolved.error)) return { ok: true, exists: false };
+      return resolved;
+    }
+    const frameJson = resolved.frame === null ? "null" : JSON.stringify(resolved.frame);
+    const found = await runInPage<QueryResult>(
       id,
-      selector,
-      `const r = el.getBoundingClientRect();
-       const __t = el.innerText ?? el.textContent ?? "";
-       return {
-         exists: true,
-         text: __t.slice(0, 2000),
-         textTruncated: __t.length > 2000,
-         textTotalChars: __t.length,
-         value: "value" in el ? String(el.value) : undefined,
-         href: "href" in el ? String(el.href) : undefined,
-         checked: "checked" in el ? Boolean(el.checked) : undefined,
-         disabled: "disabled" in el ? Boolean(el.disabled) : undefined,
-         rect: { x: r.x, y: r.y, width: r.width, height: r.height },
-       };`,
+      resolved.selector,
+      `(() => {
+        const frameSel = ${frameJson};
+        let root = document;
+        let offsetX = 0, offsetY = 0;
+        if (frameSel) {
+          const frame = document.querySelector(frameSel);
+          if (!frame || !frame.contentDocument) return { __noMatch: true };
+          const fr = frame.getBoundingClientRect();
+          offsetX = fr.x; offsetY = fr.y;
+          root = frame.contentDocument;
+        }
+        let el;
+        try { el = root.querySelector(${JSON.stringify(resolved.selector)}); }
+        catch (err) { return { __selectorError: String((err && err.message) || err) }; }
+        if (!el) return { __noMatch: true };
+        const r = el.getBoundingClientRect();
+        const __t = el.innerText ?? el.textContent ?? "";
+        return {
+          __value: {
+            exists: true,
+            text: __t.slice(0, 2000),
+            textTruncated: __t.length > 2000,
+            textTotalChars: __t.length,
+            value: "value" in el ? String(el.value) : undefined,
+            href: "href" in el ? String(el.href) : undefined,
+            checked: "checked" in el ? Boolean(el.checked) : undefined,
+            disabled: "disabled" in el ? Boolean(el.disabled) : undefined,
+            rect: { x: offsetX + r.x, y: offsetY + r.y, width: r.width, height: r.height },
+          },
+        };
+      })()`,
     );
     // `exists: false` continua sendo uma RESPOSTA, não um erro: perguntar
     // "esse elemento está na página?" e ouvir "não" é o uso normal desta
@@ -1947,15 +2494,10 @@ export function createBrowserRegistry(callbacks: {
   // genérica.
   const MAX_EVAL_RESULT_CHARS = 20_000;
   /**
-   * `browser_eval` — com ESPERA por `.then` (não por identidade de Promise) e
-   * limite PRÓPRIO. Ver `browser-eval-timeout-decision.ts` para os dois modos
-   * de falha medidos (o objeto interno do Zone.js devolvido como se fosse
-   * valor, e a espera que escorria até o idle timeout de 300s do MCP).
-   *
-   * O envelope `async` com `await` garante que o valor que volta para o
-   * processo main seja uma Promise de VERDADE, mesmo com a Promise global
-   * trocada por Zone.js/polyfill — é o `await` da linguagem (máquina interna),
-   * não o construtor do framework.
+   * browser_eval — wait by `.then` (not Promise identity) and an OWN timeout.
+   * See browser-eval-timeout-decision.ts for Zone.js thenables, the MCP idle
+   * timeout trap, top-level return/await as async-function body, and in-page
+   * throw packing (message/stack/line instead of Electron's opaque string).
    */
   async function evalJs(
     id: string,
@@ -1966,21 +2508,26 @@ export function createBrowserRegistry(callbacks: {
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     const timeoutMs = normalizeEvalTimeout(timeoutMsInput);
     try {
-      const raw: unknown = await Promise.race([
+      const packed: unknown = await Promise.race([
         entry.win.webContents.executeJavaScript(awaitExpressionSource(js)),
         new Promise<never>((_resolve, reject) => {
           const timer = setTimeout(() => reject(new Error("__stellar_eval_timeout__")), timeoutMs);
-          // Não segura o event loop por causa de um eval que já desistiu.
+          // Do not pin the event loop for an eval that already gave up.
           if (typeof timer.unref === "function") timer.unref();
         }),
       ]).catch((err: unknown) => {
         if (String(err).includes("__stellar_eval_timeout__")) {
-          // O script SEGUE rodando na página (nada o interrompe) — a mensagem
-          // diz isso em vez de fingir que foi cancelado.
+          // The script KEEPS RUNNING in the page (nothing interrupts it) —
+          // the message says that instead of pretending it was cancelled.
           throw new Error(describeEvalTimeout({ waitedMs: timeoutMs, timeoutMs }));
         }
         throw err;
       });
+      const unwrapped = unwrapEvalRaw(packed);
+      if (unwrapped.kind === "thrown") {
+        return { ok: false, error: describeEvalThrown(unwrapped.error) };
+      }
+      const raw = unwrapped.value;
       let result: string;
       try {
         result = JSON.stringify(raw) ?? String(raw);
@@ -2153,7 +2700,10 @@ export function createBrowserRegistry(callbacks: {
   async function waitFor(
     id: string,
     opts: { selector?: string; text?: string; gone?: boolean; timeoutMs?: number },
-  ): Promise<{ ok: true; waitedMs: number } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; waitedMs: number }
+    | { ok: false; error: string; context?: BrowserErrorContext }
+  > {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     if (!opts.selector && !opts.text) return { ok: false, error: "need either selector or text" };
@@ -2170,8 +2720,8 @@ export function createBrowserRegistry(callbacks: {
       } catch (err) {
         return { ok: false, error: `failed to evaluate the wait condition: ${String(err)}` };
       }
-      // Um seletor inválido nunca vai ficar verdadeiro — falha na hora em
-      // vez de gastar o timeout inteiro e reportar "não apareceu".
+      // Invalid selector never becomes true — fail immediately instead of
+      // burning the whole timeout and reporting "did not appear".
       if (present && typeof present === "object" && "__selectorError" in present) {
         return { ok: false, error: `invalid CSS selector ${JSON.stringify(opts.selector)}: ${String((present as { __selectorError: string }).__selectorError)}` };
       }
@@ -2179,7 +2729,12 @@ export function createBrowserRegistry(callbacks: {
       await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
     }
     const what = opts.selector ? `selector ${JSON.stringify(opts.selector)}` : `text ${JSON.stringify(opts.text)}`;
-    return { ok: false, error: `timed out after ${timeoutMs}ms waiting for ${what} to ${opts.gone ? "disappear" : "appear"}` };
+    const context = await collectErrorContext(id);
+    return {
+      ok: false,
+      error: `timed out after ${timeoutMs}ms waiting for ${what} to ${opts.gone ? "disappear" : "appear"}`,
+      ...(context ? { context } : {}),
+    };
   }
 
   /** Polling da CHEGADA de `browser_navigate` — separado (e mais curto) que o
@@ -2198,34 +2753,56 @@ export function createBrowserRegistry(callbacks: {
         navigated: true;
         url: string;
         route: string;
-        arrival: "expect-selector" | "dom-changed";
-        weak: boolean;
-        probes: number;
-        waitedMs: number;
-        signal: NavigateSignal;
+        arrival: "expect-selector" | "dom-changed" | "document-load";
+        weak?: boolean;
+        probes?: number;
+        waitedMs?: number;
+        signal?: NavigateSignal;
+        note?: string;
+        notFound: boolean;
+        notFoundReason: string | null;
       }
-    | { ok: true; navigated: false; alreadyThere: true; url: string; route: string; note: string }
-    | { ok: false; error: string; code: string; url?: string; observedUrl?: string };
+    | {
+        ok: true;
+        navigated: false;
+        alreadyThere: true;
+        url: string;
+        route: string;
+        note: string;
+        notFound: boolean;
+        notFoundReason: string | null;
+      }
+    | {
+        ok: false;
+        error: string;
+        code: string;
+        url?: string;
+        observedUrl?: string;
+        context?: BrowserErrorContext;
+        notFound?: boolean;
+        notFoundReason?: string | null;
+      };
 
   /**
-   * `browser_navigate` — a navegação IN-APP que o relato do dono pediu (task
-   * 18df327e), com a medição que ele exige. Ver o doc-comment de
-   * `browser-navigate-decision.ts` para o incidente (CIEE: `/estudante/
-   * curriculo` reescrito para `/` por um route guard depois de um `open_url`)
-   * e para as quatro decisões.
-   *
-   * O fluxo aqui é de propósito: AMOSTRA → PRÉ-CHECAGEM → MUTAÇÃO → AMOSTRAS.
-   * A pré-chamada é o que permite recusar URL de outra origem e seletor de
-   * expectativa inválido SEM ter mexido na página — e a amostra "antes" é o
-   * único jeito honesto de dizer "a view mudou", porque `pushState` não avisa
-   * nada.
+   * browser_navigate — in-app pushState+popstate with measured arrival.
+   * Flow: SAMPLE → PRECHECK → MUTATE → SAMPLE. Precheck refuses cross-origin
+   * and bad expectSelector without touching the page.
    */
   async function navigateInApp(
     id: string,
-    opts: { url: string; expectSelector?: string; timeoutMs?: number },
+    opts: {
+      url: string;
+      expectSelector?: string;
+      timeoutMs?: number;
+      notFoundMarker?: string;
+      /** Caller owns this card — cross-origin becomes a document load. */
+      allowDocumentNav?: boolean;
+    },
   ): Promise<NavigateInAppOutcome> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"`, code: "card-not-found" };
+    // Capture after the guard: nested async closures do not keep Map.get narrowing.
+    const page = entry.win.webContents;
     const expectSelector = opts.expectSelector ?? null;
     const timeoutMs = Math.min(Math.max(opts.timeoutMs ?? NAV_DEFAULT_TIMEOUT_MS, NAV_POLL_MS), NAV_MAX_TIMEOUT_MS);
 
@@ -2237,9 +2814,42 @@ export function createBrowserRegistry(callbacks: {
       requested: opts.url,
       documentHref: before.href,
       expectSelectorError: before.expectError,
+      allowDocumentNav: opts.allowDocumentNav === true,
     });
     if (precheck.action === "refuse") return { ok: false, error: precheck.error, code: precheck.code };
+    async function probeNotFound(fp: ViewFingerprint): Promise<{ notFound: boolean; notFoundReason: string | null }> {
+      const marker = typeof opts.notFoundMarker === "string" ? opts.notFoundMarker.trim() : "";
+      let markerSelectorMatched: boolean | null = null;
+      if (marker && /^[.#[]/.test(marker)) {
+        try {
+          markerSelectorMatched = Boolean(
+            await page.executeJavaScript(
+              `(() => { try { return !!document.querySelector(${JSON.stringify(marker)}); } catch (e) { return false; } })()`,
+            ),
+          );
+        } catch {
+          markerSelectorMatched = false;
+        }
+      }
+      let visibleText: string;
+      try {
+        const raw: unknown = await page.executeJavaScript(`(document.body ? document.body.innerText : "")`);
+        visibleText = typeof raw === "string" ? raw : "";
+      } catch {
+        visibleText = "";
+      }
+      const verdict = decideSpaNotFound({
+        title: fp.title,
+        visibleText,
+        documentStatus: null,
+        notFoundMarker: marker || null,
+        markerSelectorMatched,
+      });
+      return { notFound: verdict.notFound, notFoundReason: verdict.reason };
+    }
+
     if (precheck.action === "already-there") {
+      const nf = await probeNotFound(before);
       return {
         ok: true,
         navigated: false,
@@ -2249,6 +2859,35 @@ export function createBrowserRegistry(callbacks: {
         note:
           "the card was already at this route — nothing was navigated (no pushState was issued, and no arrival " +
           "is claimed). Read the page with browser_query/browser_snapshot to see what is on screen.",
+        ...nf,
+      };
+    }
+
+    if (precheck.action === "document-load") {
+      // Full document navigation on the same owned card (cross-origin).
+      try {
+        await page.loadURL(precheck.href);
+      } catch (err) {
+        return {
+          ok: false,
+          error: `browser_navigate document-load failed: ${String(err)}`,
+          code: "document-load-failed",
+          url: precheck.href,
+        };
+      }
+      const afterSample = await runInPage<ViewFingerprint>(id, null, viewFingerprintSource(expectSelector));
+      if (!afterSample.ok) return { ok: false, error: afterSample.error, code: "page-probe-failed" };
+      const nf = await probeNotFound(afterSample.value);
+      return {
+        ok: true,
+        navigated: true,
+        url: afterSample.value.href,
+        route: precheck.route,
+        arrival: "document-load",
+        note:
+          "cross-origin navigation on your own browser card used a full document load (not pushState). " +
+          "In-memory SPA state from the previous origin does not survive.",
+        ...nf,
       };
     }
 
@@ -2297,14 +2936,19 @@ export function createBrowserRegistry(callbacks: {
       });
       if (verdict.settled) {
         if (!verdict.ok) {
+          const context = await collectErrorContext(id);
+          const nf = await probeNotFound(sample.value);
           return {
             ok: false,
             error: verdict.error,
             code: verdict.code,
             url: precheck.href,
             observedUrl: verdict.observedUrl,
+            ...(context ? { context } : {}),
+            ...nf,
           };
         }
+        const nf = await probeNotFound(sample.value);
         return {
           ok: true,
           navigated: true,
@@ -2315,6 +2959,7 @@ export function createBrowserRegistry(callbacks: {
           probes,
           waitedMs: elapsedMs,
           signal: verdict.signal,
+          ...nf,
         };
       }
       await new Promise((r) => setTimeout(r, NAV_POLL_MS));
@@ -2370,6 +3015,9 @@ export function createBrowserRegistry(callbacks: {
     group?: string;
     value?: string;
     disabled?: boolean;
+    box?: { x: number; y: number; w: number; h: number };
+    text?: string;
+    kind?: "control" | "text";
   };
 
   /**
@@ -2404,9 +3052,33 @@ export function createBrowserRegistry(callbacks: {
    *    ao Playwright MCP: guardar ref velho e clicar depois é justamente o
    *    erro que uma numeração estável convidaria.
    */
-  async function pageSnapshot(id: string): Promise<{ ok: true; url: string; title: string; elements: PageElement[]; truncated: boolean } | { ok: false; error: string }> {
+  async function pageSnapshot(
+    id: string,
+    opts: PageSnapshotOpts = {},
+  ): Promise<
+    | {
+        ok: true;
+        url: string;
+        title: string;
+        elements: PageElement[];
+        truncated: boolean;
+        scope: string | null;
+        scopeSource: "selector" | "ref" | "dialog" | "document" | "frame";
+      }
+    | { ok: false; error: string }
+  > {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const includeText = opts.includeText === true;
+    const includeBoxes = opts.includeBoxes === true;
+    const frameSelector =
+      typeof opts.frame === "string" && opts.frame.trim().length > 0 ? opts.frame.trim() : null;
+    const scopeSelector =
+      typeof opts.ref === "string" && opts.ref.trim()
+        ? `[data-stellar-ref="${opts.ref.trim().replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`
+        : typeof opts.scope === "string" && opts.scope.trim()
+          ? opts.scope.trim()
+          : null;
     try {
       // Passo 1: coletar FATOS. A decisão de quais entram — e em que elemento
       // o `ref` é carimbado — é do processo main, pura e testada fora do
@@ -2414,24 +3086,47 @@ export function createBrowserRegistry(callbacks: {
       const raw: unknown = await entry.win.webContents.executeJavaScript(`
         (() => {
           ${snapshotTargetProbeSource()}
+          const INCLUDE_TEXT = ${includeText ? "true" : "false"};
+          const SCOPE_SEL = ${JSON.stringify(scopeSelector)};
+          const FRAME_SEL = ${JSON.stringify(frameSelector)};
+          const DIALOG_SEL = ${JSON.stringify(DEFAULT_DIALOG_SCOPE_SELECTOR)};
+          let scopeSource = "document";
+          let root = document;
+          if (FRAME_SEL) {
+            const frame = document.querySelector(FRAME_SEL);
+            if (!frame) return { __error: "no iframe matches frame " + JSON.stringify(FRAME_SEL) };
+            if (!frame.contentDocument) return { __error: "iframe contentDocument is inaccessible (cross-origin?): " + JSON.stringify(FRAME_SEL) };
+            root = frame.contentDocument;
+            scopeSource = "frame";
+          }
+          if (SCOPE_SEL) {
+            const scoped = root.querySelector(SCOPE_SEL);
+            if (!scoped) return { __error: "no element matches scope " + JSON.stringify(SCOPE_SEL) };
+            root = scoped;
+            scopeSource = ${opts.ref ? JSON.stringify("ref") : JSON.stringify("selector")};
+          } else if (!FRAME_SEL) {
+            const dialog = document.querySelector(DIALOG_SEL);
+            if (dialog) { root = dialog; scopeSource = "dialog"; }
+          }
           const SEL = [
             "a[href]", "button", "input", "select", "textarea", "summary",
             "[role=button]", "[role=link]", "[role=checkbox]", "[role=radio]",
             "[role=tab]", "[role=menuitem]", "[role=option]", "[role=switch]",
             "[contenteditable=true]", "[onclick]", "[tabindex]:not([tabindex='-1'])",
           ].join(",");
-          for (const old of document.querySelectorAll("[data-stellar-ref]")) old.removeAttribute("data-stellar-ref");
+          const stampDoc = root.nodeType === 9 ? root : root.ownerDocument || document;
+          for (const old of stampDoc.querySelectorAll("[data-stellar-ref]")) old.removeAttribute("data-stellar-ref");
           function accessibleName(el) {
             const aria = el.getAttribute("aria-label");
             if (aria && aria.trim()) return aria.trim();
             const labelledBy = el.getAttribute("aria-labelledby");
             if (labelledBy) {
-              const parts = labelledBy.split(/\\s+/).map((x) => document.getElementById(x)).filter(Boolean);
+              const parts = labelledBy.split(/\\s+/).map((x) => stampDoc.getElementById(x)).filter(Boolean);
               const joined = parts.map((n) => (n.innerText || n.textContent || "").trim()).join(" ").trim();
               if (joined) return joined;
             }
             if (el.id) {
-              const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+              const lbl = stampDoc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
               if (lbl) {
                 const t = (lbl.innerText || lbl.textContent || "").trim();
                 if (t) return t;
@@ -2471,7 +3166,7 @@ export function createBrowserRegistry(callbacks: {
           const targets = [];
           const labelOrdinals = new Map();
           let index = 0;
-          for (const el of document.querySelectorAll(SEL)) {
+          for (const el of root.querySelectorAll(SEL)) {
             if (index >= ${SNAPSHOT_MAX_CANDIDATES}) break;
             const i = index++;
             const full = __stellarSnapshotFacts(el);
@@ -2487,6 +3182,7 @@ export function createBrowserRegistry(callbacks: {
               index: i,
               selfKey: "s" + i,
               labelKey: labelKey,
+              kind: "control",
               facts: {
                 tag: tag,
                 selfVisible: full.selfVisible,
@@ -2498,13 +3194,12 @@ export function createBrowserRegistry(callbacks: {
               name: accessibleName(el),
               tag: tag,
               inputType: inputType,
+              box: full.box,
             };
             if (el.disabled) item.disabled = true;
             if (inputType === "checkbox" || inputType === "radio") {
-              // SEMPRE (true E false): numa tela com 40 rádios, "checked: false"
-              // sozinho não informa nada — é o atributo group que diz de que
-              // pergunta cada um é. value só quando o atributo existe de
-              // verdade (o "on" implícito de um rádio é ruído em 40 linhas).
+              // Always (true AND false): on a screen with 40 radios, "checked: false"
+              // alone says nothing — group names which question each belongs to.
               item.checked = Boolean(el.checked);
               if (el.name) item.group = String(el.name);
               if (el.hasAttribute("value")) item.value = String(el.value).slice(0, 120);
@@ -2514,17 +3209,73 @@ export function createBrowserRegistry(callbacks: {
             candidates.push(item);
             targets.push({ self: el, label: labelEl });
           }
+          if (INCLUDE_TEXT) {
+            const TEXT_SEL = "p,h1,h2,h3,h4,h5,h6,li,td,th,label,span,div,[role=status],[role=heading]";
+            for (const el of root.querySelectorAll(TEXT_SEL)) {
+              if (index >= ${SNAPSHOT_MAX_CANDIDATES}) break;
+              if (el.closest && el.closest(SEL)) continue;
+              const full = __stellarSnapshotFacts(el);
+              if (!full.selfVisible) continue;
+              const text = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+              if (!text || text.length < 2) continue;
+              const i = index++;
+              candidates.push({
+                index: i,
+                selfKey: "t" + i,
+                labelKey: null,
+                kind: "text",
+                facts: {
+                  tag: String(el.tagName || "").toLowerCase(),
+                  selfVisible: full.selfVisible,
+                  pointInViewport: full.pointInViewport,
+                  pointHitsSelf: true,
+                  label: null,
+                },
+                role: el.getAttribute("role") || "text",
+                name: text.slice(0, 120),
+                tag: String(el.tagName || "").toLowerCase(),
+                inputType: null,
+                box: full.box,
+                text: text.slice(0, 240),
+              });
+              targets.push({ self: el, label: null });
+            }
+          }
           window.__stellarSnapshotTargets = targets;
-          return { url: location.href, title: document.title, candidates: candidates };
+          return {
+            url: location.href,
+            title: document.title,
+            candidates: candidates,
+            scope: root === document ? null : (SCOPE_SEL || DIALOG_SEL),
+            scopeSource: scopeSource,
+          };
         })()
       `);
-      const probed = raw as { url: string; title: string; candidates: SnapshotCandidate[] };
+      if (raw && typeof raw === "object" && "__error" in (raw as object)) {
+        return { ok: false, error: String((raw as { __error: string }).__error) };
+      }
+      const probed = raw as {
+        url: string;
+        title: string;
+        candidates: SnapshotCandidate[];
+        scope: string | null;
+        scopeSource: "selector" | "ref" | "dialog" | "document" | "frame";
+      };
       // A DECISÃO, pura: quais entram e em que elemento o ref é carimbado.
       const elements: PageElement[] = [];
       const usedKeys = new Set<string>();
       const stamps: Array<{ index: number; key: string; ref: string; onLabel: boolean }> = [];
+      const nextHandles = new Map<string, RefHandle>();
       for (const candidate of probed.candidates) {
-        const decision = decideSnapshotTarget(candidate.facts);
+        // Inside an iframe, top-level elementFromPoint hits the <iframe>
+        // element — not the control — so pointHitsSelf is always false.
+        // CSS-visible controls in the frame are still actionable.
+        const decision =
+          candidate.kind === "text"
+            ? ({ list: true, refOn: "self" as const, offscreen: !candidate.facts.pointInViewport })
+            : frameSelector && candidate.facts.selfVisible
+              ? ({ list: true, refOn: "self" as const, offscreen: false })
+              : decideSnapshotTarget(candidate.facts);
         if (!decision.list) continue;
         const onLabel = decision.refOn === "label";
         const key = onLabel ? candidate.labelKey : candidate.selfKey;
@@ -2533,12 +3284,28 @@ export function createBrowserRegistry(callbacks: {
         usedKeys.add(key);
         const ref = `e${elements.length + 1}`;
         stamps.push({ index: candidate.index, key, ref, onLabel });
+        nextHandles.set(ref, {
+          role: candidate.role,
+          name: candidate.name,
+          tag: candidate.tag,
+        });
         const item: PageElement = { ref, role: candidate.role, name: candidate.name, tag: candidate.tag };
         if (candidate.disabled) item.disabled = true;
         if (candidate.checked !== undefined) item.checked = candidate.checked;
         if (candidate.group !== undefined) item.group = candidate.group;
         if (candidate.value !== undefined) item.value = candidate.value;
         if (decision.refOn === "label") item.via = "label";
+        if (decision.offscreen) item.offscreen = true;
+        else item.offscreen = false;
+        if (includeBoxes && candidate.box) {
+          item.box = {
+            x: Math.round(candidate.box.x),
+            y: Math.round(candidate.box.y),
+            w: Math.round(candidate.box.w),
+            h: Math.round(candidate.box.h),
+          };
+        }
+        if (includeText && candidate.text) item.text = candidate.text;
         elements.push(item);
       }
       // Passo 2: carimbar cada ref no alvo escolhido (o próprio controle ou o
@@ -2570,12 +3337,15 @@ export function createBrowserRegistry(callbacks: {
           error: `the page changed while the snapshot was being read: only ${String(stampedCount)} of ${stamps.length} refs could be stamped, so some of them would not be clickable. Call browser_snapshot again.`,
         };
       }
+      entry.refHandles = nextHandles;
       return {
         ok: true,
         url: probed.url,
         title: probed.title,
         elements,
         truncated: probed.candidates.length >= SNAPSHOT_MAX_CANDIDATES,
+        scope: probed.scope,
+        scopeSource: probed.scopeSource,
       };
     } catch (err) {
       return { ok: false, error: `failed to snapshot the page: ${String(err)}` };
@@ -2598,22 +3368,296 @@ export function createBrowserRegistry(callbacks: {
    * visível. Aqui não existe board nenhum: a BrowserWindow offscreen deste
    * card é uma superfície própria, então a captura é exatamente o conteúdo
    * renderizado, na resolução real, independente de onde (ou se) o card
-   * aparece na tela. */
-  async function capturePage(id: string): Promise<{ ok: true; png: Buffer } | { ok: false; error: string }> {
+   * aparece na tela.
+   *
+   * `fullPage` grows the paint buffer to the document scroll size for one
+   * shot (media-query width stays put). `selector`/`ref` crop to that
+   * element's box after scrolling it into view. */
+  async function capturePage(
+    id: string,
+    opts: { fullPage?: boolean; selector?: string; ref?: string } = {},
+  ): Promise<{ ok: true; png: Buffer } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const wc = entry.win.webContents;
     try {
-      const image = await entry.win.webContents.capturePage();
+      if (opts.fullPage) {
+        const prevSize = entry.win.getContentSize();
+        const prevZoom = wc.getZoomFactor();
+        const dims = (await wc.executeJavaScript(`({
+          w: Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0, window.innerWidth),
+          h: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0, window.innerHeight)
+        })`)) as { w: number; h: number };
+        const factor = Math.max(1, prevZoom);
+        wc.setZoomFactor(factor);
+        entry.win.setContentSize(
+          Math.max(1, Math.round(dims.w * factor)),
+          Math.max(1, Math.round(dims.h * factor)),
+        );
+        await new Promise((r) => setTimeout(r, 80));
+        const image = await wc.capturePage();
+        entry.win.setContentSize(prevSize[0], prevSize[1]);
+        wc.setZoomFactor(prevZoom);
+        entry.needsFullFrame = true;
+        return { ok: true, png: image.toPNG() };
+      }
+
+      if (opts.selector || opts.ref) {
+        const selector = opts.ref ? refSelector(opts.ref) : (opts.selector as string);
+        const rect = (await wc.executeJavaScript(`(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          el.scrollIntoView({ block: "nearest", inline: "nearest" });
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        })()`)) as { x: number; y: number; w: number; h: number } | null;
+        if (!rect || rect.w <= 0 || rect.h <= 0) {
+          return {
+            ok: false,
+            error: `browser_screenshot: no visible element for ${opts.ref ? `ref ${JSON.stringify(opts.ref)}` : `selector ${JSON.stringify(opts.selector)}`}`,
+          };
+        }
+        const image = await wc.capturePage();
+        const factor = Math.max(1, wc.getZoomFactor());
+        const crop = {
+          x: Math.max(0, Math.round(rect.x * factor)),
+          y: Math.max(0, Math.round(rect.y * factor)),
+          width: Math.max(1, Math.round(rect.w * factor)),
+          height: Math.max(1, Math.round(rect.h * factor)),
+        };
+        const size = image.getSize();
+        if (crop.x + crop.width > size.width) crop.width = Math.max(1, size.width - crop.x);
+        if (crop.y + crop.height > size.height) crop.height = Math.max(1, size.height - crop.y);
+        return { ok: true, png: image.crop(crop).toPNG() };
+      }
+
+      const image = await wc.capturePage();
       return { ok: true, png: image.toPNG() };
     } catch (err) {
       return { ok: false, error: String(err) };
     }
   }
 
+  function defaultScreenshotPath(): string {
+    return joinPath(app.getPath("temp"), `agent-canvas-snapshot-${randomUUID()}.png`);
+  }
+
+  async function writeScreenshot(
+    id: string,
+    mode: ScreenshotMode,
+    out: string | null,
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+    const captured = await capturePage(id, {
+      fullPage: mode.kind === "fullPage",
+      selector: mode.kind === "element" && "selector" in mode ? mode.selector : undefined,
+      ref: mode.kind === "element" && "ref" in mode ? mode.ref : undefined,
+    });
+    if (!captured.ok) return captured;
+    const filePath = out ?? defaultScreenshotPath();
+    try {
+      writeFileSync(filePath, captured.png);
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, error: `failed to write screenshot: ${String(err)}` };
+    }
+  }
+
+  /**
+   * browser_screenshot / enhanced snapshot for one browser card. Optional
+   * temporary `width` applies device emulation for the shot only, then
+   * restores the previous emulation (or layout).
+   */
+  async function screenshot(
+    id: string,
+    input: ScreenshotInput = {},
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const decision = decideScreenshot(input);
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+
+    const previous = entry.emulation
+      ? { ...entry.emulation }
+      : null;
+    let temporaryWidth = false;
+    if (decision.width !== null) {
+      temporaryWidth = true;
+      const height =
+        previous?.height ??
+        entry.lastLayoutSize?.h ??
+        Math.max(100, Math.round(entry.win.getContentSize()[1] / Math.max(1, entry.win.webContents.getZoomFactor())));
+      const dsf = previous?.deviceScaleFactor ?? 1;
+      const mobile = previous?.mobile ?? decision.width < 768;
+      setDeviceEmulation(
+        id,
+        { width: decision.width, height, deviceScaleFactor: dsf, mobile },
+        previous?.source ?? "agent",
+      );
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    try {
+      return await writeScreenshot(id, decision.mode, decision.out);
+    } finally {
+      if (temporaryWidth) {
+        if (previous) {
+          setDeviceEmulation(
+            id,
+            {
+              width: previous.width,
+              height: previous.height,
+              deviceScaleFactor: previous.deviceScaleFactor,
+              mobile: previous.mobile,
+            },
+            previous.source,
+          );
+        } else {
+          setDeviceEmulation(id, null, "agent");
+        }
+      }
+    }
+  }
+
+  let routeSeq = 0;
+  function nextRouteId(): string {
+    routeSeq += 1;
+    return `route-${routeSeq}`;
+  }
+
+  function publishRoutes(id: string) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    callbacks.onRoutesChanged(id, entry.routes.map(summarizeRoute));
+  }
+
+  async function resolveRouteBody(
+    response: ActiveRoute["response"],
+  ): Promise<{ ok: true; body: string | null } | { ok: false; error: string }> {
+    if (typeof response.body === "string") return { ok: true, body: response.body };
+    if (typeof response.bodyFile === "string" && response.bodyFile.trim()) {
+      const raw = response.bodyFile.trim();
+      // Absolute paths only — a relative path would depend on the app's cwd,
+      // which is not the page's origin and surprises agents.
+      if (!isAbsolute(raw)) {
+        return {
+          ok: false,
+          error:
+            `browser_route: response.bodyFile must be an absolute path (got ${JSON.stringify(raw)}). ` +
+            `Pass body as a string instead when the payload is small.`,
+        };
+      }
+      try {
+        return { ok: true, body: readFileSync(resolvePath(raw), "utf8") };
+      } catch (err) {
+        return { ok: false, error: `browser_route: could not read bodyFile ${JSON.stringify(raw)}: ${String(err)}` };
+      }
+    }
+    return { ok: true, body: null };
+  }
+
+  function installRouteHandlers(id: string): { ok: true } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    if (entry.routeHandlersInstalled) return { ok: true };
+    const ses = entry.win.webContents.session;
+    const handler = async (request: GlobalRequest): Promise<GlobalResponse> => {
+      const live = entries.get(id);
+      if (!live || live.routes.length === 0) {
+        return ses.fetch(request, { bypassCustomProtocolHandlers: true });
+      }
+      const matched = matchRequest(live.routes, { url: request.url, method: request.method });
+      if (matched.action === "pass") {
+        return ses.fetch(request, { bypassCustomProtocolHandlers: true });
+      }
+      const bodyResolved = await resolveRouteBody(matched.response);
+      if (!bodyResolved.ok) {
+        return new Response(JSON.stringify({ error: bodyResolved.error }), {
+          status: 502,
+          headers: { "content-type": "application/json", "x-stellar-route-error": "1" },
+        });
+      }
+      live.routes = afterRouteHit(live.routes, matched.routeId);
+      publishRoutes(id);
+      if (live.routes.length === 0) uninstallRouteHandlers(id);
+      const headers = new Headers(matched.response.headers ?? undefined);
+      return new Response(bodyResolved.body, { status: matched.response.status, headers });
+    };
+    try {
+      ses.protocol.handle("http", handler);
+      ses.protocol.handle("https", handler);
+      entry.routeHandlersInstalled = true;
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: `failed to install route handlers: ${String(err)}` };
+    }
+  }
+
+  function uninstallRouteHandlers(id: string) {
+    const entry = entries.get(id);
+    if (!entry || !entry.routeHandlersInstalled) return;
+    const ses = entry.win.webContents.session;
+    try {
+      ses.protocol.unhandle("http");
+      ses.protocol.unhandle("https");
+    } catch {
+      /* already gone with the session */
+    }
+    entry.routeHandlersInstalled = false;
+  }
+
+  async function addRoute(
+    id: string,
+    input: RouteInput,
+  ): Promise<
+    | { ok: true; route: ReturnType<typeof summarizeRoute>; routes: ReturnType<typeof summarizeRoute>[] }
+    | { ok: false; error: string }
+  > {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const decision = decideRouteAccept(input, nextRouteId());
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+    if (decision.route.response.bodyFile) {
+      const probe = await resolveRouteBody(decision.route.response);
+      if (!probe.ok) return probe;
+    }
+    const installed = installRouteHandlers(id);
+    if (!installed.ok) return installed;
+    const active: ActiveRoute = { ...decision.route, hitCount: 0 };
+    entry.routes = [...entry.routes, active];
+    publishRoutes(id);
+    return { ok: true, route: summarizeRoute(active), routes: entry.routes.map(summarizeRoute) };
+  }
+
+  function clearRoutes(
+    id: string,
+    opts: { routeId?: string; urlPattern?: string } = {},
+  ):
+    | { ok: true; removed: ReturnType<typeof summarizeRoute>[]; routes: ReturnType<typeof summarizeRoute>[] }
+    | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const { next, removed } = removeRoutes(entry.routes, opts);
+    entry.routes = next;
+    if (entry.routes.length === 0) uninstallRouteHandlers(id);
+    publishRoutes(id);
+    return { ok: true, removed: removed.map(summarizeRoute), routes: entry.routes.map(summarizeRoute) };
+  }
+
+  function listRoutes(id: string): { ok: true; routes: ReturnType<typeof summarizeRoute>[] } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    return { ok: true, routes: entry.routes.map(summarizeRoute) };
+  }
+
   function destroy(id: string) {
     const entry = entries.get(id);
     if (entry) wcIdToCardId.delete(entry.win.webContents.id);
     if (!entry) return;
+    // Drop mocks before tearing the window down — partition dies with it,
+    // but uninstall keeps the invariant "no handlers when routes empty".
+    entry.routes = [];
+    uninstallRouteHandlers(id);
+    publishRoutes(id);
     // Idempotente mesmo se o unmount do BrowserInspector.tsx já tiver
     // desanexado antes (`detachInspector` acima) — a ordem entre "React
     // unmount → IPC detach" e "card fechando → IPC destroy" nunca
@@ -2639,6 +3683,10 @@ export function createBrowserRegistry(callbacks: {
     detachInspector,
     sendCdp,
     setDeviceEmulation,
+    getDeviceEmulation,
+    getProfile,
+    setDisplayMode,
+    setViewport,
     resize,
     getContentSize,
     refreshScaleFactor,
@@ -2658,6 +3706,7 @@ export function createBrowserRegistry(callbacks: {
     getPageText,
     clickAtPoint,
     clickSelector,
+    clickTarget,
     typeText,
     scroll,
     query,
@@ -2674,6 +3723,10 @@ export function createBrowserRegistry(callbacks: {
     pageSnapshot,
     refSelector,
     capturePage,
+    screenshot,
+    addRoute,
+    clearRoutes,
+    listRoutes,
     destroy,
     destroyAll,
   };

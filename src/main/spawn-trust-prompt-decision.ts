@@ -1,3 +1,5 @@
+import { APP_NOTICE } from "./agent-facing-notices";
+
 /**
  * The provider trust prompt — decision only, no I/O.
  *
@@ -58,13 +60,15 @@ export function decideTrustPromptAction(input: {
  * orchestrator when the prompt appears outside the declared root: the app did
  * not confirm it. */
 export function describeTrustPromptOutsideRootWarning(input: {
+  cardId?: string;
   providerId: string;
   cwd: string;
   root: string | null;
 }): string {
-  const where = input.root ? `outside the board's declared root "${input.root}"` : "with no declared root for the board";
-  return (
-    `[de: stellar] the ${input.providerId} card opened at "${input.cwd}" shows a trust prompt ${where} — ` +
-    `NOT confirmed on your behalf: confirm it by hand, or move the card inside the declared root.`
-  );
+  return APP_NOTICE.trustPrompt({
+    cardId: input.cardId ?? "unknown",
+    provider: input.providerId,
+    cwd: input.cwd,
+    root: input.root,
+  });
 }

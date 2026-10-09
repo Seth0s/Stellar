@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { BoardTaskDefaults } from "../../src/main/board-preset-decision";
+import { invalidBusRequest } from "../helpers/bus-response";
 
 /**
  * BOARD PRESETS — FASE 2: o default do board aplicado no `create_task`
@@ -140,12 +141,12 @@ describe("message-bus: create_task herda os defaults do board", () => {
     const upserted: Array<Record<string, unknown>> = [];
     const b = makeBus(BOARD, upserted);
 
-    const res = (await b.handleRequest({
+    const res = (await b.handleRequest(invalidBusRequest({
       cmd: "create_task",
       prompt: "x",
       boardId: "118",
       reportSchema: [1],
-    } as BusRequest)) as { ok: boolean; error?: string; field?: string };
+    }))) as { ok: boolean; error?: string; field?: string };
 
     expect(res.ok).toBe(false);
     expect(res.field).toBe("reportSchema");

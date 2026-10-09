@@ -3,18 +3,16 @@ import { existsSync, unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
+import { peerPidFromSocket } from "./peer-credentials";
+import type { ProcessIdentity } from "./process-identity";
+import { redactSecretValues } from "./secret-redaction";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, ReportIngressChannel, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import {
   formatAgentFacingAuthorship,
-  REPORT_AVAILABLE_POINTER_BODY,
-  unreportedExitPointerBody,
-  unreportedIdlePointerBody,
-  silentBootPointerBody,
-  unreportedNoAgentPointerBody,
-  unreportedUnprovenIdlePointerBody,
   selfReportReminderBody,
 } from "./agent-facing-authorship";
+import { APP_NOTICE } from "./agent-facing-notices";
 import { formatCardAuthoredDelivery } from "./pasted-content-decision";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, shouldPromoteUnconfirmed, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
@@ -26,6 +24,12 @@ import {
   type OriginDeliveryRateSample,
 } from "./delivery-lifecycle-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
+import {
+  decideBoardScope,
+  decideCrossBoardRead,
+  type BoardScopeToolGroup,
+  type CrossBoardReadRequest,
+} from "./board-scope-decision";
 import type { StatusWriteActor, StatusWriteDecision } from "./status-write-decision";
 import {
   decideStatusAsk,
@@ -59,7 +63,6 @@ import {
   IDLE_WITHOUT_REPORT_POLL_MS,
   isAnswerLanded,
   looksLikeReportShape,
-  screenReportPointerBody,
 } from "./idle-without-report-decision";
 import { decideSelfReminder } from "./idle-self-reminder-decision";
 import type { ScreenTurnState } from "./screen-turn-state";
@@ -148,8 +151,8 @@ import {
 } from "./gate-runner";
 import { readDeclaredFilesFromReport, type DeclaredFiles } from "./gate-isolation-decision";
 import {
+  classifyGateAttribution,
   describeGateContradiction,
-  describeGateResultSuffix,
   gateRunSummaryFromEvidence,
   GATE_NOTICE_WAIT_MS,
 } from "./gate-notice-decision";
@@ -182,6 +185,13 @@ import {
   describeAmbiguousTaskRefusal,
   describeDeclaredTaskNotLinkedRefusal,
 } from "./report-task-link-decision";
+import {
+  decideCheckpointReminder,
+  latestFinalSeq,
+  normalizeReportEstado,
+  reportConcludesTask,
+  reportDeclaresIntention,
+} from "./report-estado-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
 import { decideSpawnIsolation } from "./worktree-isolation-decision";
 import { defaultWorktreeRoot, prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
@@ -194,6 +204,12 @@ import {
 } from "./acbridge-protocol-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
+import {
+  describeBrowserRunTimeout,
+  extractAfterState,
+  normalizeBrowserRun,
+  stepToBusFields,
+} from "./browser-run-decision";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 import { argvCarriesDeclaredBrief, midTurnQueueAutoDelivers, providerById, providerCapacity } from "./providers";
 import {
@@ -218,6 +234,13 @@ import {
   describeQueuedSpawnArrival,
   shouldNoticeQueuedSpawnArrival,
 } from "./spawn-queue-notice-decision";
+import {
+  describeSpawnQueueReason,
+  spawnQueueReasonAtEnqueue,
+  type SpawnQueueReason,
+  type SpawnRecordStatus,
+} from "./spawn-queue-ack-decision";
+import { activeDeclarationCardIds } from "./active-declaration-decision";
 import {
   SPAWN_IDEMPOTENCY_WINDOW_MS,
   decideSpawnIdempotency,
@@ -424,14 +447,8 @@ export function describeBlockedWithoutQuestion(): string {
 }
 
 /** AGENT-FACING — DO NOT TRANSLATE. A escolha que volta para o card. */
-export function describeBlockedAnswer(question: BlockedQuestion, optionId: string, note: string | null): string {
-  const chosen = question.options.find((o) => o.id === optionId) ?? null;
-  const answer = chosen ? chosen.label : `free-form: ${note ?? ""}`;
-  const detail = note && chosen ? ` — ${note}` : "";
-  return (
-    `[de: stellar] Answer to your blocked question "${question.text}": ${answer}${detail}. ` +
-    "Proceed; if you need another decision, ask again the same way (update_task status:blocked with a question)."
-  );
+export function describeBlockedAnswer(taskId: string): string {
+  return APP_NOTICE.blockedAnswer(taskId);
 }
 
 /**
@@ -566,11 +583,11 @@ export function worktreeLeftoverNotice(cwd: string | null | undefined, root: str
 
 /** AGENT-FACING — DO NOT TRANSLATE. O ponteiro do aviso de "ninguém respondeu". */
 export function describeBlockedNotice(taskId: string, question: BlockedQuestion, waitedMs: number): string {
-  const waited = waitedMs <= 0 ? "just now" : `~${Math.max(1, Math.round(waitedMs / 60_000))} min`;
-  return (
-    `[de: stellar] task ${taskId} is BLOCKED (${waited}) on a question: "${question.text}". ` +
-    "A human can answer it on the Queue task card, or you can via answer_blocked_task. It will NOT unblock by itself."
-  );
+  void question;
+  return APP_NOTICE.blockedQuestion({
+    taskId,
+    ...(waitedMs > 0 ? { waitedMinutes: Math.max(1, Math.round(waitedMs / 60_000)) } : {}),
+  });
 }
 
 const OPEN_TIMEOUT_MS = 120_000;
@@ -742,45 +759,84 @@ export type StickyOp =
   | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task" | "media";
+/** Queued ack from the autonomous spawn FIFO — no card yet; poll `get_spawn`. */
+export type SpawnAgentQueuedResult = {
+  ok: true;
+  queued: true;
+  spawnId: string;
+  /** 1-based position in the board FIFO at ack time. */
+  position: number;
+  /** Human-readable reason (concurrency cap facts). */
+  queueReason: string;
+  queueReasonCode: SpawnQueueReason["code"];
+  /**
+   * `true` when this response is an earlier call's queued ack reused by
+   * `idempotencyKey` — `spawnId` is NOT a second queue entry.
+   */
+  idempotentReplay?: boolean;
+};
+
+/** Card stood up (or wait:true exit fields). Discriminated from queued by `cardId`. */
+export type SpawnAgentCardResult = {
+  ok: true;
+  cardId: string;
+  exited?: boolean;
+  exitCode?: number;
+  /**
+   * What happened to the brief (see spawn-brief-delivery-decision.ts).
+   * `briefDelivered` is true only when the text is in process launch argv —
+   * the only delivery that needs nothing later. On the typed path it is
+   * false by definition, and `briefDeliveryId` makes the verdict pollable
+   * via `get_delivery`. Absent on `ok:false` — there is no delivery to report.
+   */
+  briefDelivered?: boolean;
+  briefMode?: SpawnBriefMode;
+  briefDeliveryId?: string;
+  briefNote?: string;
+  /**
+   * True when this response reuses an earlier call via `idempotencyKey`
+   * (same caller + key, within the window) — `cardId` is NOT a new card.
+   * Without this flag the caller cannot tell "I created one" from "I already had one".
+   */
+  idempotentReplay?: boolean;
+  /**
+   * Informative only, never a gate: out-of-order dispatch is a legitimate
+   * orchestrator choice — the brief already carries each dep's state; this
+   * note just surfaces that fact at dispatch time. Present only when the
+   * task has deps that are not done yet.
+   */
+  note?: string;
+  /** A territory overlap that PASSED with a warning (a new/specific target
+   *  under another active task's broad glob) — informative, never a gate. */
+  territoryWarning?: string;
+};
+
 export type SpawnAgentResult =
-  | {
-      ok: true;
-      cardId: string;
-      exited?: boolean;
-      exitCode?: number;
-      /**
-       * O QUE ACONTECEU COM O BRIEF (task bf1fb0a7) — ver
-       * spawn-brief-delivery-decision.ts para a medição que originou isto.
-       * `briefDelivered` só é `true` quando o texto está no LAUNCH do processo
-       * (argv): é a única entrega que não depende de nada posterior. No
-       * caminho digitado ele é `false` por definição, e `briefDeliveryId` é o
-       * que torna o veredito consultável (`get_delivery`) em vez de
-       * adivinhado. Ausente num `ok:false` — ali não existe entrega a relatar.
-       */
-      briefDelivered?: boolean;
-      briefMode?: SpawnBriefMode;
-      briefDeliveryId?: string;
-      briefNote?: string;
-      /**
-       * `true` quando esta resposta é a de uma chamada ANTERIOR reusada pela
-       * chave de idempotência (mesmo chamador + mesma `idempotencyKey`, dentro
-       * da janela) — o `cardId` NÃO é um card novo. Sem isto o chamador não
-       * consegue distinguir "criei um card" de "já tinha criado"; é a mesma
-       * disciplina de dizer a verdade sobre o que ficou de pé que motivou os
-       * campos de brief acima.
-       */
-      idempotentReplay?: boolean;
-      /** Nota informativa, nunca impedimento (task 095158e9, item b):
-       * despachar fora de ordem é decisão LEGÍTIMA do orquestrador — o
-       * brief já carrega o estado de cada dep, e isto só evita que quem
-       * despacha precise abrir o brief pra saber. Presente apenas quando a
-       * task tem deps não-done no momento do despacho. */
-      note?: string;
-      /** A territory overlap that PASSED with a warning (a new/specific target
-       *  under another active task's broad glob) — informative, never a gate. */
-      territoryWarning?: string;
-    }
+  | SpawnAgentQueuedResult
+  | SpawnAgentCardResult
   | { ok: false; error: string };
+
+export function isQueuedSpawnResult(result: SpawnAgentResult): result is SpawnAgentQueuedResult {
+  return result.ok === true && "queued" in result && result.queued === true;
+}
+
+export function isCardSpawnResult(result: SpawnAgentResult): result is SpawnAgentCardResult {
+  return result.ok === true && "cardId" in result && typeof result.cardId === "string";
+}
+
+/**
+ * Dual promise for spawn dispatch: `response` is what the MCP call awaits
+ * (queued ack within `SPAWN_QUEUE_ACK_MS`, or the card); `eventual` settles
+ * when a card is created or the attempt fails for real.
+ */
+type SpawnDispatch = {
+  response: Promise<SpawnAgentResult>;
+  eventual: Promise<SpawnAgentResult>;
+};
+
+function asSpawnDispatch(promise: Promise<SpawnAgentResult>): SpawnDispatch {
+  return { response: promise, eventual: promise };
+}
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 /** 2026-09-19 — recusa do `create_task` quando nenhum board resolve: mesma
@@ -871,7 +927,15 @@ function defaultGitLogSince(cwd: string, sinceMs: number, cap: number = CHANGED_
 }
 
 export type BusRequest =
-  | { cmd: "list" }
+  | { cmd: "list"; boardId?: string }
+  | {
+      cmd: "request_cross_board_read";
+      targetBoardId?: string;
+      resourceKind?: "task" | "card" | "report" | "sprint" | "connector";
+      resourceId?: string;
+      reason?: string;
+      requesterId?: string;
+    }
   | {
       cmd: "send";
       target?: string;
@@ -891,6 +955,8 @@ export type BusRequest =
   | { cmd: "get_delivery"; id?: string }
   | { cmd: "list_deliveries"; target?: string; requesterId?: string; delivery?: string }
   | { cmd: "cancel_deliveries"; id?: string; requesterId?: string }
+  /** Poll a `spawn_agent` that returned `{queued:true, spawnId}` — status + cardId. */
+  | { cmd: "get_spawn"; spawnId?: string }
   /**
    * Task 5d47312c — a CONFRONTAÇÃO "o card trabalhou e não deixou rastro":
    * cruza quem nasceu (`spawns`), quem tem relatório (`reports`) e o rastro que
@@ -924,8 +990,34 @@ export type BusRequest =
       cmd: "snapshot";
       target?: string;
       rect?: { x: number; y: number; w: number; h: number };
+      /** Absolute destination path (acbridge snapshot --out). */
+      out?: string;
+      /** Full-document PNG for a browser card (acbridge --full-page). */
+      fullPage?: boolean;
+      /** Temporary CSS viewport width for a browser-card capture (--width). */
+      width?: number;
     }
-  | { cmd: "get_page_text"; target?: string; selector?: string; maxChars?: number }
+  | {
+      cmd: "browser_set_viewport";
+      target?: string;
+      width?: number;
+      height?: number;
+      deviceScaleFactor?: number;
+      mobile?: boolean;
+      reset?: boolean;
+      requesterId?: string;
+    }
+  | {
+      cmd: "browser_screenshot";
+      target?: string;
+      fullPage?: boolean;
+      selector?: string;
+      ref?: string;
+      out?: string;
+      width?: number;
+      requesterId?: string;
+    }
+  | { cmd: "get_page_text"; target?: string; selector?: string; scope?: string; ref?: string; maxChars?: number }
   // `ref` (achado ao vivo 2026-09-01): um id vindo do `browser_snapshot`,
   // pra mirar um elemento sem já saber um seletor CSS. Tem precedência
   // sobre `selector`; a tradução ref→seletor vive em index.ts, junto do
@@ -934,12 +1026,52 @@ export type BusRequest =
   // `requesterId` (2026-09-02) nos 4 mutantes — regra geral de
   // auto-conector, ver `AUTO_CONNECT_CMDS` abaixo. Ausente em
   // `browser_query` (leitura, nunca conecta nada).
-  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string; ref?: string; requesterId?: string }
-  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string; replace?: boolean; requesterId?: string }
+  | {
+      cmd: "browser_click";
+      target?: string;
+      x?: number;
+      y?: number;
+      selector?: string;
+      ref?: string;
+      role?: string;
+      name?: string;
+      text?: string;
+      frame?: string;
+      requesterId?: string;
+    }
+  | {
+      cmd: "browser_type";
+      target?: string;
+      text?: string;
+      selector?: string;
+      ref?: string;
+      role?: string;
+      name?: string;
+      frame?: string;
+      replace?: boolean;
+      requesterId?: string;
+    }
   | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string; ref?: string; requesterId?: string }
-  | { cmd: "browser_query"; target?: string; selector?: string; ref?: string }
+  | {
+      cmd: "browser_query";
+      target?: string;
+      selector?: string;
+      ref?: string;
+      role?: string;
+      name?: string;
+      text?: string;
+      frame?: string;
+    }
   | { cmd: "browser_eval"; target?: string; js?: string; timeoutMs?: number; requesterId?: string }
-  | { cmd: "browser_snapshot"; target?: string }
+  | {
+      cmd: "browser_snapshot";
+      target?: string;
+      includeText?: boolean;
+      includeBoxes?: boolean;
+      scope?: string;
+      ref?: string;
+      frame?: string;
+    }
   | { cmd: "browser_console"; target?: string; level?: string; limit?: number }
   | { cmd: "browser_network"; target?: string; status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }
   | { cmd: "browser_wait_for"; target?: string; selector?: string; text?: string; gone?: boolean; timeoutMs?: number }
@@ -949,8 +1081,35 @@ export type BusRequest =
       url?: string;
       expectSelector?: string;
       timeoutMs?: number;
+      notFoundMarker?: string;
       requesterId?: string;
     }
+  | {
+      cmd: "browser_run";
+      target?: string;
+      steps?: unknown[];
+      stopOnError?: boolean;
+      finalSnapshot?: boolean;
+      timeoutMs?: number;
+      requesterId?: string;
+    }
+  | {
+      cmd: "browser_route";
+      target?: string;
+      urlPattern?: string;
+      method?: string;
+      response?: { status?: number; headers?: Record<string, string>; body?: string; bodyFile?: string };
+      times?: number;
+      requesterId?: string;
+    }
+  | {
+      cmd: "browser_unroute";
+      target?: string;
+      routeId?: string;
+      urlPattern?: string;
+      requesterId?: string;
+    }
+  | { cmd: "browser_list_routes"; target?: string }
   | { cmd: "read_card"; target?: string; lines?: number }
   // Achado ao vivo (2026-09-01): "o send_to_card só escreve em card de
   // terminal — sticky é editável só por você (SEM LEITURA TAMBEM)".
@@ -994,6 +1153,7 @@ export type BusRequest =
   /** Handshake de versão (`acbridge version`). Só existe no caminho do
    * socket — resolvido antes do dispatcher, ver acbridge-protocol-decision.ts. */
   | { cmd: "hello" }
+  | { cmd: "ping" }
   /** Build identity of the running Electron process (commit/builtAt/mode).
    * Passive — no consent. Same payload hello carries for acbridge version. */
   | { cmd: "build_identity" }
@@ -1154,6 +1314,7 @@ export type BusRequest =
   | {
       cmd: "list_tasks";
       boardId?: string;
+      requesterId?: string;
       status?: string | string[];
       since?: number;
       hasCard?: boolean;
@@ -1184,11 +1345,11 @@ export type BusRequest =
   /** Leitura passiva: quem segura cada lock de gate agora (Fila + preflight).
    * Com `cwd`, devolve também o `relevant` (o lock daquele repo/escopo). */
   | { cmd: "gate_lock_status"; cwd?: string; scope?: string }
-  /** Vínculos VIVOS de um card (`task_cards`, filtrados pela época do
-   * vínculo): `[{taskId, role}]`. Leitura passiva; existe porque a porta MCP
-   * só fala `handleRequest` e precisava desta fonte para resolver o papel de
-   * REVISOR no `report` (task 6bea994a). */
-  | { cmd: "list_task_cards"; cardId?: string }
+  /** Card-side `task_cards` rows. Default = live (epoch + not released).
+   * `history: true` = every row for the card, including released/terminal —
+   * MCP report preflight needs this when the payload names a past
+   * participation. Passive read. */
+  | { cmd: "list_task_cards"; cardId?: string; history?: boolean }
   /** `task_cards.role` for a card that ALREADY exists (the other write
    * path is `spawn_agent({taskId, role})`, for a card born for the task).
    * `implementer` also makes the card the task's principal `card_id`
@@ -1333,6 +1494,14 @@ export type BusRequest =
        * `anchorCardId` is given without it. */
       anchorCardId?: string;
       side?: "left" | "right" | "top" | "bottom";
+      /** Browser only — persist: partition (Push API / cookies survive reopen). */
+      persistent?: boolean;
+    }
+  | {
+      cmd: "browser_set_display_mode";
+      target?: string;
+      mode?: string;
+      requesterId?: string;
     };
 
 export type BusResponse = Record<string, unknown> & { ok: boolean };
@@ -1342,7 +1511,18 @@ export type BusResponse = Record<string, unknown> & { ok: boolean };
  * frontend that received the bytes (HTTP vs Unix socket) — never by the
  * agent payload. See `ReportRow.channel`.
  */
-export type HandleRequestOpts = { channel?: ReportIngressChannel | null };
+export type HandleRequestOpts = {
+  channel?: ReportIngressChannel | null;
+  callerCardId?: string | null;
+  callerBoardId?: string | null;
+  scopeEnforced?: boolean;
+};
+
+export type CrossBoardReadAuditRecord = CrossBoardReadRequest & {
+  requesterCardId: string | null;
+  decision: "allowed" | "denied" | "unavailable";
+  requestedAt: number;
+};
 
 /**
  * ITEM 21 — FATOS da pendência de limpeza, coletados no fim da task. Os
@@ -1448,6 +1628,7 @@ export function createMessageBus(
   sockPath: string,
   callbacks: {
     listCards: () => CardSummary[];
+    listCardsByBoard?: (boardId: string) => CardSummary[];
     /** Task 326b78e4 — prototypes of the caller's board, over the local
      * static server. `index.ts` owns both the board lookup and the server;
      * this module only relays. Read-only. */
@@ -1508,6 +1689,7 @@ export function createMessageBus(
     onSnapshotRequest: (
       requestId: string,
       target: { cardId: string } | { rect: { x: number; y: number; w: number; h: number } } | null,
+      opts?: { out?: string; fullPage?: boolean; width?: number },
     ) => void;
     /** Pre-release audit B6 — `onSnapshotRequest`/`onReadCardRequest`
      * below each register their own one-shot `ipcMain` reply listener in
@@ -1523,7 +1705,13 @@ export function createMessageBus(
     /** `selector`/`maxChars` (task 3d58046c, lacuna 1): escopo e teto opcionais
      * do `get_page_text` — ausentes preservam a leitura da página inteira com
      * o teto default. A DECISÃO de escopo/teto é pura (browser-page-text-decision). */
-    onPageTextRequest: (requestId: string, cardId: string, selector?: string, maxChars?: number) => void;
+    onPageTextRequest: (
+      requestId: string,
+      cardId: string,
+      selector?: string,
+      maxChars?: number,
+      opts?: { scope?: string; ref?: string },
+    ) => void;
     /** DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa"
      * — the 5 browser control tools, all resolving synchronously (well,
      * async, but 100% local to this process — see the doc comment on
@@ -1536,25 +1724,91 @@ export function createMessageBus(
      * arbitrary agent-supplied JS in the page's real context (cookies/
      * session/localStorage reachable) — accepted risk, documented in the
      * MCP tool's own `description` (mcp-server.ts), not hidden here. */
-    browserClick: (cardId: string, x?: number, y?: number, selector?: string, ref?: string) => Promise<BusResponse>;
-    browserType: (cardId: string, text: string, selector?: string, ref?: string, replace?: boolean) => Promise<BusResponse>;
+    browserClick: (
+      cardId: string,
+      opts: {
+        x?: number;
+        y?: number;
+        selector?: string;
+        ref?: string;
+        role?: string;
+        name?: string;
+        text?: string;
+        frame?: string;
+      },
+    ) => Promise<BusResponse>;
+    browserType: (
+      cardId: string,
+      text: string,
+      opts: {
+        selector?: string;
+        ref?: string;
+        role?: string;
+        name?: string;
+        frame?: string;
+        replace?: boolean;
+      },
+    ) => Promise<BusResponse>;
     browserScroll: (cardId: string, dx: number, dy: number, selector?: string, ref?: string) => Promise<BusResponse>;
-    browserQuery: (cardId: string, selector?: string, ref?: string) => Promise<BusResponse>;
+    browserQuery: (
+      cardId: string,
+      opts: { selector?: string; ref?: string; role?: string; name?: string; text?: string; frame?: string },
+    ) => Promise<BusResponse>;
     browserEval: (cardId: string, js: string, timeoutMs?: number) => Promise<BusResponse>;
-    browserSnapshot: (cardId: string) => Promise<BusResponse>;
+    browserSnapshot: (
+      cardId: string,
+      opts?: { includeText?: boolean; includeBoxes?: boolean; scope?: string; ref?: string; frame?: string },
+    ) => Promise<BusResponse>;
+    browserRoute: (
+      cardId: string,
+      input: {
+        urlPattern: string;
+        method?: string;
+        response: { status: number; headers?: Record<string, string>; body?: string; bodyFile?: string };
+        times?: number;
+      },
+    ) => Promise<BusResponse>;
+    browserUnroute: (
+      cardId: string,
+      opts: { routeId?: string; urlPattern?: string },
+    ) => Promise<BusResponse> | BusResponse;
+    browserListRoutes: (cardId: string) => BusResponse;
+    browserSetViewport: (
+      cardId: string,
+      input: {
+        width?: number;
+        height?: number;
+        deviceScaleFactor?: number;
+        mobile?: boolean;
+        reset?: boolean;
+      },
+    ) => BusResponse;
+    browserScreenshot: (
+      cardId: string,
+      input: {
+        fullPage?: boolean;
+        selector?: string;
+        ref?: string;
+        out?: string;
+        width?: number;
+      },
+    ) => Promise<BusResponse>;
     browserConsole: (cardId: string, level?: string, limit?: number) => BusResponse;
     browserNetwork: (cardId: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }) => BusResponse;
     browserWaitFor: (cardId: string, opts: { selector?: string; text?: string; gone?: boolean; timeoutMs?: number }) => Promise<BusResponse>;
-    /** `browser_navigate` — navegação IN-APP (pushState+popstate) dentro do
-     * site já aberto, com chegada MEDIDA. Mesma classe de risco das outras
-     * `browser_*` (age só dentro de um card que o humano já aprovou), com uma
-     * diferença que vale nomear: ela MUDA A ROTA da página, então a origem é
-     * recusada em `browser-navigate-decision.ts` — trocar de site continua
-     * sendo `open_url`, e a regra está na descrição das duas ferramentas. */
+    /** `browser_navigate` — in-app pushState+popstate, or document-load when
+     * the caller owns the card and the URL is a different origin. */
     browserNavigate: (
       cardId: string,
-      opts: { url: string; expectSelector?: string; timeoutMs?: number },
+      opts: {
+        url: string;
+        expectSelector?: string;
+        timeoutMs?: number;
+        notFoundMarker?: string;
+        allowDocumentNav?: boolean;
+      },
     ) => Promise<BusResponse>;
+    browserSetDisplayMode: (cardId: string, mode: unknown) => Promise<BusResponse>;
 
     /** DESIGN-BACKLOG.md item 58, M1 — only the renderer holds the live
      * xterm.js Terminal instance for a terminal card (main never sees
@@ -1854,6 +2108,7 @@ export function createMessageBus(
      * store (snapshot congelado no close). O renderer usa IPC próprio;
      * estes callbacks existem só pro MCP/acbridge. */
     listSprints: (boardId: string) => import("./store").SprintRow[];
+    getSprint?: (sprintId: string) => import("./store").SprintRow | undefined;
     openSprint: (boardId: string) => { ok: true; sprint: import("./store").SprintRow } | { ok: false; error: string };
     closeSprint: (
       boardId: string,
@@ -1861,6 +2116,8 @@ export function createMessageBus(
     ) =>
       | { ok: true; closed: import("./store").SprintRow; opened: import("./store").SprintRow }
       | { ok: false; error: string };
+    requestCrossBoardReadConsent?: (input: CrossBoardReadAuditRecord) => Promise<boolean>;
+    recordCrossBoardReadAudit?: (input: CrossBoardReadAuditRecord) => void;
     renameSprint: (
       sprintId: string,
       name: string | null,
@@ -1879,6 +2136,11 @@ export function createMessageBus(
      * card can close a participation round without being the principal
      * card of the task. */
     listTaskCardsForCard: (cardId: string) => TaskCardRow[];
+    /** Every `task_cards` row for this card id, including released and
+     * terminal tasks. Used by `report` ONLY when the payload declares a
+     * taskId/`task` ("has or had a link"). Optional so lean test rigs
+     * stay live-only; production always wires it. */
+    listTaskCardsForCardHistory?: (cardId: string) => TaskCardRow[];
     /** Every `task_cards` row for one task (Fila chips / judgment gate).
      * Unfiltered by terminal status — membership for "may this card
      * write done/failed" must still see the link on a live task. */
@@ -2122,6 +2384,8 @@ export function createMessageBus(
          * fires, so the renderer can trust it names a real live card. */
         anchorCardId?: string;
         side?: "left" | "right" | "top" | "bottom";
+        /** Browser only — persist: partition for Push API / durable cookies. */
+        persistent?: boolean;
         /** `kind: "media"` only — already copied into board-assets. */
         assetPath?: string;
         mediaType?: SpawnMediaType;
@@ -2153,6 +2417,11 @@ export function createMessageBus(
       label: string;
     };
   },
+  identityOptions: {
+    getPeerPid?: (socket: Socket) => number | null;
+    resolvePeerIdentity?: (peerPid: number) => ProcessIdentity | null;
+    redactSecrets?: () => string[];
+  } = {},
 ) {
   // Bug real relatado (Pop!_OS, 2026-09-09; achado seguinte do coordenador,
   // mesmo dia) — este bloco fazia `unlinkSync(sockPath)` INCONDICIONAL
@@ -2279,6 +2548,24 @@ export function createMessageBus(
     };
   };
   const spawnQueue = new Map<string, SpawnQueueEntry[]>();
+  /**
+   * In-process registry for autonomous queue acks (`spawnId` → state).
+   * Survives the MCP call returning `{queued:true}` so `get_spawn` and
+   * idempotent retries can resolve the same entry without a second card.
+   */
+  type SpawnRecord = {
+    spawnId: string;
+    boardId: string;
+    status: SpawnRecordStatus;
+    position: number;
+    queueReason: SpawnQueueReason;
+    requesterId: string;
+    provider: string;
+    requestedAt: number;
+    cardId?: string;
+    error?: string;
+  };
+  const spawnRecords = new Map<string, SpawnRecord>();
   /** CAMADA 3 — in-flight auto-dispatch without writing `running`. */
   const dispatchingTaskIds = new Set<string>();
   /**
@@ -2310,6 +2597,43 @@ export function createMessageBus(
    */
   const NO_EPISODE_ANCHOR = 0;
   const idleWithoutReportNotified = new Map<string, number>();
+  /** Writes since the last intention checkpoint (`decisaoTomada` / `decision`). */
+  const writesSinceCheckpoint = new Map<string, number>();
+  /** Cards already nudged for the current write streak (once-only). */
+  const checkpointReminderNotified = new Set<string>();
+
+  /**
+   * Observed disk write on a card (chat `write_file` success). Counts toward
+   * the cheap intention checkpoint; does not interrupt work. Terminal PTYs
+   * that write outside app tools are out of reach of this counter — declared
+   * limit, not a silent claim that every write is seen.
+   * Returns whether a reminder was enqueued (once per streak).
+   */
+  function noteCardWrite(cardId: string): { reminded: boolean } {
+    const id = typeof cardId === "string" ? cardId.trim() : "";
+    if (!id) return { reminded: false };
+    const n = (writesSinceCheckpoint.get(id) ?? 0) + 1;
+    writesSinceCheckpoint.set(id, n);
+    const decision = decideCheckpointReminder({
+      writesSinceCheckpoint: n,
+      alreadyNotified: checkpointReminderNotified.has(id),
+    });
+    if (decision.action !== "remind") return { reminded: false };
+    checkpointReminderNotified.add(id);
+    if (listTerminalCards().some((c) => c.id === id)) {
+      enqueueCardDelivery(
+        id,
+        formatAgentFacingAuthorship(
+          "stellar",
+          APP_NOTICE.intentionCheckpoint({
+            writes: decision.writesSinceCheckpoint,
+            threshold: decision.threshold,
+          }),
+        ),
+      );
+    }
+    return { reminded: true };
+  }
   /**
    * Idle SELF-REMINDER, per card and per episode (see
    * `idle-self-reminder-decision.ts`): when the turn was first seen ended
@@ -2542,11 +2866,9 @@ export function createMessageBus(
         parsed = null;
       }
       if (declaredTaskIdFromReportBody(parsed) === taskId) {
-        lastOk =
-          parsed !== null &&
-          typeof parsed === "object" &&
-          !Array.isArray(parsed) &&
-          (parsed as { ok?: unknown }).ok === true;
+        // ok:true alone is not completeness — absence of estado is parcial.
+        // Only an explicit final + ok:true concludes the participation.
+        lastOk = reportConcludesTask(parsed);
       }
       after = row.seq;
     }
@@ -2554,51 +2876,9 @@ export function createMessageBus(
   }
 
   /**
-   * Conclui a task como PARTE do fechamento do card — a operação única
-   * pedida ("fechar card + fechar task"). A escrita é a mesma que
-   * `update_task status=done` faria e passa pelo MESMO funil
-   * (`callbacks.upsertTask` é o `persistTask` de task-write-funnel.ts), então
-   * dependentes desbloqueiam pelo caminho de sempre e a precedência humana
-   * continua sendo decidida no store. Um store que RETÉM a escrita (humano
-   * mexeu por último) devolve `warning`: o card fecha, a task fica aberta, e
-   * o motivo volta tipado em vez de virar silêncio — o mesmo contrato que
-   * `update_task` já usa.
-   */
-  function concludeTaskOnCardClose(taskId: string, requesterId: string): { ok: boolean; warning?: string } {
-    const task = callbacks.getTask(taskId);
-    if (!task) return { ok: false };
-    // ACTOR `app`, NÃO `orchestrator` (DEFEITO MEDIDO 2026-10-04, task
-    // c10a1faf): concluir uma task é a cerimônia do PRÓPRIO APP no fechamento,
-    // não o julgamento do orquestrador. Assinar `orchestrator` tornava este
-    // `done` um status AUTORITATIVO (`decideStatusWrite` regra 4) — e como o
-    // `update_task` de reversão (`pending`, não-julgamento) é carimbado `agent`,
-    // a correção era RETIDA pela precedência ("the human status done prevails"):
-    // um done escrito por engano pelo close virava irreversível. Com `app`, o
-    // fechamento nunca segura uma correção — o orquestrador reverte pelo
-    // `update_task` de sempre. A decisão humana continua ganhando: um `done` de
-    // fechamento sobre status humano é RETIDO (regra 5), não aplicado.
-    const decision = callbacks.upsertTask({
-      ...task,
-      status: "done",
-      updated_at: Date.now(),
-      actor: "app",
-      actorCardId: requesterId || null,
-      statusProposed: true,
-    });
-    if (decision.warnAgent) {
-      return { ok: false, warning: describeStatusHeldWarning(decision.status, decision.declaredStatus ?? "done") };
-    }
-    // Item 16 — a task concluiu, mas a worktree do card (quando houve) fica:
-    // DECLARADA aqui, nunca removida por conta (o remove é --force).
-    const cards = typeof callbacks.listCards === "function" ? callbacks.listCards() ?? [] : [];
-    const cardCwd = cards.find((c) => c.id === requesterId)?.cwd ?? null;
-    const leftover = worktreeLeftoverNotice(cardCwd);
-    return leftover ? { ok: decision.status === "done", warning: leftover } : { ok: decision.status === "done" };
-  }
-
-  /**
    * Releases the closing card's link to a task WITHOUT concluding it and without
-   * touching its status. The store's release (`releaseTaskCardFromTask`, with
+   * touching its status. close_card never writes done/failed — judgment is a
+   * separate write. The store's release (`releaseTaskCardFromTask`, with
    * `keepStatus`) clears the principal pointer and frees the live link; a card that is only the principal pointer (no `task_cards` row —
    * the legacy orphans) has nothing to release there, so the pointer alone is
    * cleared through the normal write, with no status proposed.
@@ -2607,7 +2887,7 @@ export function createMessageBus(
     const released = callbacks.releaseTaskCardFromTask?.({
       taskId,
       cardId,
-      reason: "card closed without an accepted report of this task in the round",
+      reason: "card closed — link released; status untouched",
       releasedBy: requesterId || null,
       actor: "agent",
       keepStatus: true,
@@ -2682,24 +2962,40 @@ export function createMessageBus(
   }
 
   /**
-   * The files each card of the BOARD declared it changed (`filesChanged`) —
-   * the input to the gate-isolation decision. It includes the OTHER cards,
-   * because their declaration is what makes a DISPUTE detectable.
+   * The files each ACTIVE card of the BOARD declared it changed
+   * (`filesChanged`) — the input to the gate-isolation decision. Other live
+   * writers are included so a real dispute is detectable.
    *
    * DECLARED LIMIT: the scope is the task's BOARD. A card of another board on
    * the SAME repository does not enter, so a dispute crossing boards is not
    * seen here — stated, not pretended. Reading every board on each gate would
    * be too expensive for the gain; the measured case (five cards of one board
    * on the same checkout) is covered.
+   *
+   * ACTIVE ONLY: terminal tasks, released links, reserved-only links, and
+   * dead/archived/missing cards are omitted (see active-declaration-decision).
+   * Ghost ids in the dispute note were the measured false shared-mode trigger.
    */
   function collectDeclaredFiles(task: TaskRow): DeclaredFiles[] {
     try {
-      const cardIds = new Set<string>();
-      if (task.card_id) cardIds.add(task.card_id);
+      const boardTasks: TaskRow[] = [];
       if (task.board_id) {
-        const tasks = callbacks.listTasksByBoard(task.board_id);
-        if (Array.isArray(tasks)) for (const t of tasks) if (t.card_id) cardIds.add(t.card_id);
+        const listed = callbacks.listTasksByBoard(task.board_id);
+        if (Array.isArray(listed)) boardTasks.push(...listed);
       }
+      if (!boardTasks.some((t) => t.id === task.id)) boardTasks.push(task);
+      const cardIds = activeDeclarationCardIds({
+        tasks: boardTasks.map((t) => ({
+          status: t.status,
+          cardId: t.card_id,
+          liveImplementers: (callbacks.listLiveImplementersForTask?.(t.id) ?? []).map((l) => ({
+            cardId: l.card_id,
+            reservationState: l.reservation_state,
+          })),
+        })),
+        isTerminalStatus,
+        isCardAlive: (cardId) => callbacks.isCardAlive(cardId),
+      });
       const out: DeclaredFiles[] = [];
       for (const cardId of cardIds) {
         const row = callbacks.getReport(cardId);
@@ -2736,21 +3032,40 @@ export function createMessageBus(
    * nada é inventado. Se a task sumir antes do fim, a evidência é
    * descartada com ela — não há onde carimbar.
    */
-  function startTaskGates(task: TaskRow | undefined): Promise<GateRunEvidence | null> | null {
+  /**
+   * Report evaluations already started in this bus, keyed by `taskId:seq`.
+   * Re-firing the same report produced a second notice with no new report
+   * (board 64). Key includes taskId so a reseeded seq counter in tests cannot
+   * skip a different task's first run.
+   */
+  const gateEvaluatedReportSeqs = new Set<string>();
+
+  function startTaskGates(
+    task: TaskRow | undefined,
+    opts?: { reportSeq?: number | null; filesChanged?: readonly string[] },
+  ): Promise<GateRunEvidence | null> | null {
     if (!task) return null;
     const gates = contractFromTaskRow(task).gates;
     if (!gates || gates.length === 0) return null;
     if (!task.cwd) return null;
+    const reportSeq = opts?.reportSeq ?? null;
+    const evalKey = reportSeq != null ? `${task.id}:${reportSeq}` : null;
+    // One evaluation per task+report seq — never re-dispatch the same report.
+    if (evalKey !== null && gateEvaluatedReportSeqs.has(evalKey)) return null;
+    if (evalKey !== null) gateEvaluatedReportSeqs.add(evalKey);
     const boardId = task.board_id ?? null;
+    const contract = contractFromTaskRow(task);
     // The board may declare tool directories its gates read OUTSIDE the task
     // repository. They are validated and mounted read-only by the runner.
     const boardGateToolPaths = boardId ? readBoardContext(boardContextDir, boardId).gateToolPaths ?? [] : [];
+    const filesChanged = opts?.filesChanged ? [...opts.filesChanged] : [];
     return runTaskGates({
       taskId: task.id,
       // O card implementer entra no HOLDER do lock (a Fila mostra quem segura).
       cardId: task.card_id ?? null,
       cwd: task.cwd,
       gates,
+      reportSeq,
       // A raiz DECLARADA do board confina o cwd do gate (2026-09-21): fora
       // dela nada roda, e a evidência diz por quê. Sem board, sem raiz — e
       // sem raiz o runner RECUSA (não existe execução sem lugar declarado).
@@ -2758,7 +3073,7 @@ export function createMessageBus(
       // The territory enters to LABEL the diff (inside/outside) and to ADD to
       // the isolated set the dirty territory files that were not declared —
       // never to FILTER what the task declared.
-      territory: contractFromTaskRow(task).territory,
+      territory: contract.territory,
       // Per-card attribution: the `filesChanged` declared on the board decide
       // whether the gates run in a worktree holding only this task's diff,
       // instead of measuring the whole shared checkout.
@@ -2769,22 +3084,31 @@ export function createMessageBus(
       onProgress: () => callbacks.onGateProgress?.(task.id, boardId),
     })
       .then((evidence) => {
+        const attribution = classifyGateAttribution({
+          evidence,
+          filesChanged,
+          territory: contract.territory,
+        });
+        const stamped: GateRunEvidence = { ...evidence, attribution };
         const latest = callbacks.getTask(task.id);
-        if (!latest) return evidence;
+        if (!latest) return stamped;
         callbacks.upsertTask({
           ...latest,
-          result_json: stampGateEvidenceJson(latest.result_json, evidence),
+          result_json: stampGateEvidenceJson(latest.result_json, stamped),
           updated_at: Date.now(),
           actor: "app",
           statusProposed: false,
         });
         // No notice here: the result travels on the report-notice line, and
-        // only a contradiction becomes a self-standing message.
-        return evidence;
+        // only a named class (task_failed / inconclusive / env) becomes a
+        // self-standing message.
+        return stamped;
       })
       .catch(() => {
         // Nem chegou a executar (erro de resolução/spawn fora do
         // subprocesso): isso não é evidência de gate nenhum. Não carimba.
+        // Allow a later retry for this seq if the run never started.
+        if (evalKey !== null) gateEvaluatedReportSeqs.delete(evalKey);
         return null;
       });
   }
@@ -3488,7 +3812,9 @@ export function createMessageBus(
     const orch = callbacks.getBoardOrchestratorCardId(boardId);
     if (!orch || orch === cardId) return;
     if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(orch)) return;
-    for (const alert of alerts) enqueueCardDelivery(orch, alert.message, { steer: false });
+    for (const alert of alerts) {
+      enqueueCardDelivery(orch, formatAgentFacingAuthorship("stellar", alert.message), { steer: false });
+    }
   }
 
   /** The health engine for EVERY terminal card — used by the watchdog. */
@@ -3657,7 +3983,14 @@ export function createMessageBus(
      * gives way to a self-standing message. `reportOk` is what the report
      * declared (`ok !== false`). Absent/null = no gates, the notice goes out
      * as always. */
-    gateWait?: { promise: Promise<GateRunEvidence | null>; reportOk: boolean } | null,
+    gateWait?: {
+      promise: Promise<GateRunEvidence | null>;
+      reportOk: boolean;
+      /** Report's declared filesChanged — feeds path attribution on the notice. */
+      filesChanged?: readonly string[];
+    } | null,
+    /** Normalized estado of the accepted report (parcial vs final). */
+    reportEstado?: "parcial" | "final" | null,
   ): void {
     const spawnerId = resolveNotifyTarget(cardId);
     if (!spawnerId) {
@@ -3676,8 +4009,8 @@ export function createMessageBus(
       (callbacks.listTaskCardsForCard(cardId) ?? []).find((l) => l.role === TASK_CARD_IMPLEMENTER_ROLE)?.task_id ??
       null;
     const task = taskId ? callbacks.getTask(taskId) : undefined;
-    const taskLine = task ? ` — task ${shortTaskId(task.id)} ("${taskTitle(task.prompt)}")` : "";
-    const base = `${REPORT_AVAILABLE_POINTER_BODY}${taskLine}`;
+    const resolvedTaskId = task?.id ?? taskId ?? null;
+    const base = APP_NOTICE.reportAvailable(resolvedTaskId, cardId, reportEstado ?? null);
     if (!gateWait) {
       // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
       enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, base));
@@ -3688,7 +4021,13 @@ export function createMessageBus(
     // `await` on the report path: delivery stays fire-and-forget (f073f59).
     void waitForGateWithinCap(gateWait.promise).then((evidence) => {
       if (!evidence) {
-        enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, `${base}${describeGateResultSuffix(null)}`));
+        enqueueCardDelivery(
+          spawnerId,
+          formatAgentFacingAuthorship(
+            label,
+            APP_NOTICE.reportGates({ taskId: resolvedTaskId, passed: 0, total: 0, pending: true }),
+          ),
+        );
         return;
       }
       const contradiction = describeGateContradiction({
@@ -3696,17 +4035,28 @@ export function createMessageBus(
         title: task ? taskTitle(task.prompt) : "",
         reportOk: gateWait.reportOk,
         evidence,
+        filesChanged: gateWait.filesChanged,
+        territory: task ? contractFromTaskRow(task).territory : null,
       });
       if (contradiction) {
-        // The contradiction is the ONLY self-standing message: it replaces the
-        // notice line, with the task short id, the command, the mode and the
-        // trailing output.
-        enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(null, contradiction));
+        // Named class (task_failed / gate_inconclusive / gate_env_error) replaces
+        // the report line and points to get_task for full gate output.
+        enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship("stellar", contradiction));
         return;
       }
+      const summary = gateRunSummaryFromEvidence(evidence);
+      const perGate = evidence.attribution?.perGate ?? null;
       enqueueCardDelivery(
         spawnerId,
-        formatAgentFacingAuthorship(label, `${base}${describeGateResultSuffix(gateRunSummaryFromEvidence(evidence))}`),
+        formatAgentFacingAuthorship(
+          label,
+          APP_NOTICE.reportGates({
+            taskId: resolvedTaskId,
+            passed: summary.passed,
+            total: summary.total,
+            perGate,
+          }),
+        ),
       );
     });
   }
@@ -3737,8 +4087,13 @@ export function createMessageBus(
     if (!spawnerId) return;
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
-    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedExitPointerBody(exitCode)));
+    const taskId = (callbacks.listTaskCardsForCard?.(cardId) ?? []).find(
+      (link) => link.released_at == null && link.role === TASK_CARD_IMPLEMENTER_ROLE,
+    )?.task_id;
+    enqueueCardDelivery(
+      spawnerId,
+      formatAgentFacingAuthorship(label, APP_NOTICE.exitedWithoutReport({ cardId, taskId, exitCode })),
+    );
   }
 
   /**
@@ -3758,15 +4113,8 @@ export function createMessageBus(
       if (!task?.board_id) continue;
       const orchestratorId = callbacks.getBoardOrchestratorCardId(task.board_id);
       if (!orchestratorId || !callbacks.isCardAlive(orchestratorId)) continue;
-      const notice =
-        reason === "paired-by-order"
-          ? `[de: stellar] card ${cardId} claimed a session id for task ${task.id} by ORDER ` +
-            "(identical or absent briefs), so its ownership is NOT proven — after a restart it may resume another " +
-            "card's conversation. Verify it by hand."
-          : `[de: stellar] card ${cardId} is running task ${task.id} but its session id could not be attributed on disk ` +
-            `(${reason}) — with no session id it would come back WITHOUT context if the app restarts. ` +
-            "Likely more than one session of this provider in the same cwd; resolve it by hand if it matters.";
-      enqueueCardDelivery(orchestratorId, formatAgentFacingAuthorship(null, notice), { steer: false });
+      const notice = APP_NOTICE.sessionUnresolved({ cardId, taskId: task.id, reason });
+      enqueueCardDelivery(orchestratorId, formatAgentFacingAuthorship("stellar", notice), { steer: false });
     }
   }
 
@@ -3781,7 +4129,11 @@ export function createMessageBus(
     const boardId = typeof callbacks.getCardBoardId === "function" ? callbacks.getCardBoardId(cardId) ?? null : null;
     const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
     if (!orchestratorId || orchestratorId === cardId || !callbacks.isCardAlive(orchestratorId)) return;
-    enqueueCardDelivery(orchestratorId, formatAgentFacingAuthorship(null, message), { steer: false });
+    enqueueCardDelivery(
+      orchestratorId,
+      formatAgentFacingAuthorship("stellar", message),
+      { steer: false },
+    );
   }
 
   /**
@@ -3795,7 +4147,7 @@ export function createMessageBus(
     if (!spawnerId) return;
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, silentBootPointerBody(waitedSec)));
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, APP_NOTICE.silentBoot({ cardId, waitedSec })));
   }
 
   /**
@@ -3832,8 +4184,7 @@ export function createMessageBus(
     const target = resolveNotifyTarget(taskCardId);
     if (!target) return;
     if (!listTerminalCards().some((c) => c.id === target)) return;
-    const label = callbacks.describeCardLabel(taskCardId);
-    enqueueCardDelivery(target, formatAgentFacingAuthorship(label, describeBlockedNotice(taskId, question, 0)));
+    enqueueCardDelivery(target, formatAgentFacingAuthorship("stellar", describeBlockedNotice(taskId, question, 0)));
   }
 
   /**
@@ -3866,7 +4217,7 @@ export function createMessageBus(
         error: `unknown option "${optionId}" — the question offers: ${question.options.map((o) => o.id).join(", ")}`,
       };
     }
-    const answer = describeBlockedAnswer(question, optionId, note || null);
+    const answer = formatAgentFacingAuthorship("stellar", describeBlockedAnswer(taskId));
     // Registra a resposta ANTES de limpar a pergunta: se o card estiver morto,
     // a resposta não some — vira fato da task.
     const withAnswer = stampBlockedAnswerJson(existing.result_json, { optionId: optionId || null, note: note || null, answer, by: actor, at: Date.now() });
@@ -4142,16 +4493,20 @@ export function createMessageBus(
       // silêncio DECLARADO (turno encerrado pelo próprio card) é outra, e
       // silêncio INFERIDO — só o relógio — é uma terceira, que não pode afirmar
       // abandono. O texto de cada uma mora em agent-facing-authorship.ts.
-      notifySpawnerOfUnreportedIdle(
-        cardId,
+      const idleNotice =
         decision.action === "notify_screen_report"
-          ? screenReportPointerBody()
+          ? APP_NOTICE.idleWithoutReport({ kind: "screen-report", taskId: linkedTask?.id, cardId })
           : decision.action === "notify_no_agent"
-            ? unreportedNoAgentPointerBody()
+            ? APP_NOTICE.idleWithoutReport({ kind: "no-agent", taskId: linkedTask?.id, cardId })
             : decision.action === "notify_unproven"
-              ? unreportedUnprovenIdlePointerBody(idleMs ?? 0)
-              : unreportedIdlePointerBody(),
-      );
+              ? APP_NOTICE.idleWithoutReport({
+                  kind: "unproven",
+                  idleMinutes: (idleMs ?? 0) / 60_000,
+                  taskId: linkedTask?.id,
+                  cardId,
+                })
+              : APP_NOTICE.idleWithoutReport({ kind: "turn-ended", taskId: linkedTask?.id, cardId });
+      notifySpawnerOfUnreportedIdle(cardId, idleNotice);
     }
   }
 
@@ -4170,7 +4525,7 @@ export function createMessageBus(
    * this runs. No-op when the card is gone, not a terminal, or bash
    * (bash has no agent reading the line — same exclusion as report
    * notify). */
-  function notifyHumanMovedTask(cardId: string, message: string): void {
+  function notifyHumanMovedTask(cardId: string, requestedStatus: string, allowed: boolean): void {
     if (!callbacks.isCardAlive(cardId)) return;
     const card = listTerminalCards().find((c) => c.id === cardId);
     // A pergunta é "o leitor DESTE card é um shell?" (a lista mora em
@@ -4187,6 +4542,13 @@ export function createMessageBus(
     // linha, pelo shell. O watchdog pode (e deve) considerar esse card um
     // possível leitor para não silenciar; a ENTREGA não pode apostar nisso.
     if (!card || isShellProvider(card.provider ?? null)) return;
+    const taskId = (callbacks.listTaskCardsForCard?.(cardId) ?? []).find(
+      (link) => link.released_at == null && link.role === TASK_CARD_IMPLEMENTER_ROLE,
+    )?.task_id;
+    const message = formatAgentFacingAuthorship(
+      "stellar",
+      APP_NOTICE.statusAskResolved({ requestedStatus, allowed, taskId, cardId }),
+    );
     enqueueCardDelivery(cardId, message, { steer: true });
   }
 
@@ -4200,11 +4562,7 @@ export function createMessageBus(
    * módulo), só que aqui a alternativa não é silêncio, é um ponteiro.
    */
   function linkedCardNoticeBody(taskId: string, role: string): string {
-    // AGENT-FACING — DO NOT TRANSLATE (task af7c6d8b: as frases que o app
-    // devolve a agentes são em inglês; o leitor é um modelo). Era a última em
-    // português neste caminho.
-    const lead = role === TASK_CARD_REVIEWER_ROLE ? "task for you to review" : "task for you";
-    return `${lead}: ${taskId} (role: ${role}) — read it with get_task.`;
+    return APP_NOTICE.taskLinked({ taskId, role: role === TASK_CARD_REVIEWER_ROLE ? "reviewer" : role });
   }
 
   /**
@@ -4244,7 +4602,7 @@ export function createMessageBus(
       return "skipped: the declared reader of this card is a shell — an unsolicited notice would be submitted as a command (linked anyway)";
     }
     const label = requesterId ? callbacks.describeCardLabel(requesterId) : null;
-    const body = formatAgentFacingAuthorship(label, linkedCardNoticeBody(taskId, role));
+    const body = formatAgentFacingAuthorship(label ?? "stellar", linkedCardNoticeBody(taskId, role));
     const enqueued = enqueueCardDelivery(cardId, body, { steer: false });
     if (!("receipt" in enqueued)) return `failed: ${enqueued.error}`;
     return "queued";
@@ -4267,8 +4625,16 @@ export function createMessageBus(
    * mesmo rótulo viram erro explícito em vez de um "escolhi a primeira"
    * silencioso, que seria exatamente o tipo de acerto ao acaso que essa
    * feature não pode ter. */
-  function resolveTargetId(raw: string): { id: string } | { error: string } {
-    const cards = callbacks.listCards();
+  function resolveTargetId(raw: string, boardId?: string): { id: string } | { error: string } {
+    if (boardId) {
+      const exact = callbacks.getAnyCard(raw);
+      if (exact && exact.boardId !== boardId) {
+        return { error: `target belongs to a different board than the caller` };
+      }
+    }
+    const cards = boardId
+      ? callbacks.listCardsByBoard?.(boardId) ?? []
+      : callbacks.listCards();
     if (cards.some((c) => c.id === raw)) return { id: raw };
     const needle = raw.trim().toLowerCase();
     if (!needle) return { id: raw };
@@ -4312,6 +4678,11 @@ export function createMessageBus(
     browser_type: "modified",
     browser_scroll: "modified",
     browser_eval: "modified",
+    browser_run: "modified",
+    browser_route: "modified",
+    browser_unroute: "modified",
+    browser_set_viewport: "modified",
+    browser_screenshot: "modified",
   };
 
   // Achado 3 (review adversarial, 2026-09-09) — C0/C1 control characters
@@ -4392,6 +4763,8 @@ export function createMessageBus(
         return req.selector ? truncateForLabel(req.selector) : null;
       case "browser_eval":
         return req.js ? truncateForLabel(req.js) : null;
+      case "browser_run":
+        return req.steps ? truncateForLabel(`${req.steps.length} steps`) : null;
       // Spawn lineage: the arrow is the RELATION (what role this card
       // plays on the task), not a second copy of the card title. The
       // card name already carries `resolveTaskDispatchLabel` / an
@@ -4434,13 +4807,19 @@ export function createMessageBus(
   // escopo da bus (não dentro de `dispatchRequest`), porque a resolução
   // acontece na PORTA (`handleRequest`) e os handlers seguem lendo
   // `req.taskId` como sempre.
-  function resolveTaskRef(raw: string): { ok: true; task: TaskRow; resolvedId: string } | { ok: false; error: string } {
+  function resolveTaskRef(raw: string, boardId?: string): { ok: true; task: TaskRow; resolvedId: string } | { ok: false; error: string } {
     const exact = callbacks.getTask(raw);
-    if (exact) return { ok: true, task: exact, resolvedId: raw };
+    if (exact) {
+      if (boardId && exact.board_id !== boardId) {
+        return { ok: false, error: `taskId belongs to a different board than the caller` };
+      }
+      return { ok: true, task: exact, resolvedId: raw };
+    }
     // `?? []`: rigs de teste montam callbacks parciais (Proxy devolve
     // `undefined`); sem a lista, um prefixo nunca resolve — que é o resultado
     // honesto (`not-found`), nunca um throw.
-    const res = resolveTaskIdPrefix(raw, (callbacks.listTasks() ?? []).map((t) => t.id));
+    const taskRows = boardId ? callbacks.listTasksByBoard(boardId) : callbacks.listTasks();
+    const res = resolveTaskIdPrefix(raw, (taskRows ?? []).map((t) => t.id));
     if (res.ok) {
       const t = callbacks.getTask(res.id);
       if (t) return { ok: true, task: t, resolvedId: res.id };
@@ -4458,20 +4837,149 @@ export function createMessageBus(
    * Tests pass it explicitly to simulate each porta. Omitted → null on
    * the reports row (unknown ingress), same honesty as role/verdict.
    */
+  function scopeGroupForRequest(req: BusRequest): BoardScopeToolGroup {
+    if (req.cmd === "get_report") return "reports";
+    if (req.cmd === "list_tasks" || req.cmd === "get_task" || req.cmd === "create_task" || req.cmd === "update_task") return "tasks";
+    if (req.cmd === "list_deliveries" || req.cmd === "get_delivery" || req.cmd === "cancel_deliveries") return "deliveries";
+    if (req.cmd === "unreported_work") return "unreported_work";
+    if (req.cmd === "list_sprints" || req.cmd === "open_sprint" || req.cmd === "close_sprint" || req.cmd === "rename_sprint" || req.cmd === "delete_sprint") return "sprints";
+    if (req.cmd === "list_connectors" || req.cmd === "spawn_lineage" || req.cmd === "set_connector_kind" || req.cmd === "set_connector_label") return "connectors";
+    if (req.cmd === "list_reservations" || req.cmd === "reorder_reservations" || req.cmd === "start_reservation" || req.cmd === "release_reservation") return "reservations";
+    if (req.cmd === "card_status") return "card_status";
+    if (req.cmd === "read_sticky" || req.cmd === "write_sticky" || req.cmd === "set_sticky_color" || req.cmd === "set_sticky_mode") return "sticky";
+    if (
+      req.cmd.startsWith("browser_") ||
+      req.cmd === "get_page_text" ||
+      req.cmd === "open"
+    ) {
+      return req.cmd === "get_page_text" ? "get_page_text" : "browser";
+    }
+    if (req.cmd === "snapshot") return "snapshot";
+    if (req.cmd === "send" || req.cmd === "close_card" || req.cmd === "delete_card" || req.cmd === "read_card") return req.cmd === "send" ? "send_to_card" : "cards";
+    return "cards";
+  }
+
   async function handleRequest(request: BusRequest, opts?: HandleRequestOpts): Promise<BusResponse> {
+    const secrets = identityOptions.redactSecrets?.() ?? [];
+    const safeRequest = redactSecretValues(request, secrets) as BusRequest;
+    const response = await handleRequestInternal(safeRequest, opts);
+    return redactSecretValues(response, secrets) as BusResponse;
+  }
+
+  async function handleRequestInternal(request: BusRequest, opts?: HandleRequestOpts): Promise<BusResponse> {
     let req = request;
+    const scoped = opts?.scopeEnforced === true;
+    const callerCardId = typeof opts?.callerCardId === "string" && opts.callerCardId.trim() ? opts.callerCardId.trim() : undefined;
+    let callerBoardId = typeof opts?.callerBoardId === "string" && opts.callerBoardId.trim() ? opts.callerBoardId.trim() : undefined;
+    if (callerCardId) {
+      const cardBoardId = callbacks.getCardBoardId(callerCardId);
+      if (!cardBoardId) return { ok: false, error: "callerCardId is not an authenticated card on a board" };
+      if (callerBoardId && callerBoardId !== cardBoardId) {
+        return { ok: false, error: "callerBoardId does not match callerCardId" };
+      }
+      callerBoardId = cardBoardId;
+    }
+    if (scoped && !callerBoardId) {
+      return { ok: false, error: "callerCardId or callerBoardId is required for board-scoped access" };
+    }
+
+    if (scoped && callerBoardId) {
+      const record = req as BusRequest & Record<string, unknown>;
+      const group = scopeGroupForRequest(req);
+      const requestedBoardId = typeof record.boardId === "string" ? record.boardId : undefined;
+      const boardRequired = ["list", "list_tasks", "list_sprints", "open_sprint", "close_sprint", "create_task"].includes(req.cmd);
+      if (requestedBoardId !== undefined || boardRequired) {
+        const decision = decideBoardScope({ group, callerBoardId, requestedBoardId });
+        if (!decision.allowed) return { ok: false, error: `${decision.field}: ${decision.error}` };
+        if ("boardId" in record || boardRequired) req = { ...record, boardId: decision.boardId } as BusRequest;
+      }
+
+      const scopedRecord = req as BusRequest & Record<string, unknown>;
+      if (req.cmd === "snapshot" && (!req.target || req.rect)) {
+        return { ok: false, error: "target: board-scoped snapshots must name one card and cannot read the active canvas or a rectangle" };
+      }
+      const suppliedRequesterId = scopedRecord.requesterId;
+      if (typeof suppliedRequesterId === "string" && suppliedRequesterId && suppliedRequesterId !== callerCardId) {
+        return { ok: false, error: "requesterId does not match the authenticated caller" };
+      }
+      if (callerCardId) req = { ...scopedRecord, requesterId: callerCardId } as BusRequest;
+      else if (suppliedRequesterId) return { ok: false, error: "requesterId requires an authenticated caller card" };
+
+      if (req.cmd === "turn_complete") {
+        if (req.cardId && req.cardId !== callerCardId) {
+          return { ok: false, error: "cardId does not match the authenticated caller" };
+        }
+        if (callerCardId) req = { ...req, cardId: callerCardId };
+      }
+
+      const resourceFields = ["taskId", "linkTaskId", "supersededBy"] as const;
+      for (const field of resourceFields) {
+        const id = scopedRecord[field];
+        if (typeof id !== "string" || !id.trim()) continue;
+        const task = callbacks.getTask(id);
+        if (task && task.board_id !== callerBoardId) {
+          return { ok: false, error: `${field} belongs to a different board than the caller` };
+        }
+        if (field === "taskId" && !task) {
+          const resolved = resolveTaskRef(id, callerBoardId);
+          if (!resolved.ok && !resolved.error.startsWith("no such task")) return { ok: false, error: resolved.error };
+          if (resolved.ok) req = { ...(req as BusRequest & Record<string, unknown>), taskId: resolved.resolvedId } as BusRequest;
+        }
+      }
+
+      const cardFields = ["target", "cardId", "targetCardId", "anchorCardId", "newCardId", "moveReservationsTo"] as const;
+      for (const field of cardFields) {
+        const id = (req as BusRequest & Record<string, unknown>)[field];
+        if (typeof id !== "string" || !id.trim()) continue;
+        const card = callbacks.getAnyCard(id);
+        if (card && card.boardId !== callerBoardId) {
+          return { ok: false, error: `${field} belongs to a different board than the caller` };
+        }
+      }
+      const reorderTaskIds = (req as BusRequest & Record<string, unknown>).taskIds;
+      if (Array.isArray(reorderTaskIds)) {
+        for (const id of reorderTaskIds) {
+          const task = typeof id === "string" ? callbacks.getTask(id) : undefined;
+          if (task && task.board_id !== callerBoardId) return { ok: false, error: `taskIds contains a task from a different board` };
+        }
+      }
+      if (req.cmd === "get_report" && req.seq !== undefined) {
+        const report = callbacks.getReportBySeq(req.seq);
+        const reportBoardId = report ? callbacks.getCardBoardId(report.card_id) : undefined;
+        if (reportBoardId && reportBoardId !== callerBoardId) return { ok: false, error: "seq belongs to a different board than the caller" };
+        if (report && !reportBoardId) return { ok: false, error: "seq ownership cannot be verified" };
+      }
+      if ((req.cmd === "get_delivery" || req.cmd === "cancel_deliveries") && req.id) {
+        const delivery = deliveryRecords.get(req.id);
+        const deliveryBoardId = delivery ? callbacks.getCardBoardId(delivery.target) : undefined;
+        if (delivery && deliveryBoardId !== callerBoardId) return { ok: false, error: "id belongs to a different board than the caller or its ownership cannot be verified" };
+      }
+      if (req.cmd === "get_spawn" && req.spawnId) {
+        const spawn = spawnRecords.get(req.spawnId);
+        if (spawn && spawn.boardId !== callerBoardId) return { ok: false, error: "spawnId belongs to a different board than the caller" };
+      }
+      if ((req.cmd === "set_connector_kind" || req.cmd === "set_connector_label") && req.connectorId) {
+        const connectorBoardId = callbacks.getConnectorBoardId(req.connectorId);
+        if (connectorBoardId && connectorBoardId !== callerBoardId) return { ok: false, error: "connectorId belongs to a different board than the caller" };
+      }
+      if ((req.cmd === "rename_sprint" || req.cmd === "delete_sprint") && req.sprintId) {
+        const sprint = callbacks.getSprint?.(req.sprintId);
+        if (sprint && sprint.board_id !== callerBoardId) return { ok: false, error: "sprintId belongs to a different board than the caller" };
+      }
+    }
+
     if ("target" in req && typeof req.target === "string") {
-      const resolved = resolveTargetId(req.target);
+      const resolved = resolveTargetId(req.target, scoped ? callerBoardId : undefined);
       if ("error" in resolved) return { ok: false, error: resolved.error };
       if (resolved.id !== req.target) req = { ...req, target: resolved.id };
     }
     // ID CURTO (task 6266d3e7): resolvido UMA vez, na porta.
     if ("taskId" in req && typeof req.taskId === "string" && req.taskId.trim().length > 0) {
-      const resolvedTask = resolveTaskRef(req.taskId.trim());
+      const resolvedTask = resolveTaskRef(req.taskId.trim(), scoped ? callerBoardId : undefined);
       if (!resolvedTask.ok) return { ok: false, error: resolvedTask.error };
       if (resolvedTask.resolvedId !== req.taskId) req = { ...req, taskId: resolvedTask.resolvedId };
     }
-    const res = await dispatchRequest(req, opts?.channel ?? null);
+    const res = await dispatchRequest(req, opts?.channel ?? null, scoped ? callerBoardId : undefined);
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
       // `send` → kind "modified" is the persisted auto-connect edge.
@@ -4481,12 +4989,12 @@ export function createMessageBus(
     return res;
   }
 
-  async function dispatchRequest(req: BusRequest, ingressChannel: ReportIngressChannel | null): Promise<BusResponse> {
+  async function dispatchRequest(req: BusRequest, ingressChannel: ReportIngressChannel | null, scopeBoardId?: string): Promise<BusResponse> {
     if (req.cmd === "list") {
       // list_cards gains `context`/`quota` per card. Only terminal/chat cards
       // have a provider and a screen; the rest answer `null` for both — honest
       // absence, never an invented number. The read also marks crossed levels.
-      const cards = callbacks.listCards().map((card) => {
+      const cards = (scopeBoardId ? callbacks.listCardsByBoard?.(scopeBoardId) ?? [] : callbacks.listCards()).map((card) => {
         if (card.kind !== "terminal" && card.kind !== "chat") {
           return { ...card, context: null, quota: null };
         }
@@ -4498,6 +5006,105 @@ export function createMessageBus(
 
     if (req.cmd === "prototypes_info") {
       return callbacks.prototypesInfo(req.requesterId ?? "");
+    }
+
+    if (req.cmd === "request_cross_board_read") {
+      if (!scopeBoardId) return { ok: false, error: "caller board identity is required" };
+      if (!req.targetBoardId || !req.resourceKind || !req.resourceId || !req.reason?.trim()) {
+        return { ok: false, error: "targetBoardId, resourceKind, resourceId, and reason are required" };
+      }
+      const request = {
+        callerBoardId: scopeBoardId,
+        targetBoardId: req.targetBoardId,
+        resourceKind: req.resourceKind,
+        resourceId: req.resourceId,
+        reason: req.reason.trim(),
+      } satisfies CrossBoardReadRequest;
+      const check = decideCrossBoardRead(request);
+      const requestedAt = Date.now();
+      const auditBase = {
+        ...request,
+        requesterCardId: req.requesterId ?? null,
+        requestedAt,
+      };
+      if (!callbacks.recordCrossBoardReadAudit) {
+        return { ok: false, error: "cross-board read audit is unavailable" };
+      }
+      if (!check.allowed || !callbacks.boardExists(request.targetBoardId)) {
+        callbacks.recordCrossBoardReadAudit({ ...auditBase, decision: "denied" });
+        return { ok: false, error: check.allowed ? `targetBoardId does not name an existing board` : `${check.field}: ${check.error}` };
+      }
+
+      let resource: unknown;
+      let resourceBoardId: string | undefined;
+      switch (request.resourceKind) {
+        case "task": {
+          const task = callbacks.getTask(request.resourceId);
+          resourceBoardId = task?.board_id ?? undefined;
+          if (task) resource = serializeTask(task);
+          break;
+        }
+        case "card": {
+          const card = callbacks.getAnyCard(request.resourceId);
+          resourceBoardId = card?.boardId;
+          if (card) resource = { id: request.resourceId, ...card };
+          break;
+        }
+        case "report": {
+          const seq = Number(request.resourceId);
+          const report = Number.isSafeInteger(seq) && seq > 0 ? callbacks.getReportBySeq(seq) : undefined;
+          resourceBoardId = report ? callbacks.getCardBoardId(report.card_id) : undefined;
+          if (report) {
+            resource = {
+              seq: report.seq,
+              cardId: report.card_id,
+              report: decodeReportArgument(JSON.parse(report.report_json)),
+              verdict: report.verdict ?? null,
+              role: report.role ?? null,
+              authorship: report.authorship ?? null,
+            };
+          }
+          break;
+        }
+        case "sprint": {
+          const sprint = callbacks.getSprint?.(request.resourceId);
+          resourceBoardId = sprint?.board_id;
+          if (sprint) resource = serializeSprint(sprint);
+          break;
+        }
+        case "connector": {
+          const connector = callbacks.listAllConnectors().find((row) => row.id === request.resourceId);
+          resourceBoardId = connector?.board_id;
+          if (connector) resource = {
+            id: connector.id,
+            boardId: connector.board_id,
+            fromCardId: connector.from_card_id,
+            toCardId: connector.to_card_id,
+            kind: connector.kind,
+            label: connector.label,
+            updatedAt: connector.updated_at,
+          };
+          break;
+        }
+      }
+      if (!resource || resourceBoardId !== request.targetBoardId) {
+        callbacks.recordCrossBoardReadAudit({ ...auditBase, decision: "denied" });
+        return { ok: false, error: `resourceId does not identify a ${request.resourceKind} on targetBoardId` };
+      }
+      if (!callbacks.requestCrossBoardReadConsent) {
+        callbacks.recordCrossBoardReadAudit({ ...auditBase, decision: "unavailable" });
+        return { ok: false, error: "human cross-board consent is unavailable" };
+      }
+      let allowed: boolean;
+      try {
+        allowed = await callbacks.requestCrossBoardReadConsent({ ...auditBase, decision: "unavailable" });
+      } catch {
+        callbacks.recordCrossBoardReadAudit({ ...auditBase, decision: "unavailable" });
+        return { ok: false, error: "human cross-board consent failed" };
+      }
+      callbacks.recordCrossBoardReadAudit({ ...auditBase, decision: allowed ? "allowed" : "denied" });
+      if (!allowed) return { ok: false, error: "cross-board read denied by the human" };
+      return { ok: true, targetBoardId: request.targetBoardId, resourceKind: request.resourceKind, resourceId: request.resourceId, resource };
     }
 
     if (req.cmd === "send") {
@@ -4541,7 +5148,7 @@ export function createMessageBus(
           };
         }
         // ID CURTO (task 6266d3e7) — `linkTaskId` é um taskId por outro nome.
-        const resolvedLink = resolveTaskRef(req.linkTaskId);
+        const resolvedLink = resolveTaskRef(req.linkTaskId, scopeBoardId);
         if (!resolvedLink.ok) return { ok: false, error: resolvedLink.error };
         const linkTaskId = resolvedLink.resolvedId;
         const linkTask = callbacks.getTask(linkTaskId);
@@ -4718,11 +5325,34 @@ export function createMessageBus(
       };
     }
 
+    if (req.cmd === "get_spawn") {
+      if (!req.spawnId) return { ok: false, error: "missing spawnId" };
+      const record = spawnRecords.get(req.spawnId);
+      if (!record) return { ok: false, error: `no spawn with id "${req.spawnId}"` };
+      const list = spawnQueue.get(record.boardId);
+      const idx = list ? list.findIndex((e) => e.id === record.spawnId) : -1;
+      const position =
+        record.status === "queued" && idx >= 0 ? idx + 1 : record.position;
+      return {
+        ok: true,
+        spawnId: record.spawnId,
+        status: record.status,
+        position,
+        queueReason: describeSpawnQueueReason(record.queueReason),
+        queueReasonCode: record.queueReason.code,
+        ...(record.cardId ? { cardId: record.cardId } : {}),
+        ...(record.error ? { error: record.error } : {}),
+      };
+    }
+
     if (req.cmd === "list_deliveries") {
       // Mesma promoção preguiçosa do `get_delivery`, para o veredito por
       // requester/target não ficar preso num `unconfirmed` já superado.
       for (const record of deliveryRecords.values()) promoteUnconfirmedOnActivity(record);
-      const filtered = filterDeliveryRecords(deliveryRecords.values(), {
+      const source = scopeBoardId
+        ? [...deliveryRecords.values()].filter((record) => callbacks.getCardBoardId(record.target) === scopeBoardId)
+        : deliveryRecords.values();
+      const filtered = filterDeliveryRecords(source, {
         ...(req.requesterId !== undefined ? { requesterId: req.requesterId } : {}),
         ...(req.target !== undefined ? { target: req.target } : {}),
         ...(req.delivery !== undefined ? { delivery: req.delivery } : {}),
@@ -4765,7 +5395,9 @@ export function createMessageBus(
       // Task 5d47312c — a confrontação, SOB DEMANDA. Um comando, não um aviso
       // contínuo: ler o store de cada harness custa I/O (medido: 46 stores em
       // ~0,6s no board vivo) e a tese se prova com o comando mais barato.
-      const sources = callbacks.listCoverageCards?.();
+      const sources = callbacks.listCoverageCards?.()?.filter((card) =>
+        !scopeBoardId || callbacks.getCardBoardId(card.cardId) === scopeBoardId,
+      );
       if (!sources) {
         return { ok: false, error: "unreported_work unavailable: this process wired no coverage sources" };
       }
@@ -4936,12 +5568,12 @@ export function createMessageBus(
       // consentimento — pedir a um humano para fechar algo que vai ser
       // recusado seria pior que recusar. Ver o módulo puro pra medição que
       // escolheu recusar vs auto-fechar.
-      const conclusions: string[] = [];
+      // close_card never concludes: only refuse or queue the link (or allow
+      // with no status write). Done/failed is judgment elsewhere.
       const releases: string[] = [];
       for (const linked of collectCloseCardLinkedTasks(target, requesterId)) {
         const effect = decideCloseCardTaskEffect(linked);
         if (effect.action === "refuse") return { ok: false, error: effect.error };
-        if (effect.action === "conclude-task") conclusions.push(effect.taskId);
         if (effect.action === "release-link") releases.push(effect.taskId);
       }
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
@@ -4962,25 +5594,14 @@ export function createMessageBus(
               resolve({ ok: false, error: "denied by user" });
               return;
             }
-            // A conclusão só é aplicada DEPOIS do consentimento: um close
-            // negado não pode concluir task nenhuma.
-            const concludedTasks: string[] = [];
+            // A denied close releases nothing.
             const releasedTasks: string[] = [];
-            const warnings: string[] = [];
-            for (const taskId of conclusions) {
-              const result = concludeTaskOnCardClose(taskId, requesterId);
-              if (result.warning) warnings.push(result.warning);
-              else if (result.ok) concludedTasks.push(taskId);
-            }
-            // Same consent rule as the conclusion: a denied close releases nothing.
             for (const taskId of releases) {
               if (releaseTaskLinkOnCardClose(taskId, target, requesterId)) releasedTasks.push(taskId);
             }
             resolve({
               ok: true,
-              ...(concludedTasks.length > 0 ? { concludedTasks } : {}),
               ...(releasedTasks.length > 0 ? { releasedTasks } : {}),
-              ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
             });
           },
           timer,
@@ -5071,7 +5692,11 @@ export function createMessageBus(
           timer,
         });
         const target = req.rect ? { rect: req.rect } : req.target ? { cardId: req.target } : null;
-        callbacks.onSnapshotRequest(requestId, target);
+        callbacks.onSnapshotRequest(requestId, target, {
+          out: req.out,
+          fullPage: req.fullPage,
+          width: req.width,
+        });
       });
     }
 
@@ -5091,7 +5716,10 @@ export function createMessageBus(
           },
           timer,
         });
-        callbacks.onPageTextRequest(requestId, req.target as string, req.selector, req.maxChars);
+        callbacks.onPageTextRequest(requestId, req.target as string, req.selector, req.maxChars, {
+          scope: req.scope,
+          ref: req.ref,
+        });
       });
     }
 
@@ -5147,16 +5775,42 @@ export function createMessageBus(
     // `board_mode` below: call the callback, return what it resolves to.
     if (req.cmd === "browser_click") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (!req.ref && !req.selector && (req.x === undefined || req.y === undefined)) {
-        return { ok: false, error: "need a ref (from browser_snapshot), a selector, or both x and y" };
+      if (
+        !req.ref &&
+        !req.selector &&
+        !req.role &&
+        !req.text &&
+        (req.x === undefined || req.y === undefined)
+      ) {
+        return {
+          ok: false,
+          error:
+            "need a ref (from browser_snapshot), a selector, role (+ optional name), text, or both x and y",
+        };
       }
-      return callbacks.browserClick(req.target, req.x, req.y, req.selector, req.ref);
+      return callbacks.browserClick(req.target, {
+        x: req.x,
+        y: req.y,
+        selector: req.selector,
+        ref: req.ref,
+        role: req.role,
+        name: req.name,
+        text: req.text,
+        frame: req.frame,
+      });
     }
 
     if (req.cmd === "browser_type") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       if (req.text === undefined) return { ok: false, error: "missing text" };
-      return callbacks.browserType(req.target, req.text, req.selector, req.ref, req.replace === true);
+      return callbacks.browserType(req.target, req.text, {
+        selector: req.selector,
+        ref: req.ref,
+        role: req.role,
+        name: req.name,
+        frame: req.frame,
+        replace: req.replace === true,
+      });
     }
 
     if (req.cmd === "browser_scroll") {
@@ -5166,8 +5820,20 @@ export function createMessageBus(
 
     if (req.cmd === "browser_query") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (!req.selector && !req.ref) return { ok: false, error: "need a selector or a ref (from browser_snapshot)" };
-      return callbacks.browserQuery(req.target, req.selector, req.ref);
+      if (!req.selector && !req.ref && !req.role && !req.text) {
+        return {
+          ok: false,
+          error: "need a selector, ref (from browser_snapshot), role (+ optional name), or text",
+        };
+      }
+      return callbacks.browserQuery(req.target, {
+        selector: req.selector,
+        ref: req.ref,
+        role: req.role,
+        name: req.name,
+        text: req.text,
+        frame: req.frame,
+      });
     }
 
     if (req.cmd === "browser_eval") {
@@ -5178,7 +5844,67 @@ export function createMessageBus(
 
     if (req.cmd === "browser_snapshot") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      return callbacks.browserSnapshot(req.target);
+      return callbacks.browserSnapshot(req.target, {
+        includeText: req.includeText,
+        includeBoxes: req.includeBoxes,
+        scope: req.scope,
+        ref: req.ref,
+        frame: req.frame,
+      });
+    }
+
+    if (req.cmd === "browser_route") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.urlPattern) return { ok: false, error: "missing urlPattern" };
+      if (!req.response || typeof req.response.status !== "number") {
+        return { ok: false, error: "missing response.status" };
+      }
+      return callbacks.browserRoute(req.target, {
+        urlPattern: req.urlPattern,
+        method: req.method,
+        response: {
+          status: req.response.status,
+          headers: req.response.headers,
+          body: req.response.body,
+          bodyFile: req.response.bodyFile,
+        },
+        times: req.times,
+      });
+    }
+
+    if (req.cmd === "browser_unroute") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserUnroute(req.target, {
+        routeId: req.routeId,
+        urlPattern: req.urlPattern,
+      });
+    }
+
+    if (req.cmd === "browser_list_routes") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserListRoutes(req.target);
+    }
+
+    if (req.cmd === "browser_set_viewport") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserSetViewport(req.target, {
+        width: req.width,
+        height: req.height,
+        deviceScaleFactor: req.deviceScaleFactor,
+        mobile: req.mobile,
+        reset: req.reset,
+      });
+    }
+
+    if (req.cmd === "browser_screenshot") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserScreenshot(req.target, {
+        fullPage: req.fullPage,
+        selector: req.selector,
+        ref: req.ref,
+        out: req.out,
+        width: req.width,
+      });
     }
 
     if (req.cmd === "browser_console") {
@@ -5210,11 +5936,137 @@ export function createMessageBus(
     if (req.cmd === "browser_navigate") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       if (!req.url) return { ok: false, error: "missing url (a path like /estudante/curriculo, or a same-site http(s) URL)" };
+      // Browser cards store ownerCardId in the `provider` column (App.tsx
+      // toRow). Same-card cross-origin is allowed only when the caller owns it.
+      const targetCard = callbacks.listCards().find((c) => c.id === req.target);
+      const allowDocumentNav =
+        Boolean(req.requesterId) &&
+        targetCard?.kind === "browser" &&
+        targetCard.provider === req.requesterId;
       return callbacks.browserNavigate(req.target, {
         url: req.url,
         expectSelector: req.expectSelector,
         timeoutMs: req.timeoutMs,
+        notFoundMarker: req.notFoundMarker,
+        allowDocumentNav,
       });
+    }
+
+    if (req.cmd === "browser_set_display_mode") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserSetDisplayMode(req.target, req.mode);
+    }
+
+    if (req.cmd === "browser_run") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const normalized = normalizeBrowserRun({
+        steps: req.steps,
+        stopOnError: req.stopOnError,
+        finalSnapshot: req.finalSnapshot,
+        timeoutMs: req.timeoutMs,
+      });
+      if (!normalized.ok) return { ok: false, error: normalized.error };
+      const { plan } = normalized;
+      const target = req.target;
+      const startedAt = Date.now();
+      const stepOutcomes: Array<{
+        index: number;
+        action: string;
+        ok: boolean;
+        result: BusResponse;
+        after: { url?: string; title?: string };
+      }> = [];
+      let stoppedEarly = false;
+      let timedOut = false;
+
+      for (let i = 0; i < plan.steps.length; i++) {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= plan.timeoutMs) {
+          timedOut = true;
+          stoppedEarly = true;
+          break;
+        }
+        const step = plan.steps[i]!;
+        const mapped = stepToBusFields(step);
+        const remaining = plan.timeoutMs - elapsed;
+        // Nested handleRequest reuses each tool's validation and live effect
+        // on the same card — the owner sees every step as it happens.
+        const stepReq = {
+          cmd: mapped.cmd,
+          target,
+          requesterId: req.requesterId,
+          ...mapped.fields,
+        } as BusRequest;
+        // Cap a step's own wait so it cannot overrun the run budget.
+        if (
+          (stepReq.cmd === "browser_wait_for" || stepReq.cmd === "browser_navigate" || stepReq.cmd === "browser_eval") &&
+          typeof (stepReq as { timeoutMs?: number }).timeoutMs !== "number"
+        ) {
+          (stepReq as { timeoutMs?: number }).timeoutMs = remaining;
+        } else if (
+          (stepReq.cmd === "browser_wait_for" || stepReq.cmd === "browser_navigate" || stepReq.cmd === "browser_eval") &&
+          typeof (stepReq as { timeoutMs?: number }).timeoutMs === "number"
+        ) {
+          (stepReq as { timeoutMs: number }).timeoutMs = Math.min(
+            (stepReq as { timeoutMs: number }).timeoutMs,
+            remaining,
+          );
+        }
+        const result = await handleRequest(stepReq);
+        let after = extractAfterState(result);
+        if (after.url === undefined && after.title === undefined) {
+          const probeBudget = Math.min(5_000, Math.max(200, plan.timeoutMs - (Date.now() - startedAt)));
+          if (probeBudget >= 200) {
+            const probe = await handleRequest({
+              cmd: "browser_eval",
+              target,
+              js: "return {url: location.href, title: document.title}",
+              timeoutMs: probeBudget,
+              requesterId: req.requesterId,
+            });
+            after = extractAfterState(probe);
+          }
+        }
+        stepOutcomes.push({ index: i, action: step.action, ok: result.ok === true, result, after });
+        if (!result.ok && plan.stopOnError) {
+          stoppedEarly = true;
+          break;
+        }
+      }
+
+      let finalSnapshot: BusResponse | null = null;
+      if (plan.finalSnapshot && Date.now() - startedAt < plan.timeoutMs) {
+        finalSnapshot = await handleRequest({ cmd: "browser_snapshot", target });
+      }
+
+      if (timedOut) {
+        return {
+          ok: false,
+          error: describeBrowserRunTimeout(plan.timeoutMs),
+          steps: stepOutcomes,
+          finalSnapshot,
+          stoppedEarly: true,
+          timedOut: true,
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+
+      const allOk = stepOutcomes.length === plan.steps.length && stepOutcomes.every((s) => s.ok);
+      return {
+        ok: allOk,
+        steps: stepOutcomes,
+        finalSnapshot,
+        stoppedEarly,
+        timedOut: false,
+        elapsedMs: Date.now() - startedAt,
+        ...(allOk
+          ? {}
+          : {
+              error: stoppedEarly
+                ? `browser_run stopped at step ${stepOutcomes.length - 1} (${stepOutcomes[stepOutcomes.length - 1]?.action}) after an error (stopOnError is true)`
+                : "browser_run finished with one or more step failures (see steps[].ok)",
+            }),
+      };
     }
 
     if (req.cmd === "card_status") {
@@ -5338,10 +6190,14 @@ export function createMessageBus(
       // aceito, o orçamento de retry, o carimbo de `taskId` no payload e os
       // gates disparados — todos passam a seguir a task RESOLVIDA.
       const taskCardLinks = req.requesterId ? (callbacks.listTaskCardsForCard(req.requesterId) ?? []) : [];
+      // History for declared matching only ("has or had"). Undeclared
+      // reports keep live-only behavior inside decideReportTaskLink.
+      const taskCardHistory = req.requesterId ? (callbacks.listTaskCardsForCardHistory?.(req.requesterId) ?? []) : [];
       const link = decideReportTaskLink({
         declaredTaskId: declaredTaskIdFromReportBody(incomingReport),
         principalTaskIds: req.requesterId ? tasks.filter((t) => t.card_id === req.requesterId && !["done", "failed"].includes(t.status)).map((t) => t.id) : [],
         linkTaskIds: taskCardLinks.map((l) => l.task_id),
+        historyLinkTaskIds: taskCardHistory.map((l) => l.task_id),
       });
       if (link.action === "ambiguous") {
         return { ok: false, error: describeAmbiguousTaskRefusal(link.candidates) };
@@ -5552,6 +6408,14 @@ export function createMessageBus(
       // follow-up must not re-fire the "idle sem report" pointer.
       idleWithoutReportNotified.delete(req.requesterId);
       selfReminders.delete(req.requesterId);
+      // Intention checkpoint: a report that declares decisaoTomada clears
+      // the write streak. Any accepted report without intention leaves the
+      // counter alone (parcial without a phrase is not a checkpoint).
+      const reportEstado = normalizeReportEstado(report);
+      if (reportDeclaresIntention(report)) {
+        writesSinceCheckpoint.set(req.requesterId, 0);
+        checkpointReminderNotified.delete(req.requesterId);
+      }
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
@@ -5572,12 +6436,17 @@ export function createMessageBus(
       // Gate runner — an ACCEPTED report of a task with declared gates fires
       // the app-MEASURED execution, instead of the orchestrator trusting the
       // number the agent typed. `accept_failure` ALSO runs the gates: a report
-      // ok:false with a green gate is as real a contradiction as the opposite,
-      // and it is the ONLY self-standing message the orchestrator receives.
+      // ok:false with a green gate is as real a contradiction as the opposite.
+      // Keyed by report seq — never re-dispatch the same report. Path
+      // attribution (filesChanged × error paths) decides task_failed vs
+      // gate_inconclusive so a neighbour's tsc red is not called contradiction.
       // The result changes neither status nor verdict.
+      const reportFilesChanged = readDeclaredFilesFromReport(
+        typeof report === "string" ? report : JSON.stringify(report ?? null),
+      );
       const gatePromise =
         decision.action === "accept" || decision.action === "accept_failure"
-          ? startTaskGates(participatingTask)
+          ? startTaskGates(participatingTask, { reportSeq: stored.seq, filesChanged: reportFilesChanged })
           : null;
       const reportClaimsSuccess = !(
         incomingReport !== null &&
@@ -5589,12 +6458,15 @@ export function createMessageBus(
       // — report must return now). Fires even when a wait:true waiter already
       // got the JSON: that waiter is the agent RPC; the human on the
       // orchestrator card is not. With gates, the SAME notice waits for the
-      // result (bounded) and carries it on the line; on a contradiction it
+      // result (bounded) and carries it on the line; on a named class it
       // becomes the self-standing message.
       notifySpawnerOfReport(
         req.requesterId,
         reportTaskId,
-        gatePromise ? { promise: gatePromise, reportOk: reportClaimsSuccess } : null,
+        gatePromise
+          ? { promise: gatePromise, reportOk: reportClaimsSuccess, filesChanged: reportFilesChanged }
+          : null,
+        reportEstado,
       );
       // ITEM 21 — no fim da task, o que ficou UNTRACKED no cwd e o relatório
       // NÃO declarou em `files`/`filesChanged`, e que nasceu DEPOIS de a task
@@ -5605,6 +6477,7 @@ export function createMessageBus(
       return {
         ok: true,
         seq: stored.seq,
+        estado: reportEstado,
         ...(cleanupPendencies.length > 0
           ? { cleanupPendencies, cleanupNote: describeArtifactPendencies(cleanupPendencies) }
           : {}),
@@ -5637,10 +6510,21 @@ export function createMessageBus(
           for (;;) {
             const row = callbacks.getReport(cardId, after);
             if (!row) break;
+            const report = decodeReportArgument(JSON.parse(row.report_json));
+            // A multi-link card's report stream mixes tasks. Keep only rounds
+            // that name THIS taskId (taskId or `task` field). Undeclared
+            // bodies stay (legacy sole-link / pre-stamp rows). Without the
+            // filter, get_report(taskId) returned a later report that
+            // declared a different task from the same card.
+            const named = declaredTaskIdFromReportBody(report);
+            if (named !== undefined && named !== req.taskId) {
+              after = row.seq;
+              continue;
+            }
             history.push({
               cardId,
               seq: row.seq,
-              report: decodeReportArgument(JSON.parse(row.report_json)),
+              report,
               verdict: row.verdict ?? null,
               role: row.role ?? null,
             });
@@ -5667,6 +6551,10 @@ export function createMessageBus(
             parsedResult = null;
           }
         }
+        // Always return the requested/latest round (stream truth). When the
+        // latest is parcial, `latestFinalSeq` names an earlier final so the
+        // orchestrator does not treat "most recent" as "outcome".
+        const finalSeq = latestFinalSeq(history);
         return {
           ok: true,
           taskId: req.taskId,
@@ -5675,6 +6563,8 @@ export function createMessageBus(
           round: round ?? history.length,
           totalRounds: history.length,
           report: chosen.report,
+          estado: normalizeReportEstado(chosen.report),
+          latestFinalSeq: finalSeq,
           verdict: chosen.verdict,
           role: chosen.role,
           gateRun: gateRunSummaryFromResult(parsedResult),
@@ -5696,9 +6586,11 @@ export function createMessageBus(
         // Task 50a4cd40 — o tri-estado também aqui: a linha do `seq` pertence a
         // um SLOT, e "não sei" tem de ser `null` (nunca `false`).
         const seqAmbiguity = resolveCardAmbiguity(readCardTaskIds(bySeq.card_id));
+        const bySeqReport = decodeReportArgument(JSON.parse(bySeq.report_json));
         return {
           ok: true,
-          report: decodeReportArgument(JSON.parse(bySeq.report_json)),
+          report: bySeqReport,
+          estado: normalizeReportEstado(bySeqReport),
           seq: bySeq.seq,
           cardId: bySeq.card_id,
           verdict: bySeq.verdict ?? null,
@@ -5732,6 +6624,7 @@ export function createMessageBus(
         return {
           ok: true,
           report: current.report,
+          estado: normalizeReportEstado(current.report),
           seq: current.seq,
           verdict: current.verdict ?? null,
           role: current.role ?? null,
@@ -6060,7 +6953,7 @@ export function createMessageBus(
             ? { ok: false, error: "supersededBy is required", field: "supersededBy" as const }
             : { ok: false, error: missing.error, field: missing.field };
         }
-        const resolvedTarget = resolveTaskRef(rawTarget);
+        const resolvedTarget = resolveTaskRef(rawTarget, scopeBoardId);
         if (!resolvedTarget.ok) {
           const unknown = resolveSupersedeTarget({
             taskId: req.taskId,
@@ -6442,23 +7335,12 @@ export function createMessageBus(
     }
 
     if (req.cmd === "list_tasks") {
-      // DESIGN-BACKLOG.md §2.1 item 6 — review adversarial achado
-      // (2026-09-10): a versão anterior filtrava em JS sobre o resultado
-      // COMPLETO de `callbacks.listTasks()` mesmo quando `boardId` era
-      // passado, carregando a tabela inteira pra memória do Node só pra
-      // descartar a maior parte dela. `index.ts` estava travado por outro
-      // agente quando esse gap foi documentado — agora liberado, a fiação
-      // é ligada de verdade: `callbacks.listTasksByBoard` chama
-      // `store.listTasksByBoard` (usa `idx_tasks_board_id`), o mesmo
-      // statement já coberto por teste direto contra o store. Sem
-      // `boardId`: idêntico a antes (`listTasks()` sem filtro).
-      //
-      // status/since/hasCard/view (2026-09-14): filtros do orquestrador
-      // derivados do uso real em sqlite — ver list-tasks-query.ts.
-      // Aplicados DEPOIS do corte por board. hasCard usa isCardAlive (PTY),
-      // não só "card_id preenchido" — card fechado deixa id stale.
+      // The authenticated caller board is the default scope. No global
+      // task-list fallback is available to board-scoped requests.
       const parsed = parseListTasksQuery(req);
       if (!parsed.ok) return { ok: false, error: parsed.error };
+      const boardId = req.boardId ?? scopeBoardId;
+      if (!boardId) return { ok: false, error: "caller board identity is required for list_tasks" };
       // PERF (task c9db1d86) — a `view` decide a COLUNA no SELECT, não só o
       // descarte no fim. Antes desta linha, `view:"summary"` selecionava
       // `prompt`+`result_json` (82% dos bytes medidos na 41813ab3 seq 447) e
@@ -6466,14 +7348,9 @@ export function createMessageBus(
       // economizar economizava só o fio do IPC. `serializeTask` e
       // `projectListedTask` abaixo ficam intocados: a linha do summary já
       // chega com as duas em `null`.
-      const tasks =
-        parsed.view === "summary"
-          ? req.boardId
-            ? callbacks.listTasksSummaryByBoard(req.boardId)
-            : callbacks.listTasksSummary()
-          : req.boardId
-            ? callbacks.listTasksByBoard(req.boardId)
-            : callbacks.listTasks();
+      const tasks = parsed.view === "summary"
+        ? callbacks.listTasksSummaryByBoard(boardId)
+        : callbacks.listTasksByBoard(boardId);
       const aliveCardIds = new Set(
         tasks
           .map((t) => t.card_id)
@@ -6525,7 +7402,7 @@ export function createMessageBus(
 
     if (req.cmd === "get_task") {
       if (!req.taskId) return { ok: false, error: "missing taskId" };
-      const resolved = resolveTaskRef(req.taskId);
+        const resolved = resolveTaskRef(req.taskId, scopeBoardId);
       if (!resolved.ok) return { ok: false, error: resolved.error };
       return {
         ok: true,
@@ -6548,7 +7425,7 @@ export function createMessageBus(
         return {
           ok: false,
           error:
-            "run_locked requires a caller identity — call it from a card (AGENT_CANVAS_CARD_ID / the MCP URL stamp). An anonymous connection does not get a shell here.",
+            "run_locked requires a caller identity — call it from an authenticated card process (Unix peer ancestry or per-card authToken). An anonymous connection does not get a shell here.",
         };
       }
       let scope: GateLockScope = "repo";
@@ -6598,19 +7475,21 @@ export function createMessageBus(
     }
 
     if (req.cmd === "list_task_cards") {
-      // Vínculos VIVOS deste card — a MESMA leitura (`listTaskCardsForCard`,
-      // com o filtro de época que impede um id de card reciclado de herdar
-      // vínculo velho) que o handler `report` já usa para resolver a task e
-      // que o `close_card` usa para decidir o que fecha.
+      // Default = live (`listTaskCardsForCard`, epoch filter). With
+      // `history: true` = every row for the card (released/terminal) —
+      // MCP report preflight uses this when the payload names a past
+      // participation.
       //
-      // Existe como cmd por um motivo medido (task 6bea994a): a porta MCP só
-      // fala `handleRequest`, e nenhum cmd devolvia isto — então
-      // `decideReportTaskLink` recebia `linkTaskIds: []` HARDCODED e o vínculo
-      // de REVISOR (que vive em `task_cards`, nunca em `tasks.card_id`) não
-      // tinha caminho até o preflight. Leitura pura, sem consentimento:
-      // mesma classe de `get_task`/`list_tasks`.
+      // Exists as a cmd because MCP only speaks `handleRequest`, and no
+      // other cmd returned live `task_cards` — so `decideReportTaskLink`
+      // used to get `linkTaskIds: []` hardcoded and a reviewer link never
+      // reached preflight. Pure read, no consent: same class as
+      // `get_task` / `list_tasks`.
       if (!req.cardId) return { ok: false, error: "missing cardId" };
-      const links = (callbacks.listTaskCardsForCard(req.cardId) ?? []).map((link) => ({
+      const rows = req.history
+        ? (callbacks.listTaskCardsForCardHistory?.(req.cardId) ?? [])
+        : (callbacks.listTaskCardsForCard(req.cardId) ?? []);
+      const links = rows.map((link) => ({
         taskId: link.task_id,
         role: link.role,
       }));
@@ -6660,8 +7539,7 @@ export function createMessageBus(
       if (newCardId && !callbacks.listCards().some((c) => c.id === newCardId)) {
         return { ok: false, error: `no open card with id "${newCardId}"` };
       }
-      // O ator da escrita de status é o mesmo do fechamento que conclui task
-      // (`concludeTaskOnCardClose`): o mark de orquestrador do board assina
+      // O ator da escrita de status: o mark de orquestrador do board assina
       // como `orchestrator`; qualquer outro card, como `agent`. O FUNIL decide
       // se o `pending` aplica ou é segurado por decisão humana.
       const res = callbacks.releaseTaskCardFromTask({
@@ -6898,7 +7776,7 @@ export function createMessageBus(
         if (typeof raw !== "string" || raw.trim().length === 0) {
           return { ok: false, error: `taskIds entries must be non-empty strings, got ${JSON.stringify(raw)}` };
         }
-        const resolved = resolveTaskRef(raw.trim());
+        const resolved = resolveTaskRef(raw.trim(), scopeBoardId);
         if (!resolved.ok) return { ok: false, error: resolved.error };
         resolvedIds.push(resolved.resolvedId);
       }
@@ -7048,7 +7926,7 @@ export function createMessageBus(
     if (req.cmd === "list_connectors") {
       return {
         ok: true,
-        connectors: callbacks.listAllConnectors().map((c) => ({
+        connectors: callbacks.listAllConnectors().filter((c) => !scopeBoardId || c.board_id === scopeBoardId).map((c) => ({
           id: c.id,
           fromCardId: c.from_card_id,
           toCardId: c.to_card_id,
@@ -7078,7 +7956,9 @@ export function createMessageBus(
         depth: deriveSpawnDepth(row.to_card_id, parentOf),
       });
       const parentRow = callbacks.findSpawnByChild(req.cardId);
-      const children = callbacks.listSpawnsByParent(req.cardId).map(serialize);
+      const children = callbacks.listSpawnsByParent(req.cardId)
+        .filter((spawn) => !scopeBoardId || spawn.board_id === scopeBoardId)
+        .map(serialize);
       return {
         ok: true,
         cardId: req.cardId,
@@ -7381,13 +8261,13 @@ export function createMessageBus(
         taskId: briefDecision.taskId,
         connectorLabel,
       };
-      const dispatchPromise: Promise<SpawnAgentResult> =
+      const dispatch: SpawnDispatch =
         autonomous && requesterBoardId
           ? autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
-          : dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
-      // Registro da chave: a partir daqui uma retentativa com a mesma chave
-      // espera ESTA promise em vez de disparar outra. Poda na escrita — a
-      // janela é orçamento de retentativa, não cache permanente.
+          : asSpawnDispatch(dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false));
+      // From here a retry with the same key awaits THIS promise (the fast
+      // response — queued ack or card) instead of firing another spawn.
+      // Prune on write: the window is a retry budget, not a permanent cache.
       let idempotencyEntry: (SpawnIdempotencyEntry & { promise: Promise<SpawnAgentResult> }) | null = null;
       if (idempotencyId && idempotencyKey) {
         const atMs = Date.now();
@@ -7396,17 +8276,59 @@ export function createMessageBus(
             spawnIdempotency.delete(key);
           }
         }
-        idempotencyEntry = { key: idempotencyKey, requesterId, atMs, promise: dispatchPromise };
+        idempotencyEntry = { key: idempotencyKey, requesterId, atMs, promise: dispatch.response };
         spawnIdempotency.set(idempotencyId, idempotencyEntry);
       }
-      const spawnResult: SpawnAgentResult = await dispatchPromise;
-      // Consent refused/didn't arrive, or the card creation itself failed:
-      // NO card will ever run in this worktree, so it must not survive. A
-      // successful spawn keeps it (the card's own cwd points at it).
-      if (!spawnResult.ok && worktree) {
-        void removeIsolatedWorktree(worktree);
-      }
-      if (spawnResult.ok) {
+
+      // Dep note on the return — inform, do not block: out-of-order dispatch
+      // is a legitimate orchestrator choice, and the brief already carries
+      // each dep's state. Reads stored rows only (no reports I/O); reviewers
+      // get no dep pointer, so the note does not apply to them.
+      const depIds = taskForBrief && role !== TASK_CARD_REVIEWER_ROLE ? depIdsFromJson(taskForBrief.deps_json) : [];
+      const pendingDeps = depIds.filter((depId) => !isDependencySettled(callbacks.getTask(depId)?.status)).length;
+      const withDepNote = (result: SpawnAgentResult): SpawnAgentResult =>
+        isCardSpawnResult(result) && pendingDeps > 0
+          ? {
+              ...result,
+              note: `${pendingDeps} of ${depIds.length} dep(s) of this task are not done yet — the card's brief carries each dependency's status and its latest report`,
+            }
+          : result;
+
+      const finalize = (result: SpawnAgentResult, briefOutcome: {
+        hasBrief: boolean;
+        canArgv: boolean;
+        tooLarge: boolean;
+        deliveryId?: string;
+      } | undefined): SpawnAgentResult => {
+        const decorated: SpawnAgentResult =
+          isCardSpawnResult(result) && briefOutcome
+            ? {
+                ...result,
+                ...describeSpawnBriefDelivery({
+                  hasBrief: briefOutcome.hasBrief,
+                  canArgv: briefOutcome.canArgv,
+                  tooLarge: briefOutcome.tooLarge,
+                  typedDeliveryId: briefOutcome.deliveryId,
+                }),
+              }
+            : result;
+        const withTerritory: SpawnAgentResult =
+          isCardSpawnResult(decorated) && territoryWarnings.length > 0
+            ? { ...decorated, territoryWarning: territoryWarnings.map((w) => w.message).join("\n") }
+            : decorated;
+        const final = withDepNote(withTerritory);
+        if (idempotencyEntry) {
+          if (final.ok) idempotencyEntry.result = final;
+          // A failed attempt that created nothing must not hold the key — the
+          // caller needs to retry. The key protects against a duplicated
+          // effect, not against repeating a no-op failure. A queued ack IS an
+          // ok effect (holds the spawnId) — keep the key.
+          else if (idempotencyId) spawnIdempotency.delete(idempotencyId);
+        }
+        return final;
+      };
+
+      const applyCardSideEffects = (spawnResult: SpawnAgentCardResult): void => {
         cardSpawnDepth.set(spawnResult.cardId, depth);
         // Spawn registry — derived fields only; reason already decided.
         // No notification (register always, notify never).
@@ -7467,62 +8389,35 @@ export function createMessageBus(
             linkImplementerToTask(latest, spawnResult.cardId, "agent", profile);
           }
         }
-      }
-      // Nota de deps no RETORNO (task 095158e9, item b) — INFORMAR não é
-      // IMPEDIR: despachar fora de ordem é decisão legítima do orquestrador
-      // (uma medição num território travado, por exemplo), e o brief já
-      // carrega o estado de cada dep. A nota só antecipa o fato para quem
-      // despacha, no momento em que despacha. Lê só o stored (sem reports,
-      // sem I/O); reviewer não recebe dep pointer, então a nota também não
-      // se aplica a ele.
-      const depIds = taskForBrief && role !== TASK_CARD_REVIEWER_ROLE ? depIdsFromJson(taskForBrief.deps_json) : [];
-      const pendingDeps = depIds.filter((depId) => !isDependencySettled(callbacks.getTask(depId)?.status)).length;
-      const withDepNote = (result: SpawnAgentResult): SpawnAgentResult =>
-        result.ok && pendingDeps > 0
-          ? {
-              ...result,
-              note: `${pendingDeps} of ${depIds.length} dep(s) of this task are not done yet — the card's brief carries each dependency's status and its latest report`,
-            }
-          : result;
-
-      /**
-       * Onde este spawn ficou, dito em fatos (task bf1fb0a7): o brief está no
-       * argv (entrega), está só na fila (promessa, com recibo consultável), ou
-       * não existe (o chamador não mandou nenhum). O `withDepNote` continua
-       * sendo a última palavra sobre deps — as duas coisas convivem, e esta é a
-       * razão de `finalize` existir: UM lugar onde a resposta fica completa e
-       * onde ela é guardada para uma retentativa idempotente ler a MESMA
-       * verdade, não uma versão degradada dela.
-       */
-      const briefOutcome = spawnBriefOutcomes.get(requestId);
-      spawnBriefOutcomes.delete(requestId);
-      const finalize = (result: SpawnAgentResult): SpawnAgentResult => {
-        const decorated: SpawnAgentResult =
-          result.ok && briefOutcome
-            ? {
-                ...result,
-                ...describeSpawnBriefDelivery({
-                  hasBrief: briefOutcome.hasBrief,
-                  canArgv: briefOutcome.canArgv,
-                  tooLarge: briefOutcome.tooLarge,
-                  typedDeliveryId: briefOutcome.deliveryId,
-                }),
-              }
-            : result;
-        const withTerritory: SpawnAgentResult =
-          decorated.ok && territoryWarnings.length > 0
-            ? { ...decorated, territoryWarning: territoryWarnings.map((w) => w.message).join("\n") }
-            : decorated;
-        const final = withDepNote(withTerritory);
-        if (idempotencyEntry) {
-          if (final.ok) idempotencyEntry.result = final;
-          // Tentativa que NÃO criou card não prende a chave: a retentativa do
-          // chamador tem de poder tentar de novo (a chave protege contra efeito
-          // duplicado, não contra repetir uma falha que não criou nada).
-          else if (idempotencyId) spawnIdempotency.delete(idempotencyId);
-        }
-        return final;
       };
+
+      const settleCardResult = (spawnResult: SpawnAgentResult): SpawnAgentResult => {
+        // Consent refused/didn't arrive, or the card creation itself failed:
+        // NO card will ever run in this worktree, so it must not survive. A
+        // successful spawn keeps it (the card's own cwd points at it).
+        if (!spawnResult.ok && worktree) {
+          void removeIsolatedWorktree(worktree);
+        }
+        if (isCardSpawnResult(spawnResult)) applyCardSideEffects(spawnResult);
+        const briefOutcome = spawnBriefOutcomes.get(requestId);
+        spawnBriefOutcomes.delete(requestId);
+        return finalize(spawnResult, briefOutcome);
+      };
+
+      // `wait: true` needs the card before it can wait for exit — hold for
+      // eventual. Otherwise await the fast response (queued ack or card).
+      const spawnResult: SpawnAgentResult = await (req.wait ? dispatch.eventual : dispatch.response);
+
+      if (isQueuedSpawnResult(spawnResult)) {
+        // Card side-effects run when eventual settles; keep the spawnId key.
+        const queuedFinal = finalize(spawnResult, undefined);
+        void dispatch.eventual.then((final) => {
+          settleCardResult(final);
+        });
+        return queuedFinal;
+      }
+
+      const settled = settleCardResult(spawnResult);
 
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
       // past "the human approved and the card exists" (spawnResult above)
@@ -7530,8 +8425,8 @@ export function createMessageBus(
       // completion signal instead of having to poll card_status/snapshot
       // in a loop. Not an error if the wait window runs out first — the
       // spawn itself still succeeded, it's just still running.
-      if (!req.wait || !spawnResult.ok) return finalize(spawnResult);
-      const cardId = spawnResult.cardId;
+      if (!req.wait || !isCardSpawnResult(settled)) return settled;
+      const cardId = settled.cardId;
       const exitCode = await new Promise<number | null>((resolve) => {
         const timer = setTimeout(() => {
           const waiters = pendingCardExits.get(cardId);
@@ -7550,7 +8445,7 @@ export function createMessageBus(
         waiters.push(onExit);
         pendingCardExits.set(cardId, waiters);
       });
-      return exitCode === null ? finalize(spawnResult) : finalize({ ...spawnResult, exited: true, exitCode });
+      return exitCode === null ? settled : finalize({ ...settled, exited: true, exitCode }, undefined);
     }
 
     if (req.cmd === "spawn_card") {
@@ -7676,6 +8571,7 @@ export function createMessageBus(
           autoApprove,
           anchorCardId: req.anchorCardId,
           side: req.anchorCardId ? (req.side ?? "right") : undefined,
+          persistent: req.kind === "browser" ? req.persistent === true : undefined,
           assetPath: mediaAssetPath,
           mediaType,
           path: mediaSourcePath,
@@ -7976,7 +8872,7 @@ export function createMessageBus(
           clearTimeout(timer);
           pendingSpawnAgents.delete(requestId);
           unmarkWaiting(requesterId);
-          if (result.ok && typedBrief) {
+          if (isCardSpawnResult(result) && typedBrief) {
             const enqueued = enqueueCardDelivery(result.cardId, typedBrief);
             const outcome = spawnBriefOutcomes.get(requestId);
             if (outcome && "receipt" in enqueued) outcome.deliveryId = enqueued.receipt.id;
@@ -7990,48 +8886,116 @@ export function createMessageBus(
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 1 — enqueues instead of refusing when
-   * an autonomous board is at its cap; the returned promise settles either
-   * when `tryDispatchQueued` later dispatches it for real, or on its own
-   * timeout (queue starvation — never left stuck forever). */
+   * an autonomous board is at its cap. The MCP `response` acks within
+   * `SPAWN_QUEUE_ACK_MS` (immediately: a concurrency-cap wait is agent-
+   * lifetime scale, measured 125s on board 64) with `{queued:true, spawnId}`;
+   * `eventual` settles when `tryDispatchQueued` creates the card or the
+   * queue entry times out. */
   function enqueueSpawn(
     boardId: string,
     requestId: string,
     requesterId: string,
     params: SpawnQueueEntry["params"],
-  ) {
-    return new Promise<SpawnAgentResult>((resolveOuter) => {
-      const timer = setTimeout(() => {
-        removeFromQueue(boardId, requestId);
-        notifyQueueChanged(boardId);
-        spawnBriefOutcomes.delete(requestId);
-        resolveOuter({
-          ok: false,
-          // O teto da fila é 10 min e o watchdog do cliente costuma ser menor
-          // (medido: 300s). Dizer só "timed out" deixava o chamador sem saber
-          // se havia card — e a resposta honesta aqui é que NÃO há: a entrada
-          // saiu da fila, nada foi criado por esta chamada.
-          error:
-            "queued spawn timed out waiting for a free slot on this autonomous board — the queue entry was removed and NO card was created; the card the caller's own client may have given up on does not exist",
-        });
-      }, DEFAULT_QUEUE_TIMEOUT_MS);
-      const entry: SpawnQueueEntry = {
-        id: requestId,
-        requesterId,
-        provider: params.provider,
-        reason: params.reason,
-        requestedAt: Date.now(),
-        timer,
-        resolve: (result) => {
-          clearTimeout(timer);
-          resolveOuter(result);
-        },
-        params,
-      };
-      const list = spawnQueue.get(boardId) ?? [];
-      list.push(entry);
-      spawnQueue.set(boardId, list);
-      notifyQueueChanged(boardId);
+    running: number,
+    cap: number,
+  ): SpawnDispatch {
+    let settleEventual!: (result: SpawnAgentResult) => void;
+    const eventual = new Promise<SpawnAgentResult>((resolve) => {
+      settleEventual = resolve;
     });
+    let settleResponse!: (result: SpawnAgentResult) => void;
+    const response = new Promise<SpawnAgentResult>((resolve) => {
+      settleResponse = resolve;
+    });
+    let responseSettled = false;
+
+    const list = spawnQueue.get(boardId) ?? [];
+    const position = list.length + 1;
+    const queueReason = spawnQueueReasonAtEnqueue({ running, cap, position });
+    const queuedAck: SpawnAgentQueuedResult = {
+      ok: true,
+      queued: true,
+      spawnId: requestId,
+      position,
+      queueReason: describeSpawnQueueReason(queueReason),
+      queueReasonCode: queueReason.code,
+    };
+    spawnRecords.set(requestId, {
+      spawnId: requestId,
+      boardId,
+      status: "queued",
+      position,
+      queueReason,
+      requesterId,
+      provider: params.provider,
+      requestedAt: Date.now(),
+    });
+
+    const timer = setTimeout(() => {
+      removeFromQueue(boardId, requestId);
+      notifyQueueChanged(boardId);
+      spawnBriefOutcomes.delete(requestId);
+      const fail: SpawnAgentResult = {
+        ok: false,
+        // Queue ceiling is 10 min; client watchdogs are usually shorter
+        // (~300s measured). Saying only "timed out" left the caller unsure
+        // whether a card existed — the honest answer here is none: the entry
+        // left the queue and this call created nothing.
+        error:
+          "queued spawn timed out waiting for a free slot on this autonomous board — the queue entry was removed and NO card was created; the card the caller's own client may have given up on does not exist",
+      };
+      const record = spawnRecords.get(requestId);
+      if (record) {
+        record.status = "failed";
+        record.error = fail.error;
+      }
+      settleEventual(fail);
+      if (!responseSettled) {
+        responseSettled = true;
+        settleResponse(fail);
+      }
+    }, DEFAULT_QUEUE_TIMEOUT_MS);
+
+    const entry: SpawnQueueEntry = {
+      id: requestId,
+      requesterId,
+      provider: params.provider,
+      reason: params.reason,
+      requestedAt: Date.now(),
+      timer,
+      resolve: (result) => {
+        clearTimeout(timer);
+        const record = spawnRecords.get(requestId);
+        if (record) {
+          if (result.ok && isCardSpawnResult(result)) {
+            record.status = "up";
+            record.cardId = result.cardId;
+          } else if (!result.ok) {
+            record.status = "failed";
+            record.error = result.error;
+          }
+        }
+        settleEventual(result);
+        // If the card stood up before the ack budget, the call still gets
+        // the full card result (same shape as a non-queued spawn).
+        if (!responseSettled) {
+          responseSettled = true;
+          settleResponse(result);
+        }
+      },
+      params,
+    };
+    list.push(entry);
+    spawnQueue.set(boardId, list);
+    notifyQueueChanged(boardId);
+
+    // Immediate ack: concurrency-cap waits are always >> SPAWN_QUEUE_ACK_MS
+    // (measured 125s on board 64). Holding for the budget would only race a
+    // 120s client watchdog; returning now keeps the call under that ceiling.
+    responseSettled = true;
+    settleResponse(queuedAck);
+
+    return { response, eventual };
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 1 — called whenever a slot might have
@@ -8058,17 +9022,18 @@ export function createMessageBus(
     // autor, não pode ser cancelado pela morte dele, e o destino é o próprio
     // chamador. Ver spawn-queue-notice-decision.ts.
     void dispatched.then((result) => {
-      if (result.ok && entry.requesterId && shouldNoticeQueuedSpawnArrival(waitedMs)) {
-        enqueueCardDelivery(
-          entry.requesterId,
-          describeQueuedSpawnArrival({
-            cardId: result.cardId,
-            provider: entry.params.provider,
-            waitedMs,
-            label: entry.params.label,
-          }),
-        );
+      if (!isCardSpawnResult(result) || !entry.requesterId || !shouldNoticeQueuedSpawnArrival(waitedMs)) {
+        return;
       }
+      enqueueCardDelivery(
+        entry.requesterId,
+        formatAgentFacingAuthorship("stellar", describeQueuedSpawnArrival({
+          cardId: result.cardId,
+          provider: entry.params.provider,
+          waitedMs,
+          label: entry.params.label,
+        })),
+      );
     });
     void dispatched.then(entry.resolve);
   }
@@ -8082,11 +9047,11 @@ export function createMessageBus(
     requestId: string,
     requesterId: string,
     params: SpawnQueueEntry["params"],
-  ) {
+  ): SpawnDispatch {
     const running = callbacks.countRunningAgentsOnBoard(boardId);
     const cap = callbacks.getBoardConcurrencyCap(boardId) ?? DEFAULT_CONCURRENCY_CAP;
-    if (running >= cap) return enqueueSpawn(boardId, requestId, requesterId, params);
-    return dispatchSpawnAgentRequest(requestId, requesterId, params, true);
+    if (running >= cap) return enqueueSpawn(boardId, requestId, requesterId, params, running, cap);
+    return asSpawnDispatch(dispatchSpawnAgentRequest(requestId, requesterId, params, true));
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 3 — the dependents engine. A task
@@ -8525,10 +9490,12 @@ export function createMessageBus(
     // notice carries the warning — never delivered blind again.
     const provider = callbacks.listCards().find((c) => c.id === cardId)?.provider ?? "";
     const warn = deliveryContextWarning(cardId, provider);
-    const notice =
-      `[de: stellar] task ${task.id} delivered to card ${cardId} (reservation)` +
-      (warn ? ` — WARNING: ${describeContextWarning(warn)}` : "");
-    enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+    const notice = APP_NOTICE.reservationDelivered({
+      taskId: task.id,
+      cardId,
+      contextWarning: warn ? describeContextWarning(warn) : null,
+    });
+    enqueueCardDelivery(orch, formatAgentFacingAuthorship("stellar", notice), { steer: false });
   }
 
   /** Notifies the board ORCHESTRATOR of every dependent that still points at
@@ -8551,7 +9518,7 @@ export function createMessageBus(
         supersededTaskId,
         substituteTaskId,
       });
-      enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+      enqueueCardDelivery(orch, formatAgentFacingAuthorship("stellar", notice), { steer: false });
     }
   }
 
@@ -8561,8 +9528,8 @@ export function createMessageBus(
     if (!task.board_id) return;
     const orch = callbacks.getBoardOrchestratorCardId(task.board_id);
     if (!orch || !callbacks.isCardAlive(orch)) return;
-    const notice = `[de: stellar] reservation for task ${task.id} on card ${cardId} did not start: ${reason}`;
-    enqueueCardDelivery(orch, formatAgentFacingAuthorship(null, notice), { steer: false });
+    const notice = APP_NOTICE.reservationStuck({ taskId: task.id, cardId, reason });
+    enqueueCardDelivery(orch, formatAgentFacingAuthorship("stellar", notice), { steer: false });
   }
 
   /**
@@ -8706,9 +9673,11 @@ export function createMessageBus(
       `auto-dispatch: task ${task.id} (deps satisfied)`,
       cwdDecision.cwd,
     );
-    autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
+    // Auto-dispatch waits for the card (`eventual`), not the queued ack —
+    // linking needs cardId. The MCP caller path is what returns early.
+    autonomousSpawn(task.board_id, requestId, "", params).eventual.then((result) => {
       dispatchingTaskIds.delete(task.id);
-      if (result.ok) {
+      if (isCardSpawnResult(result)) {
         linkImplementerToTask(
           task,
           result.cardId,
@@ -8740,7 +9709,7 @@ export function createMessageBus(
             `auto-dispatch: task ${task.id} spawned card ${result.cardId} with NO connector — ${origin.reason}`,
           );
         }
-      } else {
+      } else if (!result.ok) {
         markTaskFailed(task, result.error, "spawn_failed");
       }
     });
@@ -8821,6 +9790,8 @@ export function createMessageBus(
   // (which deliberately holds the socket for as long as the human takes to
   // decide) before resolveOpen() ever gets to write the reply.
   const server: Server = createServer({ allowHalfOpen: true }, (socket: Socket) => {
+    const peerPid = identityOptions.getPeerPid ? identityOptions.getPeerPid(socket) : peerPidFromSocket(socket);
+    const peerIdentity = peerPid && identityOptions.resolvePeerIdentity ? identityOptions.resolvePeerIdentity(peerPid) : null;
     let buf = "";
     socket.on("data", (chunk) => {
       buf += chunk.toString("utf8");
@@ -8861,6 +9832,10 @@ export function createMessageBus(
             return Promise.resolve({ ok: false, error: decision.error });
           }
           if (decision.warning) logProtocolDrift(check, decision.warning);
+          const envelope = parsed as Record<string, unknown> | null;
+          if (envelope && (envelope.clientCardId !== undefined || envelope.clientBoardId !== undefined)) {
+            return Promise.resolve({ ok: false, error: "clientCardId/clientBoardId are not accepted; socket peer ancestry establishes identity" });
+          }
           const req = stripProtocolStamp(parsed) as BusRequest;
           if (req.cmd === "hello") {
             // Handshake explícito (`acbridge version`): devolve o
@@ -8875,7 +9850,19 @@ export function createMessageBus(
               ...(decision.warning ? { warning: decision.warning } : {}),
             });
           }
-          return handleRequest(req, { channel: "socket" }).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
+          if (req.cmd === "ping") return Promise.resolve({ ok: true });
+          if (req.cmd === "build_identity") {
+            return handleRequest(req, { channel: "socket" }).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
+          }
+          if (!peerIdentity) {
+            return Promise.resolve({ ok: false, error: "caller identity required: socket peer is not a registered card process" });
+          }
+          return handleRequest(req, {
+            channel: "socket",
+            callerCardId: peerIdentity.cardId,
+            callerBoardId: peerIdentity.boardId,
+            scopeEnforced: true,
+          }).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
         }),
       ).then((results) => {
         socket.end(results.map((r) => JSON.stringify(r)).join("\n") + "\n");
@@ -9064,6 +10051,8 @@ export function createMessageBus(
     clearInterval(reservationWatchdogTimer);
     idleWithoutReportNotified.clear();
     selfReminders.clear();
+    writesSinceCheckpoint.clear();
+    checkpointReminderNotified.clear();
     notifiedHealthAlerts.clear();
     reservationStuckNotified.clear();
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
@@ -9094,6 +10083,7 @@ export function createMessageBus(
     // são memória de UMA execução do bus, não estado persistido.
     spawnBriefOutcomes.clear();
     spawnIdempotency.clear();
+    spawnRecords.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
     pendingSpawnCards.clear();
     for (const list of spawnQueue.values()) for (const { timer } of list) clearTimeout(timer);
@@ -9369,6 +10359,8 @@ export function createMessageBus(
      *  The main process can detect a screen turn-end with no board mounted, so
      *  this is the entry point for that path. */
     onTurnEnd: (cardId: string) => deliverReservationForCard(cardId),
+    /** Observed write for the intention-checkpoint reminder (chat write_file). */
+    noteCardWrite,
     close,
   };
 }

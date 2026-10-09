@@ -39,9 +39,21 @@ const PRINCIPAL = "card-implementador";
 const OUTSIDER = "card-solto";
 const TASK = "T-ALVO";
 const TASK_B = "T-OUTRA";
+const MCP_INTERNAL = "unit-mcp-internal-token";
 
 type TaskShape = { id: string; cardId: string | null; status: string; review: string | null; reportSchema: string[] };
 type LinkShape = { taskId: string; role: string };
+
+function transportFor(url: string, cardId: string) {
+  return new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: {
+      headers: {
+        authorization: `Bearer ${MCP_INTERNAL}`,
+        "x-stellar-caller-card": cardId,
+      },
+    },
+  });
+}
 
 describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
   let server: ReturnType<typeof createMcpServer>;
@@ -53,6 +65,9 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      internalToken: MCP_INTERNAL,
+      requireIdentity: false,
+      resolveRelayIdentity: (cardId) => ({ cardId, boardId: "default" }),
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         if (req.cmd === "list_tasks") return { ok: true, tasks };
         if (req.cmd === "list_task_cards") return { ok: true, links };
@@ -80,8 +95,8 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
       tick();
     });
     client = new Client({ name: "report-identity", version: "0.0.0" });
-    // `caller()` só confia no carimbo da URL (`caller-identity.ts`).
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}?card=${REVIEWER}`)));
+    // Identity is the app's Bearer + x-stellar-caller-card (relay path); ?card= is refused.
+    await client.connect(transportFor(server.url, REVIEWER));
   });
 
   afterAll(async () => {
@@ -100,7 +115,7 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
 
   const sign = async (card: string, report: Record<string, unknown>) => {
     const c = new Client({ name: `signer-${card}`, version: "0.0.0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(`${server.url}?card=${card}`)));
+    await c.connect(transportFor(server.url, card));
     const res = (await c.callTool({ name: "report", arguments: { report, verdict: "aprovado" } })) as {
       isError?: boolean;
       content: { text: string }[];
@@ -196,7 +211,7 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
     // Sem veredito formal, o mesmo card entrega normalmente.
     reports = [];
     const c = new Client({ name: "impl-plain", version: "0.0.0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(`${server.url}?card=${PRINCIPAL}`)));
+    await c.connect(transportFor(server.url, PRINCIPAL));
     const plain = (await c.callTool({
       name: "report",
       arguments: { report: { ok: true, taskId: TASK, decisaoTomada: "entrega sem veredito" } },
@@ -226,6 +241,7 @@ function baseTaskRow(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,

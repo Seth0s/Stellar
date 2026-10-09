@@ -42,6 +42,9 @@ export const PTY_IDENTITY_ENV_EXACT: readonly string[] = [
   // grouping of the app that launched it.
   "DESKTOP_STARTUP_ID",
   "XDG_ACTIVATION_TOKEN",
+  "AGENT_CANVAS_CARD_ID",
+  "AGENT_CANVAS_AUTH_TOKEN",
+  "AGENT_CANVAS_MCP_APP_TOKEN",
 ];
 
 /** Prefixes of Electron-runtime internals that must not reach a card. */

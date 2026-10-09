@@ -207,6 +207,8 @@ describe("o protocolo é DADO (arquivo), não literal em código", () => {
       "grep recursivo",
       "git reset",
       "inglês",
+      'estado "parcial"',
+      "decisaoTomada",
     ]) {
       expect(joined).toContain(must);
     }

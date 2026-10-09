@@ -22,10 +22,15 @@ describe("mcp-server: `send_to_card` expõe o par de vínculo (task 23bed0fb)", 
   let server: ReturnType<typeof createMcpServer>;
   let client: Client;
   const seen: BusRequest[] = [];
+  const MCP_INTERNAL = "unit-send-link-internal-token";
+  const CALLER = "orch-card";
 
   beforeAll(async () => {
     server = createMcpServer({
       port: 0,
+      internalToken: MCP_INTERNAL,
+      requireIdentity: false,
+      resolveRelayIdentity: (cardId) => ({ cardId, boardId: "default" }),
       handleRequest: async (req: BusRequest): Promise<BusResponse> => {
         seen.push(req);
         return { ok: true, delivery: "queued", id: "d1" };
@@ -36,7 +41,16 @@ describe("mcp-server: `send_to_card` expõe o par de vínculo (task 23bed0fb)", 
       tick();
     });
     client = new Client({ name: "send-link", version: "0.0.0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: {
+          headers: {
+            authorization: `Bearer ${MCP_INTERNAL}`,
+            "x-stellar-caller-card": CALLER,
+          },
+        },
+      }),
+    );
   });
 
   afterAll(async () => {

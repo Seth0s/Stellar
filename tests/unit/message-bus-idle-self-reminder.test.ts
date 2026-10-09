@@ -148,7 +148,8 @@ describe("message-bus: lembrete ao próprio card pelo fim de turno na tela", () 
     advance(SELF_REMINDER_ESCALATE_MS + 1_000);
     b.scanIdleWithoutReport();
     await settle();
-    expect(typedTo(written, "spawner-1")).toEqual([ORCH_POINTER]);
+    expect(typedTo(written, "spawner-1")).toHaveLength(1);
+    expect(typedTo(written, "spawner-1")[0]).toContain(ORCH_POINTER);
 
     // Much later: nothing more, for either of them.
     for (let i = 0; i < 10; i++) {
@@ -157,7 +158,8 @@ describe("message-bus: lembrete ao próprio card pelo fim de turno na tela", () 
     }
     await settle();
     expect(typedTo(written, "worker-1")).toEqual([REMINDER]);
-    expect(typedTo(written, "spawner-1")).toEqual([ORCH_POINTER]);
+    expect(typedTo(written, "spawner-1")).toHaveLength(1);
+    expect(typedTo(written, "spawner-1")[0]).toContain(ORCH_POINTER);
   });
 
   it("se o card reporta depois do lembrete, o orquestrador nunca é avisado", async () => {

@@ -51,13 +51,25 @@ describe("decideSnapshotTarget — o que entra no snapshot, e onde vai o ref", (
     });
   });
 
-  it("`position:absolute; left:-9999px`: o ponto sai da viewport, então o ref vai no label", () => {
-    // Medido: este é o caso em que o snapshot de hoje LISTA e o clique não
-    // acontece (o ponto está fora da viewport e browser_click recusa).
+  it("`position:absolute; left:-9999px`: o ponto sai da viewport, então o ref vai no label (offscreen)", () => {
+    // Measured: listing a self ref here made browser_click refuse; prefer the label.
     expect(decideSnapshotTarget(facts({ pointInViewport: false, label: { kind: "for", visible: true } }))).toEqual({
       list: true,
       refOn: "label",
       via: "label",
+      offscreen: true,
+    });
+  });
+
+  it("off-viewport CSS-visible self with no label is listed as offscreen", () => {
+    // pointHitsSelf is false outside the viewport (elementFromPoint gate) —
+    // listing still happens so the agent can scrollIntoView.
+    expect(
+      decideSnapshotTarget(facts({ pointInViewport: false, pointHitsSelf: false, label: null })),
+    ).toEqual({
+      list: true,
+      refOn: "self",
+      offscreen: true,
     });
   });
 

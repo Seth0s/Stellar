@@ -6,6 +6,7 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
 import type { TaskRow } from "../../src/main/store";
 import { TASK_PROMPT_ADDITION_MARKER } from "../../src/task-prompt-decision";
+import { invalidBusRequest } from "../helpers/bus-response";
 
 function heldStatus(status: string): StatusWriteDecision {
   return {
@@ -37,6 +38,7 @@ function existingTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: "impl-card",
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -74,7 +76,8 @@ describe("message-bus: update_task writes prompt without touching a live card", 
       join(dir, "agent-canvas.sock"),
       callbacksWithOverrides({
         getTask: () => existingTask(),
-        listCards: () => [{ id: "impl-card", kind: "terminal", provider: "claude", cwd: "/tmp", label: null }],
+        listCards: () => [{ id: "impl-card", kind: "terminal", provider: "claude", cwd: "/tmp",
+ label: null }],
         writeToCard: (id: string, text: string) => {
           writes.push(`${id}:${text}`);
         },
@@ -131,12 +134,12 @@ describe("message-bus: update_task writes prompt without touching a live card", 
     expect(replaced).toEqual({ ok: true, prompt: "rewritten" });
     expect(upserted[0].prompt).toBe("rewritten");
 
-    const badMode = await bus.handleRequest({
+    const badMode = await bus.handleRequest(invalidBusRequest({
       cmd: "update_task",
       taskId: "t1",
       prompt: "x",
       promptMode: "overwrite",
-    } as BusRequest);
+    }));
     expect(badMode.ok).toBe(false);
     expect(String(badMode.error)).toContain("promptMode");
   });

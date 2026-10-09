@@ -33,6 +33,7 @@ import {
   WRITE_READY_MAX_WAIT_MS,
   type WriteReadinessInput,
   type SubmitCheckInput,
+  type SubmitCheckResult,
 } from "../../src/main/type-and-submit-decision";
 
 const CURSOR_PARKED = /\bfollow-ups\b[\s\S]*?\benter\s+steer\b/i;
@@ -491,7 +492,7 @@ describe("shouldPressEnterOnAttempt", () => {
     ];
     const needle = { sentNeedle: "consertar", hasNewActivitySinceWrite: true, screenTextBeforeWrite: "" };
 
-    let prevFixed: "sent" | "unsent" | "unknown" | null = null;
+    let prevFixed: SubmitCheckResult | null = null;
     let fixedPresses = 0;
     for (let i = 0; i < 4; i++) {
       if (shouldPressEnterOnAttempt(i, prevFixed)) fixedPresses++;
@@ -532,7 +533,7 @@ describe("shouldPressEnterOnAttempt", () => {
     const decision = decideSubmitCheck(input);
     expect(decision).toBe("unsent");
 
-    let prevResult: "sent" | "unsent" | "unknown" | null = null;
+    let prevResult: SubmitCheckResult | null = null;
     let enterCount = 0;
     const enterDecisions: boolean[] = [];
 

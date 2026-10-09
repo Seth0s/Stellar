@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type ReportRow, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { readBus } from "../helpers/bus-response";
 
 // Matar a auto-aprovação (2026-09-13). Medido: `task_verdicts` 156/156
 // implementer, `task_cards` 94/94 implementer, e os 14 `reports.verdict =
@@ -36,6 +37,7 @@ function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -233,14 +235,14 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
     await b.handleRequest({ cmd: "report", requesterId: "rev-5", report: { ok: true }, verdict: "aprovado" } as BusRequest);
     expect(await waiter).toMatchObject({ ok: true, verdict: "aprovado", role: "reviewer" });
 
-    const latest = (await b.handleRequest({ cmd: "get_report", target: "rev-5" } as BusRequest)) as { role: string | null };
+    const latest = readBus<{ role: string | null }>(await b.handleRequest({ cmd: "get_report", target: "rev-5" } as BusRequest));
     expect(latest.role).toBe("reviewer");
 
     await b.handleRequest({ cmd: "report", requesterId: "loose-6", report: { ok: true } } as BusRequest);
     const unknown = (await b.handleRequest({ cmd: "get_report", target: "loose-6" } as BusRequest)) as { ok: boolean; role: string | null };
     expect(unknown).toMatchObject({ ok: true, role: null });
 
-    const next = (await b.handleRequest({ cmd: "get_report", target: "rev-5", afterSeq: 0 } as BusRequest)) as { role: string | null };
+    const next = readBus<{ role: string | null }>(await b.handleRequest({ cmd: "get_report", target: "rev-5", afterSeq: 0 } as BusRequest));
     expect(next.role).toBe("reviewer");
   });
 

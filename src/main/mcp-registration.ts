@@ -200,7 +200,8 @@ export function declaredUrlSyntax(providerId: string): McpUrlSyntax {
 }
 
 export type CursorServerEntry = {
-  url: string;
+  command: string;
+  env: { AGENT_CANVAS_MCP_URL: string; AGENT_CANVAS_NODE: string };
   [extra: string]: unknown;
 };
 
@@ -208,8 +209,14 @@ export type CursorServerEntry = {
  * (`{ "url": <…> }`): some o shim, some o processo filho, some o runtime —
  * em macOS e Windows inclusive. Exportada porque é o CONTRATO que o teste de
  * idempotência compara. */
-export function cursorServerEntry(syntax: McpUrlSyntax = "dollar-env"): CursorServerEntry {
-  return { url: interpolatedMcpUrl(syntax) };
+export function cursorServerEntry(shim: string): CursorServerEntry {
+  return {
+    command: shim,
+    env: {
+      AGENT_CANVAS_MCP_URL: "${env:AGENT_CANVAS_MCP_URL}",
+      AGENT_CANVAS_NODE: "${env:AGENT_CANVAS_NODE}",
+    },
+  };
 }
 
 /** Igualdade só sobre o que o Stellar escreve. Chaves que o usuário tenha
@@ -220,11 +227,13 @@ export function cursorServerEntry(syntax: McpUrlSyntax = "dollar-env"): CursorSe
 function cursorEntryIsCurrent(existing: unknown, wanted: CursorServerEntry): boolean {
   if (!existing || typeof existing !== "object") return false;
   const entry = existing as Record<string, unknown>;
-  if (entry.url !== wanted.url) return false;
-  return entry.command === undefined && entry.env === undefined;
+  if (entry.command !== wanted.command) return false;
+  if (entry.url !== undefined || !entry.env || typeof entry.env !== "object" || Array.isArray(entry.env)) return false;
+  const env = entry.env as Record<string, unknown>;
+  return env.AGENT_CANVAS_MCP_URL === wanted.env.AGENT_CANVAS_MCP_URL && env.AGENT_CANVAS_NODE === wanted.env.AGENT_CANVAS_NODE;
 }
 
-export function registerCursor(syntax: McpUrlSyntax = "dollar-env"): McpRegistrationResult {
+export function registerCursor(shim: string): McpRegistrationResult {
   // `~/.cursor/mcp.json` — o caminho global que o próprio `cursor-agent
   // mcp list` nomeia quando não acha nada ("expected in .cursor/mcp.json
   // or ~/.cursor/mcp.json"). O de projeto é deliberadamente ignorado: é o
@@ -240,16 +249,16 @@ export function registerCursor(syntax: McpUrlSyntax = "dollar-env"): McpRegistra
     config = {};
   }
   const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-  const wanted = cursorServerEntry(syntax);
+  const wanted = cursorServerEntry(shim);
   const existing = servers[SERVER_NAME];
   if (cursorEntryIsCurrent(existing, wanted)) return { status: "ok", changed: false };
   // Reescrita: preserva chaves alheias (o usuário pode ter acrescentado
   // algo), mas REMOVE `command`/`env` da entrada stdio antiga — manter os
   // dois deixaria a entrada ambígua (comando E url).
   const base = existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
-  delete base.command;
-  delete base.env;
-  servers[SERVER_NAME] = { ...base, url: wanted.url };
+  delete base.url;
+  const existingEnv = base.env && typeof base.env === "object" && !Array.isArray(base.env) ? (base.env as Record<string, unknown>) : {};
+  servers[SERVER_NAME] = { ...base, ...wanted, env: { ...existingEnv, ...wanted.env } };
   config.mcpServers = servers;
   try {
     mkdirSync(dirname(file), { recursive: true });
@@ -286,13 +295,10 @@ async function approveCursor(binary: string): Promise<void> {
   });
 }
 
-// Task 7d3be060 — `registerOpencode` SAIU: o opencode agora é um provider
-// GENÉRICO (`data/providers.builtin.json`) e a entrada MCP dele é escrita pelo
-// caminho DECLARADO (`registerDeclaredProvider` + `declaredServerEntry`), com
-// `serverShape: "remote-url"` e `urlSyntax: "brace-env"`. A entrada produzida é
-// a MESMA que a função à mão gravava — `{ type: "remote", url }` com a sintaxe
-// declarada —, e isso é provado por teste (mcp-registration-opencode.test.ts).
-// O comportamento medido não muda: zero-processo, URL `{env:}`.
+// OpenCode is a generic provider (`data/providers.builtin.json`). Its MCP
+// entry is written by `registerDeclaredProvider` with `serverShape:
+// "local-array"` — stdio `stellar-mcp` so peer credentials bind identity.
+// Remote `?card=` URLs are no longer accepted on the TCP MCP door.
 
 async function registerAntigravity(binary: string, shim: string): Promise<McpRegistrationResult> {
   // `agy` não expõe o arquivo de config por flag e não documenta uma
@@ -328,8 +334,8 @@ async function registerAntigravity(binary: string, shim: string): Promise<McpReg
  * porque ele lê `PROVIDERS`, que em unit test são só os nativos.
  */
 export const REGISTRARS: Record<string, (shim: string) => Promise<McpRegistrationResult>> = {
-  cursor: async () => {
-    const result = registerCursor(declaredUrlSyntax("cursor"));
+  cursor: async (shim) => {
+    const result = registerCursor(shim);
     const binary = which(["agent", "cursor-agent"]);
     if (result.status === "ok" && result.changed && binary) await approveCursor(binary);
     return result;

@@ -13,10 +13,7 @@ import {
   REPORT_DISCOVERY_UNREACHABLE_TIP,
   decideBashCardDiscovery,
 } from "../../src/main/bash-discovery-decision";
-import {
-  deriveReportDiscovery,
-  type ProviderCapacity,
-} from "../../src/main/providers";
+import { deriveReportDiscovery } from "../../src/main/providers";
 
 describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", () => {
   it("bash card: nested-agent tip, report discovery not_applicable, identity known gap", () => {
@@ -67,11 +64,13 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
     });
   });
 
-  it("agent scrollback tip states the single rule (catalog → report tool, else acbridge report with verdict), never a URL", () => {
+  it("agent scrollback tip states the single rule (catalog → report tool, else acbridge report with estado), never a URL", () => {
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("acbridge report");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("`report`");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("catalog");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("`verdict`");
+    expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("estado");
+    expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toMatch(/parcial/);
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("stellar");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).not.toMatch(/https?:\/\//);
   });
@@ -86,26 +85,26 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
 
 describe("deriveReportDiscovery", () => {
   it("flag → system_prompt; no flag + acbridge → scrollback; neither → unreachable", () => {
-    const withFlag: ProviderCapacity = {
-      role: "agent",
-      systemPrompt: { mechanism: "append-system-prompt" },
-      mcp: { mechanism: "none" },
+    const withFlag = {
+      role: "agent" as const,
+      systemPrompt: { mechanism: "append-system-prompt" as const },
+      mcp: { mechanism: "none" as const },
       acbridgeOnPath: true,
     };
     expect(deriveReportDiscovery(withFlag)).toBe("system_prompt");
 
-    const scrollback: ProviderCapacity = {
-      role: "agent",
-      systemPrompt: { mechanism: "none" },
-      mcp: { mechanism: "global-config" },
+    const scrollback = {
+      role: "agent" as const,
+      systemPrompt: { mechanism: "none" as const },
+      mcp: { mechanism: "global-config" as const },
       acbridgeOnPath: true,
     };
     expect(deriveReportDiscovery(scrollback)).toBe("scrollback");
 
-    const unreachable: ProviderCapacity = {
-      role: "agent",
-      systemPrompt: { mechanism: "none" },
-      mcp: { mechanism: "global-config" },
+    const unreachable = {
+      role: "agent" as const,
+      systemPrompt: { mechanism: "none" as const },
+      mcp: { mechanism: "global-config" as const },
       acbridgeOnPath: false,
     };
     expect(deriveReportDiscovery(unreachable)).toBe("unreachable");
@@ -113,10 +112,10 @@ describe("deriveReportDiscovery", () => {
 
   it("does NOT treat MCP alone as sufficient report discovery", () => {
     // The capacity that reopened the cursor silent-report hole if trusted.
-    const mcpOnlyLooking: ProviderCapacity = {
-      role: "agent",
-      systemPrompt: { mechanism: "none" },
-      mcp: { mechanism: "global-config" },
+    const mcpOnlyLooking = {
+      role: "agent" as const,
+      systemPrompt: { mechanism: "none" as const },
+      mcp: { mechanism: "global-config" as const },
       acbridgeOnPath: true,
     };
     expect(deriveReportDiscovery(mcpOnlyLooking)).toBe("scrollback");

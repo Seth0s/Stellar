@@ -6,7 +6,7 @@ import { loadDynamicProviders as __loadDynProviders } from "../../src/main/provi
 // Task 7d3be060 — o opencode virou GENERICO: sem registro, providerById("opencode") = undefined.
 __loadDynProviders(__dynMkdtemp(__dynJoin(__dynTmpdir(), "stellar-dyn-")));
 
-import { describe, expect, it, beforeAll } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   projectEffortValues,
   projectTurnEndSignal,
@@ -38,15 +38,17 @@ import type { ProvidersReloadReport } from "../../src/main/providers-dynamic";
  */
 
 const report: ProvidersReloadReport = {
+  at: 1,
   file: "/tmp/providers.json",
-  fileRead: true,
-  error: null,
-  registered: ["cline"],
-  effective: [],
-  skipped: [],
-  rejected: [],
-  shippedDefaults: [],
+  outcome: "applied",
+  added: ["cline"],
+  changed: [],
   removed: [],
+  rejected: [],
+  error: null,
+  errorLine: null,
+  total: 1,
+  retried: false,
 };
 
 describe("projectEffortValues — a projeção da faixa de esforço", () => {

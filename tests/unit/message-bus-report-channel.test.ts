@@ -34,11 +34,17 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         // relatório legítimo por "o card não existe" — o guarda é exercitado,
         // com os dois lados, em report-card-identity-existence.test.ts.
         if (prop === "isCardAlive") return () => true;
+        if (prop === "getCardBoardId") return () => "board-a";
         return () => undefined;
       },
     },
   ) as Parameters<typeof createMessageBus>[1];
 }
+
+const TEST_PEER_IDENTITY = {
+  getPeerPid: () => 1,
+  resolvePeerIdentity: () => ({ cardId: "via-sock", boardId: "board-a" }),
+};
 
 function rawChannel(dir: string, cardId: string): string | null {
   const raw = new Database(join(dir, "agent-canvas.db"), { readonly: true });
@@ -110,7 +116,7 @@ describe("reports.channel — ingress stamped by the server", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-report-channel-sock-"));
     const store = openStore(dir);
     const sockPath = join(dir, "b.sock");
-    const bus = createMessageBus(sockPath, callbacksBackedByStore(store));
+    const bus = createMessageBus(sockPath, callbacksBackedByStore(store), TEST_PEER_IDENTITY);
     try {
       // Wait until the server is listening — createMessageBus binds async.
       await new Promise<void>((resolve, reject) => {

@@ -55,9 +55,8 @@ export function TeamQueueSection({ boardId, onOpenTask }: { boardId: string | nu
     }
     if (!contract[localTaskId] && boardId) {
       try {
-        const tasks = await window.tasks.listByBoard(boardId);
-        const local = tasks.find((task) => task.id === localTaskId);
-        if (local) setContract((prev) => ({ ...prev, [localTaskId]: local.prompt ?? "" }));
+        const result = await window.tasks.getPrompt(localTaskId);
+        if (result.ok) setContract((prev) => ({ ...prev, [localTaskId]: result.prompt ?? "" }));
       } catch {
         /* no briefing available */
       }

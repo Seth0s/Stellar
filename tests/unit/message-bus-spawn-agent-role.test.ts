@@ -32,6 +32,7 @@ function existingTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: "impl-card",
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -109,7 +110,8 @@ describe("message-bus: spawn_agent role", () => {
         linkTaskCard: ((taskId: string, cardId: string, role: string) => {
           linked.push({ taskId, cardId, role });
         }) as never,
-        listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+        listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }]) as never,
         ...extra,
       }),
     );

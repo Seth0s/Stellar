@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * Rodada 4 (`49ae26b7`) — `deliverCard` must consult DECSET 2004 state
@@ -72,7 +73,7 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
   it("multi-linha SEM 2004h → bytes crus (sem CSI 200~)", async () => {
     const { writes } = makeBus(false);
     const text = "line1\nline2\nline3 briefing";
-    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest)) as { id: string };
+    const sent = readBus<{ id: string }>(await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest));
     await waitForDelivery(sent.id);
     expect(writes[0]).toBe(text);
     expect(writes[0]!.startsWith("\x1b[200~")).toBe(false);
@@ -81,7 +82,7 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
   it("multi-linha COM 2004h → envelopa bracketed paste", async () => {
     const { writes } = makeBus(true);
     const text = "line1\nline2\nline3 briefing";
-    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest)) as { id: string };
+    const sent = readBus<{ id: string }>(await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest));
     await waitForDelivery(sent.id);
     expect(writes[0]).toBe(`\x1b[200~${text}\x1b[201~`);
   });

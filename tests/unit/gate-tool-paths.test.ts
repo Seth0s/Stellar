@@ -40,6 +40,11 @@ describe("validateGateToolPath", () => {
     expect(validateGateToolPath(path, probes({ existing: [path] })).accepted).toBe(path);
   });
 
+  it("accepts a specific Playwright browser cache under home", () => {
+    const path = `${HOME}/.cache/ms-playwright`;
+    expect(validateGateToolPath(path, probes({ existing: [path] })).accepted).toBe(path);
+  });
+
   it("refuses a relative path", () => {
     const result = validateGateToolPath("ai/scripts", probes());
     expect(result.accepted).toBeNull();

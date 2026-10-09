@@ -98,6 +98,9 @@ describe("bus consumers: build_identity + hello", () => {
         get: (t, prop: string) => {
           if (prop === "getBuildIdentity") return t.getBuildIdentity;
           if (prop === "listCards") return () => [];
+            if (prop === "getCardBoardId") return (id: string) => id === "identity-card" ? "identity-board" : undefined;
+            if (prop === "isCardAlive") return (id: string) => id === "identity-card";
+            if (prop === "boardExists") return (id: string) => id === "identity-board";
           if (prop === "nextReportSeqSeed") return () => 0;
           return () => undefined;
         },

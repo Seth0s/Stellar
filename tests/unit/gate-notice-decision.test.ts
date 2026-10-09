@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyGateAttribution,
   describeGateContradiction,
   describeGateIsolationMode,
-  describeGateResultSuffix,
   gateRunSummaryFromEvidence,
   lastNonEmptyLines,
+  parseGateErrorPaths,
   taskGateViewFromResult,
 } from "../../src/main/gate-notice-decision";
 import type { GateRunEvidence } from "../../src/main/gate-runner";
 
 /**
- * The gate MESSAGES: the report notice carries the result on the SAME line,
- * the contradiction is the ONLY self-standing message, and the slice the Fila
- * draws. Pure — no process, no database.
+ * The gate MESSAGES + path attribution. Pure — no process, no database.
+ *
+ * Acceptance (board 64): report filesChanged without FilesCard.tsx + tsc
+ * errors only in FilesCard.tsx → gate_inconclusive, never contradiction;
+ * error in a filesChanged path → task_failed.
  */
 
 function cmd(overrides: Partial<GateRunEvidence["commands"][number]> = {}) {
@@ -50,16 +53,6 @@ function evidence(commands: GateRunEvidence["commands"], isolation?: GateRunEvid
   };
 }
 
-describe("describeGateResultSuffix", () => {
-  it("verde: só N/N; vermelho: N/M + comando que falhou; null: ainda rodando", () => {
-    expect(describeGateResultSuffix({ ok: true, passed: 2, total: 2, failedCommand: null })).toBe(" — gates 2/2");
-    expect(describeGateResultSuffix({ ok: false, passed: 1, total: 2, failedCommand: "npm run check:types" })).toBe(
-      " — gates 1/2 — failed: npm run check:types",
-    );
-    expect(describeGateResultSuffix(null)).toBe(" — gates ainda rodando");
-  });
-});
-
 describe("gateRunSummaryFromEvidence", () => {
   it("conta verdes e nomeia o primeiro que falhou", () => {
     const s = gateRunSummaryFromEvidence(evidence([cmd({ exitCode: 0 }), cmd({ command: "tsc", exitCode: 2 })]));
@@ -67,32 +60,142 @@ describe("gateRunSummaryFromEvidence", () => {
   });
 });
 
+describe("parseGateErrorPaths", () => {
+  it("parses tsc, vitest FAIL, and eslint path:line:col", () => {
+    expect(
+      parseGateErrorPaths(
+        "src/renderer/src/FilesCard.tsx(10,5): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+      ),
+    ).toEqual(["src/renderer/src/FilesCard.tsx"]);
+    expect(parseGateErrorPaths(" FAIL  tests/unit/foo.test.ts\n")).toEqual(["tests/unit/foo.test.ts"]);
+    expect(parseGateErrorPaths("  src/main/x.ts:12:3  error  no-unused-vars\n")).toEqual(["src/main/x.ts"]);
+  });
+});
+
+describe("classifyGateAttribution — real board-64 case", () => {
+  const filesChanged = [
+    "src/main/board-scope-decision.ts",
+    "tests/unit/board-scope-decision.test.ts",
+    "src/main/message-bus.ts",
+  ];
+
+  it("tsc errors only in FilesCard.tsx (not in filesChanged) → gate_inconclusive, never task_failed", () => {
+    const ev = evidence(
+      [
+        cmd({
+          exitCode: 2,
+          failureKind: "test-failed",
+          stdout:
+            "src/renderer/src/FilesCard.tsx(40,1): error TS2304: Cannot find name 'HEADER_ICON'.\n",
+        }),
+      ],
+      { mode: "shared", appliedFiles: [], disputed: [], undeclaredInTerritory: [], worktree: null, reason: null, note: "" },
+    );
+    const attr = classifyGateAttribution({ evidence: ev, filesChanged });
+    expect(attr.class).toBe("gate_inconclusive");
+    expect(attr.errorPaths).toEqual(["src/renderer/src/FilesCard.tsx"]);
+  });
+
+  it("error in a filesChanged path → task_failed", () => {
+    const ev = evidence([
+      cmd({
+        exitCode: 2,
+        failureKind: "test-failed",
+        stdout: "src/main/message-bus.ts(10,1): error TS2322: Type 'x' is not assignable.\n",
+      }),
+    ]);
+    const attr = classifyGateAttribution({ evidence: ev, filesChanged });
+    expect(attr.class).toBe("task_failed");
+    expect(attr.errorPaths).toContain("src/main/message-bus.ts");
+  });
+
+  it("no parseable path → gate_inconclusive (honest)", () => {
+    const ev = evidence([
+      cmd({ exitCode: 1, failureKind: "test-failed", stdout: "something broke with no file\n" }),
+    ]);
+    expect(classifyGateAttribution({ evidence: ev, filesChanged }).class).toBe("gate_inconclusive");
+  });
+});
+
 describe("describeGateContradiction", () => {
-  it("report ok:true + gate vermelho → mensagem própria com id curto, comando, modo e final da saída", () => {
+  it("report ok:true + task_failed → one line with class task_failed, never 'contradiction'", () => {
     const out = describeGateContradiction({
       taskId: "abcdef12-3456-7890-0000-000000000000",
       title: "faz X",
       reportOk: true,
+      filesChanged: ["src/main/message-bus.ts"],
       evidence: evidence(
-        [cmd({ exitCode: 2, stdout: "linha1\nlinha2\nERRO: tipo inválido\n" })],
+        [
+          cmd({
+            exitCode: 2,
+            failureKind: "test-failed",
+            stdout: "src/main/message-bus.ts(1,1): error TS2322: bad\n",
+          }),
+        ],
         { mode: "shared", appliedFiles: [], disputed: [], undeclaredInTerritory: [], worktree: null, reason: null, note: "" },
       ),
     });
     expect(out).not.toBeNull();
-    expect(out!).toContain("gate contradiction");
+    expect(out!).toContain("gate task_failed");
+    expect(out!).not.toContain("contradiction");
     expect(out!).toContain("abcdef12");
-    expect(out!).toContain("faz X");
-    expect(out!).toContain("SUCCESS (ok:true)");
-    expect(out!).toContain("npm run check:types");
-    expect(out!).toContain("shared tree");
-    expect(out!).toContain("ERRO: tipo inválido");
+    expect(out!).toContain("get_task");
+    expect(out!).not.toMatch(/[\r\n]/);
   });
 
-  it("report ok:false + gate verde → a contradição simétrica", () => {
+  it("report ok:true + foreign FilesCard.tsx errors → gate_inconclusive with 'outside this task's files'", () => {
+    const out = describeGateContradiction({
+      taskId: "1b3456c8-03c8-442f-830b-d3fd6d95dd7c",
+      title: "Fase A",
+      reportOk: true,
+      filesChanged: ["src/main/board-scope-decision.ts", "src/main/message-bus.ts"],
+      evidence: evidence(
+        [
+          cmd({
+            exitCode: 2,
+            failureKind: "test-failed",
+            stdout: "src/renderer/src/FilesCard.tsx(10,5): error TS2304: Cannot find name 'X'.\n",
+          }),
+          cmd({ command: "npm run test:unit", exitCode: 0 }),
+        ],
+        { mode: "shared", appliedFiles: [], disputed: [], undeclaredInTerritory: [], worktree: null, reason: null, note: "" },
+      ),
+    });
+    expect(out).not.toBeNull();
+    expect(out!).toContain("gate_inconclusive");
+    expect(out!).toContain("errors look outside this task's files");
+    expect(out!).not.toContain("no path parsed");
+    expect(out!).not.toContain("contradiction");
+    expect(out!).not.toContain("task_failed");
+    expect(out!).toContain("get_task");
+    expect(out!).toContain("1b3456c8");
+    expect(out!).not.toMatch(/[\r\n]/);
+  });
+
+  it("no parseable path → gate_inconclusive with 'no path parsed', never 'outside this task's files'", () => {
+    const out = describeGateContradiction({
+      taskId: "abcdef12-3456-7890-0000-000000000000",
+      title: "x",
+      reportOk: true,
+      filesChanged: ["src/main/message-bus.ts"],
+      evidence: evidence([
+        cmd({ exitCode: 1, failureKind: "test-failed", stdout: "BOOM with no file path\n" }),
+      ]),
+    });
+    expect(out).not.toBeNull();
+    expect(out!).toContain("gate_inconclusive");
+    expect(out!).toContain("could not attribute the failure to any file (no path parsed)");
+    expect(out!).not.toContain("errors look outside this task's files");
+    expect(out!).toContain("get_task");
+    expect(out!).not.toMatch(/[\r\n]/);
+  });
+
+  it("report ok:false + gate verde → named class ok (symmetric disagreement)", () => {
     const out = describeGateContradiction({
       taskId: "abcdef12-3456-7890-0000-000000000000",
       title: "faz X",
       reportOk: false,
+      filesChanged: ["src/a.ts"],
       evidence: evidence([cmd({ exitCode: 0 })], {
         mode: "isolated",
         appliedFiles: ["src/a.ts"],
@@ -104,17 +207,20 @@ describe("describeGateContradiction", () => {
       }),
     });
     expect(out).not.toBeNull();
-    expect(out!).toContain("FAILURE (ok:false)");
-    expect(out!).toContain("isolated worktree");
-    expect(out!).not.toContain("Last output:");
+    expect(out!).toContain("gate ok");
+    expect(out!).toContain("report failure");
+    expect(out!).toContain("gates passed");
+    expect(out!).toContain("get_task");
+    expect(out!).not.toMatch(/[\r\n]/);
   });
 
-  it("concordância (sucesso+verde, falha+vermelho) → null: nada a dizer", () => {
+  it("concordância (sucesso+verde, falha+task_failed) → null: nada a dizer", () => {
     expect(
       describeGateContradiction({
         taskId: "abcdef12-3456-7890-0000-000000000000",
         title: "x",
         reportOk: true,
+        filesChanged: [],
         evidence: evidence([cmd({ exitCode: 0 })]),
       }),
     ).toBeNull();
@@ -123,23 +229,38 @@ describe("describeGateContradiction", () => {
         taskId: "abcdef12-3456-7890-0000-000000000000",
         title: "x",
         reportOk: false,
-        evidence: evidence([cmd({ exitCode: 1, stdout: "boom" })]),
+        filesChanged: ["src/main/message-bus.ts"],
+        evidence: evidence([
+          cmd({
+            exitCode: 1,
+            failureKind: "test-failed",
+            stdout: "src/main/message-bus.ts(1,1): error TS2322: bad\n",
+          }),
+        ]),
       }),
     ).toBeNull();
   });
 
-  it("a saída final carrega no MÁXIMO 10 linhas", () => {
-    const stdout = Array.from({ length: 30 }, (_, i) => `linha-${i + 1}`).join("\n");
+  it("missing paths report gate_env_error instead of a contradiction", () => {
     const out = describeGateContradiction({
       taskId: "abcdef12-3456-7890-0000-000000000000",
-      title: "x",
+      title: "workspace gate",
       reportOk: true,
-      evidence: evidence([cmd({ exitCode: 1, stdout })]),
+      filesChanged: [],
+      evidence: evidence([
+        cmd({
+          exitCode: 2,
+          failureKind: "gate_env_error",
+          stderr:
+            "python3: can't open file '/workspace/check.py': [Errno 2] No such file or directory",
+        }),
+      ]),
     });
-    const tail = out!.split("Last output:\n")[1]!.split("\n");
-    expect(tail).toHaveLength(10);
-    expect(tail[0]).toBe("linha-21");
-    expect(tail[9]).toBe("linha-30");
+    expect(out).toContain("gate_env_error");
+    expect(out).not.toContain("contradiction");
+    expect(out).toContain("get_task");
+    expect(out).not.toContain("No such file or directory");
+    expect(out).not.toMatch(/[\r\n]/);
   });
 });
 

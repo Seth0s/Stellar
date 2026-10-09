@@ -46,6 +46,7 @@ function listed(id: string, over: Partial<ListedTask> = {}): ListedTask {
     requestedBy: null,
     requestedAt: null,
     sprintId: null,
+    supersededBy: null,
     ...over,
   };
 }

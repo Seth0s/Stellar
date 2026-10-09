@@ -19,14 +19,12 @@ const NOW = Date.now();
 type Facts = {
   provider: string;
   alive?: boolean;
-  waitingOnConsent?: boolean;
   lastActivityAt?: number | null;
   turnEndedAt?: number | null;
   hasPendingHumanInput?: boolean;
 };
 
 function busWith(facts: Facts) {
-  const consent = new Set<string>(facts.waitingOnConsent ? ["c1"] : []);
   return createMessageBus(
     "/tmp/nonexistent-stellar-card-status.sock",
     new Proxy(

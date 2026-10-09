@@ -66,6 +66,7 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "b1",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -238,7 +239,8 @@ describe("message-bus: spawn_agent({taskId}) compartilha o ponteiro", () => {
         getTask: ((id: string) => all.find((t) => t.id === id)) as never,
         getReport: ((cardId: string) => reports.find((r) => r.card_id === cardId)) as never,
         upsertTask: ((t: TaskRow) => applied(t.status)) as never,
-        listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+        listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "",
+ label: null }]) as never,
       }),
     );
     const res = (await bus.handleRequest({ cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch", ...req } as BusRequest)) as { ok: boolean };

@@ -13,7 +13,7 @@ import { PROVIDERS } from "../../src/main/providers";
 describe("chat-tools", () => {
   describe("DELEGATE_TOOL_NAME", () => {
     const createHooks = () => {
-      const delegateToAgent = vi.fn(async (provider: DelegateProvider, reason: string) => {
+      const delegateToAgent = vi.fn(async (_provider: DelegateProvider, _reason: string) => {
         return { ok: true as const, cardId: "card-123" };
       });
       const hooks: ChatToolHooks = {

@@ -21,6 +21,7 @@ function baseTask(id: string, over: Partial<TaskRow> = {}): TaskRow {
     card_id: null,
     board_id: "board-a",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -95,7 +96,7 @@ describe("troca de card (e8802e32) — store", () => {
 
   it("3) a linha liberada sai do VIVO e CONTINUA no histórico (getTaskCards)", () => {
     const store = setup();
-    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "troca de provider", releasedBy: "orch" });
+    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "troca de provider", releasedBy: "orch", actor: "orchestrator" });
     expect(store.listTaskCardsForCard("old")).toEqual([]);
     const hist = store.getTaskCards("t1");
     expect(hist.map((l) => l.card_id)).toContain("old");
@@ -104,7 +105,7 @@ describe("troca de card (e8802e32) — store", () => {
 
   it("7) MOTIVO é obrigatório: sem motivo nada é escrito", () => {
     const store = setup();
-    const res = store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "   ", releasedBy: "orch" });
+    const res = store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "   ", releasedBy: "orch", actor: "orchestrator" });
     expect(res.ok).toBe(false);
     expect(store.listTaskCardsForCard("old")).toHaveLength(1); // continua viva
     expect(store.getTask("t1")?.card_id).toBe("old");
@@ -112,14 +113,14 @@ describe("troca de card (e8802e32) — store", () => {
 
   it("liberar duas vezes RECUSA (idempotência silenciosa esconderia erro de quem chama)", () => {
     const store = setup();
-    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "primeira", releasedBy: "orch" });
-    const again = store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "segunda", releasedBy: "orch" });
+    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "primeira", releasedBy: "orch", actor: "orchestrator" });
+    const again = store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "segunda", releasedBy: "orch", actor: "orchestrator" });
     expect(again.ok).toBe(false);
   });
 
   it("re-linkar um card LIBERADO o devolve à participação viva", () => {
     const store = setup();
-    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "pausa", releasedBy: "orch" });
+    store.releaseTaskCardFromTask({ taskId: "t1", cardId: "old", reason: "pausa", releasedBy: "orch", actor: "orchestrator" });
     store.linkTaskCard("t1", "old", "implementer");
     const live = store.listTaskCardsForCard("old");
     expect(live.map((l) => l.card_id)).toContain("old");

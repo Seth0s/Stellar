@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorState, Compartment, StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, gutter, GutterMarker } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, gutter, GutterMarker, Tooltip, showTooltip } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   indentOnInput,
@@ -13,6 +13,8 @@ import {
 } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { indentationMarkers } from "@replit/codemirror-indentation-markers";
+import type { AgentLineMark } from "./code-line-attribution-decision";
+import { decideGutterTooltip } from "./code-gutter-tooltip-decision";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 11 — `FilesCard`'s "código" view was a
@@ -70,6 +72,36 @@ const editorTheme = EditorView.theme(
       height: "9px",
       borderRadius: "50%",
       backgroundColor: "var(--danger)",
+    },
+    ".cm-agent-gutter": { width: "4px", marginRight: "10px" },
+    ".cm-agent-gutter .cm-gutterElement": { padding: 0 },
+    ".cm-agent-mark": { width: "4px", height: "100%", minHeight: "21px", display: "block" },
+    ".cm-agent-tooltip": {
+      background: "#12151d",
+      border: "1px solid #343c55",
+      borderRadius: "9px",
+      boxShadow: "0 8px 24px #000a",
+      padding: "8px 10px",
+      maxWidth: "300px",
+      fontSize: "12px",
+      color: "#e8eaf0",
+      display: "flex",
+      flexDirection: "column",
+      gap: "4px",
+    },
+    ".cm-agent-tooltip strong": { fontWeight: 600 },
+    ".cm-agent-tooltip .muted": { color: "#8d94a6" },
+    ".cm-agent-tooltip .actions": { display: "flex", gap: "6px", marginTop: "4px" },
+    ".cm-agent-tooltip button": {
+      minHeight: "28px",
+      padding: "0 10px",
+      borderRadius: "7px",
+      border: "1px solid #2a2f3d",
+      background: "#161a24",
+      color: "#e8eaf0",
+      font: "inherit",
+      fontSize: "12px",
+      cursor: "pointer",
     },
     // DESIGN-BACKLOG.md §2.0 item 4 — app default scrollbar lives on
     // `*` + bare `::-webkit-scrollbar*` in layout.css. `.cm-scroller`
@@ -241,6 +273,105 @@ function loadLanguage(filename: string): Promise<LanguageSupport | null> {
   return loader ? loader().catch(() => null) : Promise.resolve(null);
 }
 
+const setAgentMarks = StateEffect.define<Map<number, AgentLineMark>>();
+const agentMarksField = StateField.define<Map<number, AgentLineMark>>({
+  create: () => new Map(),
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setAgentMarks)) return e.value;
+    return value;
+  },
+});
+
+class AgentStrip extends GutterMarker {
+  constructor(readonly color: string) {
+    super();
+  }
+  eq(other: AgentStrip) {
+    return other.color === this.color;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-agent-mark";
+    el.style.background = this.color;
+    return el;
+  }
+}
+
+function agentGutter() {
+  return gutter({
+    class: "cm-agent-gutter",
+    markers(view) {
+      const marks = view.state.field(agentMarksField);
+      const builder = new RangeSetBuilder<GutterMarker>();
+      for (const [lineNo, mark] of [...marks.entries()].sort((a, b) => a[0] - b[0])) {
+        if (lineNo < 1 || lineNo > view.state.doc.lines) continue;
+        const line = view.state.doc.line(lineNo);
+        builder.add(line.from, line.from, new AgentStrip(mark.color));
+      }
+      return builder.finish();
+    },
+  });
+}
+
+const hoverAgentLine = StateEffect.define<number | null>();
+const hoverAgentField = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(hoverAgentLine)) return e.value;
+    return value;
+  },
+  provide: (field) =>
+    showTooltip.computeN([field, agentMarksField], (state) => {
+      const lineNo = state.field(field);
+      if (lineNo == null) return [];
+      const mark = state.field(agentMarksField).get(lineNo);
+      if (!mark || lineNo < 1 || lineNo > state.doc.lines) return [];
+      const tip = decideGutterTooltip(mark, Date.now());
+      const line = state.doc.line(lineNo);
+      const tooltip: Tooltip = {
+        pos: line.from,
+        above: true,
+        create() {
+          const dom = document.createElement("div");
+          dom.className = "cm-agent-tooltip";
+          const title = document.createElement("strong");
+          title.textContent = tip.title;
+          dom.appendChild(title);
+          if (tip.taskLine) {
+            const task = document.createElement("span");
+            task.className = "muted";
+            task.textContent = tip.taskLine;
+            dom.appendChild(task);
+          }
+          if (tip.whenLine) {
+            const when = document.createElement("span");
+            when.className = "muted";
+            when.textContent = tip.whenLine;
+            dom.appendChild(when);
+          }
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const viewDiff = document.createElement("button");
+          viewDiff.type = "button";
+          viewDiff.textContent = "Ver diff";
+          viewDiff.dataset.action = "diff";
+          viewDiff.dataset.cardId = mark.cardId;
+          viewDiff.dataset.taskId = mark.taskId ?? "";
+          const openCard = document.createElement("button");
+          openCard.type = "button";
+          openCard.textContent = "Abrir o card";
+          openCard.dataset.action = "open-card";
+          openCard.dataset.cardId = mark.cardId;
+          actions.appendChild(viewDiff);
+          actions.appendChild(openCard);
+          dom.appendChild(actions);
+          return { dom };
+        },
+      };
+      return [tooltip];
+    }),
+});
+
 export function CodeEditor({
   value,
   onChange,
@@ -249,6 +380,9 @@ export function CodeEditor({
   readOnly,
   breakpointLines,
   onToggleBreakpoint,
+  onCursorChange,
+  agentLineMarks,
+  onAgentGutterAction,
 }: {
   /** Initial content only — read once when the editor mounts (or when
    * `filename` changes, forcing a remount). Typing updates CodeMirror's
@@ -278,6 +412,11 @@ export function CodeEditor({
    * gutter de breakpoint nenhum — `FilesCard.tsx` nunca passa isso. */
   breakpointLines?: Set<number>;
   onToggleBreakpoint?: (line: number) => void;
+  /** 1-based line/column for the status bar. */
+  onCursorChange?: (line: number, col: number) => void;
+  /** Lines attributed to a live card/task (from declared diffs only). */
+  agentLineMarks?: Map<number, AgentLineMark>;
+  onAgentGutterAction?: (action: "diff" | "open-card", mark: AgentLineMark) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -288,6 +427,12 @@ export function CodeEditor({
   onChangeRef.current = onChange;
   const onToggleBreakpointRef = useRef(onToggleBreakpoint);
   onToggleBreakpointRef.current = onToggleBreakpoint;
+  const onCursorChangeRef = useRef(onCursorChange);
+  onCursorChangeRef.current = onCursorChange;
+  const onAgentGutterActionRef = useRef(onAgentGutterAction);
+  onAgentGutterActionRef.current = onAgentGutterAction;
+  const agentMarksRef = useRef(agentLineMarks);
+  agentMarksRef.current = agentLineMarks;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -309,12 +454,51 @@ export function CodeEditor({
           indentationMarkers({ hideFirstIndent: true }),
           syntaxHighlighting(highlightStyle, { fallback: true }),
           editorTheme,
+          agentMarksField.init(() => agentLineMarks ?? new Map()),
+          hoverAgentField,
+          agentGutter(),
+          EditorView.domEventHandlers({
+            mousemove(event, v) {
+              const pos = v.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos == null) {
+                v.dispatch({ effects: hoverAgentLine.of(null) });
+                return false;
+              }
+              const line = v.state.doc.lineAt(pos).number;
+              const mark = v.state.field(agentMarksField).get(line);
+              v.dispatch({ effects: hoverAgentLine.of(mark ? line : null) });
+              return false;
+            },
+            mouseleave(_event, v) {
+              v.dispatch({ effects: hoverAgentLine.of(null) });
+              return false;
+            },
+            mousedown(event, v) {
+              const t = event.target as HTMLElement | null;
+              const btn = t?.closest?.("button[data-action]") as HTMLButtonElement | null;
+              if (!btn) return false;
+              const action = btn.dataset.action === "open-card" ? "open-card" : "diff";
+              const cardId = btn.dataset.cardId ?? "";
+              const lineNo = v.state.field(hoverAgentField);
+              const mark =
+                (lineNo != null ? v.state.field(agentMarksField).get(lineNo) : undefined) ??
+                [...v.state.field(agentMarksField).values()].find((m) => m.cardId === cardId);
+              if (mark) onAgentGutterActionRef.current?.(action, mark);
+              event.preventDefault();
+              return true;
+            },
+          }),
           ...(onToggleBreakpoint
             ? [breakpointLinesField.init(() => breakpointLines ?? new Set()), breakpointGutter((line) => onToggleBreakpointRef.current?.(line))]
             : []),
           keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+            if (update.selectionSet || update.docChanged) {
+              const head = update.state.selection.main.head;
+              const line = update.state.doc.lineAt(head);
+              onCursorChangeRef.current?.(line.number, head - line.from + 1);
+            }
           }),
           languageCompartment.of([]),
           EditorState.readOnly.of(Boolean(readOnly)),
@@ -356,6 +540,11 @@ export function CodeEditor({
     if (!viewRef.current || !breakpointLines) return;
     viewRef.current.dispatch({ effects: setBreakpointLines.of(breakpointLines) });
   }, [breakpointLines]);
+
+  useEffect(() => {
+    if (!viewRef.current) return;
+    viewRef.current.dispatch({ effects: setAgentMarks.of(agentLineMarks ?? new Map()) });
+  }, [agentLineMarks]);
 
   return <div className="code-editor" ref={containerRef} />;
 }

@@ -6,6 +6,11 @@ import { ChangesCard } from "./ChangesCard";
 import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { decidePointerDownOwner, decideWheelOwner } from "./canvas-gesture-decision";
+import {
+  classifyDropSurface,
+  decideFileDropDestination,
+  hasDropFilePayload,
+} from "./terminal-drop-decision";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { MediaCard, type MediaView } from "./MediaCard";
@@ -83,6 +88,9 @@ import { readTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
 import { decideBrowserOpen } from "../../browser-open-policy";
 import { deriveCardDisplayName, type CardIdentitySnapshot } from "../../shared/card-identity";
+import { CardSkeleton } from "./CardSkeleton";
+import { NotifyMountReady } from "./NotifyMountReady";
+import { useBoardMountQueue } from "./useBoardMountQueue";
 import "./app.css";
 
 // Pendentes #188 — rótulo do tooltip por `kind` de conector (só leitura
@@ -199,6 +207,7 @@ type PendingAsk =
       reason?: string;
       anchorCardId?: string;
       side?: "left" | "right" | "top" | "bottom";
+      persistent?: boolean;
       assetPath?: string;
       mediaType?: "image" | "pdf";
       path?: string;
@@ -489,7 +498,8 @@ function toRow(card: Card, boardId: string): CardRow {
         provider: card.ownerCardId ?? "",
         cwd: card.url,
         resume_id: null,
-        model: null,
+        // Unused terminal column — carries persistent-profile flag.
+        model: card.persistent ? "persistent" : null,
         system_prompt: null,
       };
     case "remote-window":
@@ -611,12 +621,22 @@ function fromRow(r: CardRow): Card {
         // não a abrir em edição do nada a cada boot.
         mode: r.model === "edit" ? "edit" : "preview",
         fontSize: parseStickyFontSize(r.system_prompt),
+        updatedAt: r.updated_at,
         rect,
         groupId,
         label,
       };
     case "browser":
-      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId, label };
+      return {
+        id: r.id,
+        kind: "browser",
+        url: r.cwd,
+        ownerCardId: r.provider || null,
+        persistent: r.model === "persistent",
+        rect,
+        groupId,
+        label,
+      };
     case "remote-window":
       return { id: r.id, kind: "remote-window", rect, groupId, label };
     case "task":
@@ -777,13 +797,6 @@ export function App() {
   // `activeBoardId`) e depois só push (`window.tasks.onChanged`) — NUNCA
   // poll.
   const [taskBoards, setTaskBoards] = useState<Record<string, TaskBoardItem[]>>({});
-  // RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
-  // boards`). GLOBAL (não keyed por board, ao contrário de `taskBoards`
-  // acima) — é uma contagem por board só, carregada uma vez no boot (não
-  // depende de `activeBoardId`) e atualizada por push
-  // (`window.tasks.onScopeChanged`) toda vez que QUALQUER task em
-  // QUALQUER board é gravada.
-  const [taskCountsByBoard, setTaskCountsByBoard] = useState<Record<string, number>>({});
   const [aiBusy, setAiBusy] = useState(false);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tool, setTool] = useState<Tool>("pointer");
@@ -1008,6 +1021,7 @@ export function App() {
     stopBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    setBoardDefaults,
     applyBoardPreset,
     setBoardOrchestratorCard,
     clearOrchestratorMarkIfCard,
@@ -1026,6 +1040,15 @@ export function App() {
     // (discard, not flush, for a board that's about to stop existing).
     discardConnectorLabelThrottleForBoard,
   );
+
+  const {
+    isReleased: isCardMountReleased,
+    markReady: markCardMountReady,
+    progress: boardMountProgress,
+  } = useBoardMountQueue(activeBoardId, cards, order, visibleRect);
+  const getMountReadyHandler = useStableCardIdHandler<Card, []>((id) => {
+    markCardMountReady(id);
+  });
 
   useEffect(() => {
     const offUrlSeen = window.pty.onUrlSeen((id, url) => {
@@ -1141,6 +1164,7 @@ export function App() {
           params.assetPath && params.mediaType
             ? { assetPath: params.assetPath, mediaType: params.mediaType }
             : undefined,
+          { persistent: params.persistent },
         );
         // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
         // spawn_card nunca registrava lineage, só spawn_agent tinha.
@@ -1161,6 +1185,7 @@ export function App() {
         reason: params.reason,
         anchorCardId: params.anchorCardId,
         side: params.side,
+        persistent: params.persistent,
         assetPath: params.assetPath,
         mediaType: params.mediaType,
         path: params.path,
@@ -1328,13 +1353,6 @@ export function App() {
     const offTaskChanged = window.tasks.onChanged((boardId, tasks) => {
       setTaskBoards((prev) => ({ ...prev, [boardId]: tasks }));
     });
-    // RODADA 3, peça 5 — rodapé de escopo: GLOBAL, substitui o mapa
-    // inteiro a cada push (é um `GROUP BY` sobre todo `tasks`, mais barato
-    // de simplesmente devolver por completo do que fazer o main computar
-    // um diff).
-    const offTaskScopeChanged = window.tasks.onScopeChanged((counts) => {
-      setTaskCountsByBoard(counts);
-    });
     return () => {
       offUrlSeen();
       offAskOpen();
@@ -1350,16 +1368,9 @@ export function App() {
       offConnectorLabelChanged();
       offConnectorKindChanged();
       offTaskChanged();
-      offTaskScopeChanged();
     };
   }, []);
 
-  // RODADA 3, peça 5 — carga inicial do rodapé de escopo. Uma vez só, no
-  // boot (não depende de `activeBoardId` — é dado global, não por board,
-  // ao contrário do efeito de `taskBoards` mais abaixo).
-  useEffect(() => {
-    window.tasks.countsByBoard().then(setTaskCountsByBoard);
-  }, []);
 
   /** The active board's real working directory (item 1 revisited — "não
    * persiste o caminho correto") — every new card added while this board
@@ -2354,7 +2365,7 @@ export function App() {
     ownerCardId: string | null,
     url: string,
     rectOverride?: Rect,
-    opts?: { focusIfOffscreen?: boolean },
+    opts?: { focusIfOffscreen?: boolean; persistent?: boolean },
   ): string {
     const id = String(nextId.current++);
     const rect = rectOverride
@@ -2365,6 +2376,7 @@ export function App() {
       kind: "browser",
       url,
       ownerCardId,
+      persistent: opts?.persistent === true,
       rect,
       groupId: null,
       label: null,
@@ -2532,7 +2544,7 @@ export function App() {
     anchorCardId?: string,
     side?: AnchorSide,
     media?: { assetPath: string; mediaType: "image" | "pdf" },
-    opts?: { focusIfOffscreen?: boolean },
+    opts?: { focusIfOffscreen?: boolean; persistent?: boolean },
   ): SpawnCardOutcome {
     if (kind === "task") {
       const boardId = activeBoardIdRef.current;
@@ -2561,6 +2573,7 @@ export function App() {
       return {
         cardId: createBrowserCard(requesterId, url || "about:blank", anchoredBase, {
           focusIfOffscreen: opts?.focusIfOffscreen,
+          persistent: opts?.persistent,
         }),
         reused: false,
       };
@@ -2647,7 +2660,7 @@ export function App() {
         ask.anchorCardId,
         ask.side,
         ask.assetPath && ask.mediaType ? { assetPath: ask.assetPath, mediaType: ask.mediaType } : undefined,
-        { focusIfOffscreen: true },
+        { focusIfOffscreen: true, persistent: ask.persistent },
       );
       if (ask.requesterId && !spawned.reused) autoConnect(ask.requesterId, spawned.cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId: spawned.cardId });
@@ -3039,16 +3052,20 @@ export function App() {
   }
 
   function changeStickyContent(id: string, content: string) {
-    setCards((prev) => prev.map((c) => (c.id === id && c.kind === "sticky" ? { ...c, content } : c)));
+    const updatedAt = Date.now();
+    setCards((prev) => prev.map((c) => (c.id === id && c.kind === "sticky" ? { ...c, content, updatedAt } : c)));
   }
 
   function commitStickyContent(card: StickyCardData, content: string) {
-    void window.store.upsert(toRow({ ...card, content }, activeBoardIdRef.current!));
+    const updatedAt = Date.now();
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, content, updatedAt } : c)));
+    void window.store.upsert(toRow({ ...card, content, updatedAt }, activeBoardIdRef.current!));
   }
 
   function commitStickyColor(card: StickyCardData, color: string) {
-    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, color } : c)));
-    void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
+    const updatedAt = Date.now();
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, color, updatedAt } : c)));
+    void window.store.upsert(toRow({ ...card, color, updatedAt }, activeBoardIdRef.current!));
   }
 
   /** Pedido ao vivo (2026-09-02) — "modo edição vs preview" controlável.
@@ -3057,8 +3074,9 @@ export function App() {
    * (MCP) e o botão no header de `StickyCardInner` são o MESMO caminho,
    * nenhum atalho paralelo. */
   function commitStickyMode(card: StickyCardData, mode: "edit" | "preview") {
-    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, mode } : c)));
-    void window.store.upsert(toRow({ ...card, mode }, activeBoardIdRef.current!));
+    const updatedAt = Date.now();
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, mode, updatedAt } : c)));
+    void window.store.upsert(toRow({ ...card, mode, updatedAt }, activeBoardIdRef.current!));
   }
 
   /** Per-card body size — same persist path as commitStickyColor/Mode
@@ -3068,8 +3086,9 @@ export function App() {
   function commitStickyFontSize(card: StickyCardData, fontSize: number) {
     const next = clampStickyFontSize(fontSize);
     if (next === card.fontSize) return;
-    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, fontSize: next } : c)));
-    void window.store.upsert(toRow({ ...card, fontSize: next }, activeBoardIdRef.current!));
+    const updatedAt = Date.now();
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, fontSize: next, updatedAt } : c)));
+    void window.store.upsert(toRow({ ...card, fontSize: next, updatedAt }, activeBoardIdRef.current!));
   }
 
   /** Rotação (item 57.9) — clique discreto, sempre atualiza+persiste
@@ -3324,11 +3343,24 @@ export function App() {
     setRadialMenu({ screen: { x: e.clientX, y: e.clientY }, world: clientToWorld(e.clientX, e.clientY) });
   }
 
-  /** Reusa o mesmo guard "clicou no fundo vazio, não num card" que
-   * `onBackgroundPointerDown` já usa. */
+  /** Empty-canvas media drop. Destination is decided by the surface under
+   * the cursor so a drop on a (live or dead) terminal never creates a
+   * MediaCard — terminals own that gesture themselves. */
   function onViewportDrop(e: React.DragEvent) {
-    if (e.target !== e.currentTarget) return;
     e.preventDefault();
+    if (!hasDropFilePayload(e.dataTransfer.types)) return;
+    const liveIds = new Set(
+      cardsRef.current
+        .filter((c) => c.kind === "terminal")
+        .filter((c) => {
+          const st = liveStatus[c.id];
+          return st !== "error" && st !== "exited";
+        })
+        .map((c) => c.id),
+    );
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const dest = decideFileDropDestination(classifyDropSurface(under, liveIds));
+    if (dest !== "canvas") return;
     const file = e.dataTransfer.files[0];
     if (!file) return;
     void createMediaCardFromFile(file, clientToWorld(e.clientX, e.clientY));
@@ -3399,7 +3431,7 @@ export function App() {
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
           onStopBoard={stopBoard}
-          onOpenSettings={() => setSettingsPage("general")}
+          onOpenSettings={() => setSettingsPage("account")}
         />
       </div>
     );
@@ -3504,6 +3536,38 @@ export function App() {
           const onSelectStart = getSelectStartHandler(c);
           const selected = selectedIds.has(c.id);
           const displayName = describeCard(c.id);
+          // Board open queue (docs/PERF.md §17): every card keeps its real
+          // rect as a skeleton until the ceiling releases it for heavy mount.
+          if (!isCardMountReleased(c.id)) {
+            if (!cardsLayerEl) return null;
+            return createPortal(
+              <CardSkeleton
+                key={c.id}
+                kind={c.kind}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                displayName={displayName}
+                interactionMode={interactionMode}
+                selected={selected}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                onRename={getRenameHandler(c)}
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
+            );
+          }
           // A `switch` (not the old if/else-if chain) so a card kind this
           // doesn't handle is a compile error via `assertNeverCardKind`,
           // not a silent fall-through into rendering the wrong component —
@@ -3565,6 +3629,7 @@ export function App() {
                 panX={world.panX}
                 panY={world.panY}
                 shortcutOverridesRef={shortcutOverridesRef}
+                onMountReady={getMountReadyHandler(c)}
               />,
               cardsLayerEl,
               c.id,
@@ -3575,12 +3640,30 @@ export function App() {
             // kind migrado depois de sticky/browser. Mesmo padrão de portal.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <FilesCard
                 key={c.id}
+                cardId={c.id}
                 rect={c.rect}
                 zoom={world.zoom}
                 zIndex={zIndex}
                 root={c.root}
+                folderCardCount={cards.filter((candidate) => {
+                  if (candidate.id === c.id) return false;
+                  const folder = "cwd" in candidate ? candidate.cwd : "root" in candidate ? candidate.root : null;
+                  return folder === c.root;
+                }).length}
+                boardTasks={activeBoardId ? (taskBoards[activeBoardId] ?? []) : []}
+                cardProviders={Object.fromEntries(
+                  cards
+                    .filter((candidate) => "provider" in candidate && candidate.provider)
+                    .map((candidate) => [candidate.id, String((candidate as { provider?: string }).provider ?? "")]),
+                )}
+                onFocusCard={(id) => {
+                  const target = cards.find((candidate) => candidate.id === id);
+                  if (target) getRaiseHandler(target)();
+                }}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
@@ -3598,7 +3681,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3607,8 +3691,11 @@ export function App() {
             // Trilha B — mesmo padrão de portal que "files" acima.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <ChangesCard
                 key={c.id}
+                cardId={c.id}
                 rect={c.rect}
                 zoom={world.zoom}
                 zIndex={zIndex}
@@ -3630,7 +3717,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3647,6 +3735,8 @@ export function App() {
             // single frame rather than risk a flash inside `.world`.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <StickyCard
                 key={c.id}
                 cardId={c.id}
@@ -3654,6 +3744,7 @@ export function App() {
                 zoom={world.zoom}
                 zIndex={zIndex}
                 content={c.content}
+                updatedAt={c.updatedAt}
                 color={c.color}
                 mode={c.mode}
                 interactionMode={interactionMode}
@@ -3679,7 +3770,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3688,6 +3780,8 @@ export function App() {
             // Trilha B — mesmo padrão de portal que "files"/"changes" acima.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <StrokeCard
                 key={c.id}
                 rect={c.rect}
@@ -3713,7 +3807,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3725,6 +3820,8 @@ export function App() {
             // — zero risco de coordenada, ao contrário de Terminal.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <RemoteWindowCard
                 key={c.id}
                 rect={c.rect}
@@ -3747,7 +3844,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3757,6 +3855,8 @@ export function App() {
             // §0.8 ponto 2 (todos os 9 kinds, nenhum órfão no modelo antigo).
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <ChatCard
                 key={c.id}
                 id={c.id}
@@ -3791,7 +3891,8 @@ export function App() {
                 panX={world.panX}
                 panY={world.panY}
                 shortcutOverridesRef={shortcutOverridesRef}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3806,8 +3907,11 @@ export function App() {
             // combinação roda de verdade.
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <MediaCard
                 key={c.id}
+                cardId={c.id}
                 rect={c.rect}
                 zoom={world.zoom}
                 zIndex={zIndex}
@@ -3836,7 +3940,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -3854,7 +3959,14 @@ export function App() {
                 zIndex={zIndex}
                 visible={isInView(c.rect, visibleRect)}
                 url={c.url}
+                persistent={c.persistent === true}
                 ownerCardId={c.ownerCardId}
+                ownerCardLabel={(() => {
+                  const owner = cards.find((candidate) => candidate.id === c.ownerCardId);
+                  if (!owner) return null;
+                  if (owner.label) return owner.label;
+                  return owner.kind === "terminal" ? owner.provider : owner.kind;
+                })()}
                 sendTargets={cards.filter((x) => x.kind === "terminal" && x.id !== c.id).map((x) => ({ id: x.id, label: x.label }))}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
@@ -3876,6 +3988,7 @@ export function App() {
                 panX={world.panX}
                 panY={world.panY}
                 shortcutOverridesRef={shortcutOverridesRef}
+                onMountReady={getMountReadyHandler(c)}
               />,
               cardsLayerEl,
               c.id,
@@ -3891,8 +4004,11 @@ export function App() {
             // montam).
             if (!cardsLayerEl) return null;
             return createPortal(
+              <>
+                <NotifyMountReady onReady={getMountReadyHandler(c)} />
               <TaskCard
                 key={c.id}
+                cardId={c.id}
                 rect={c.rect}
                 zoom={world.zoom}
                 zIndex={zIndex}
@@ -3909,16 +4025,8 @@ export function App() {
                 // pra isto, `concurrency_cap` já vem junto com o resto do
                 // BoardRow.
                 concurrencyCapRaw={boards.find((b) => b.id === activeBoardId)?.concurrency_cap ?? null}
-                // RODADA 3, peça 5 — rodapé de escopo. `taskCountsByBoard`
-                // é GLOBAL (não escopado por board, ver seu próprio
-                // comentário); `activeBoardId` cai numa string vazia só
-                // no instante teórico em que este card renderiza sem
-                // nenhum board carregado (não deveria acontecer — cards
-                // só montam com um board aberto — mas o tipo é `string |
-                // null` então o fallback existe pra nunca quebrar).
                 activeBoardId={activeBoardId ?? ""}
                 boardNames={boardNames}
-                taskCountsByBoard={taskCountsByBoard}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3933,7 +4041,8 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
-              />,
+              />
+              </>,
               cardsLayerEl,
               c.id,
             );
@@ -4175,7 +4284,7 @@ export function App() {
         kindIcon={CARD_ICON}
         kindLabel={CARD_LABEL}
         onJumpToCard={jumpToCard}
-        onOpenSettings={() => setSettingsPage("providers")}
+        onOpenSettings={() => setSettingsPage("account")}
       />
       <Topbar
         boards={boards}
@@ -4203,6 +4312,7 @@ export function App() {
           const orchId = boards.find((b) => b.id === activeBoardId)?.orchestrator_card_id;
           return !orchId || cards.some((c) => c.id === orchId);
         })()}
+        boardMountProgress={boardMountProgress}
       />
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
       <UpdateBanner />
@@ -4222,6 +4332,10 @@ export function App() {
           onToggleAutonomous={setBoardAutonomous}
           onSetConcurrencyCap={setBoardConcurrencyCap}
           onApplyPreset={applyBoardPreset}
+          onSetDefaults={setBoardDefaults}
+          onSetOrchestrator={(boardId, cardId) => {
+            void window.store.boards.setOrchestratorCard(boardId, cardId);
+          }}
         />
       )}
       {radialMenu && (

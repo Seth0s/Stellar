@@ -1,12 +1,12 @@
-import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { memo, useEffect, useRef, useState, type MutableRefObject, type DragEvent } from "react";
 import { t } from "../../shared/i18n";
 import { ReservationDrawer } from "./ReservationDrawer";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
+import { decideTerminalFooter } from "./card-footer-decision";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
-import { PROVIDER_GLYPH } from "./provider-glyph";
 import styles from "./TerminalCard.module.css";
 import {
   formatCombo,
@@ -20,22 +20,18 @@ import { describeCardRole } from "./TaskCard";
 import { shortTaskId } from "./task-board-model";
 import { SHELL_PROVIDER_ID } from "./attachments";
 import type { TurnEndProjection } from "../../main/agent-availability-projection";
-
-/**
- * Quantos vínculos cabem no header antes do indicador "+N" (task b3f90d1d).
- *
- * O NÚMERO medido no board vivo, card de terminal não-bash: 0 vínculos em 6
- * cards, 1 em 3, 2 em 1, 3 em 3, 4 em 1 — ou seja, 4 dos 7 cards COM vínculo
- * têm mais de um. Dois chips cabem no lado do rótulo mesmo no card estreito
- * (a identidade já está limitada a 42% e as ações ficam à direita); três ou
- * quatro não cabem a 620px e seriam cortados pelo `overflow: hidden` de
- * `.card-head-label` — corte silencioso, que é o que o indicador explícito
- * existe para impedir. Valor PROVISÓRIO até a medição de largura real
- * (getComputedStyle a 1280px e 620px) que a task pede.
- */
-const MAX_INLINE_TASK_LINKS = 2;
+import {
+  STELLAR_PATHS_MIME,
+  decideTerminalDropHighlight,
+  hasDropFilePayload,
+  parseStellarPathsPayload,
+} from "./terminal-drop-decision";
+import { toast } from "./useToast";
+import { estimatePtyGeometryFromRect } from "./pty-geometry-from-rect";
 
 export type { Rect };
+
+const MAX_INLINE_TASK_LINKS = 2;
 
 /**
  * Duas CAPACIDADES medidas de um provider — não uma lista de ids válidos.
@@ -141,6 +137,7 @@ function TerminalCardInner({
   panX,
   panY,
   shortcutOverridesRef,
+  onMountReady,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -214,6 +211,8 @@ function TerminalCardInner({
   panY?: number;
   /** Follow-up fase C — repassado pra useTerminal (copy/paste rebindáveis). */
   shortcutOverridesRef: MutableRefObject<ShortcutOverrides>;
+  /** Board mount queue: fired once after PTY spawn + ring replay settle. */
+  onMountReady?: () => void;
 }) {
   // Pre-release audit P1 — a render-count counter, not gated behind any
   // dev-only flag (this renderer has none to gate on), but as cheap as a
@@ -328,7 +327,19 @@ function TerminalCardInner({
     if (when) return `${short} · ${when}`;
     return short;
   }
-  const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, homeNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
+  const {
+    exitCode,
+    spawnError,
+    discoveredResumeId,
+    resumeInvalidNotice,
+    homeNotice,
+    hasReceivedOutput,
+    isActive,
+    fitNow,
+    interrupt,
+    dropLive,
+    writeDroppedPaths,
+  } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -345,7 +356,85 @@ function TerminalCardInner({
     Boolean(isFocused),
     zoom,
     shortcutOverridesRef,
+    estimatePtyGeometryFromRect(rect),
+    onMountReady,
   );
+
+  const [dropActive, setDropActive] = useState(false);
+  const [dropRefuseNotice, setDropRefuseNotice] = useState<string | null>(null);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof window.pty.health>>>(null);
+  const [healthClock, setHealthClock] = useState(Date.now());
+  const dropDepthRef = useRef(0);
+
+  async function fileToBase64(file: File): Promise<string> {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    return btoa(binary);
+  }
+
+  async function resolveDropPaths(dt: DataTransfer): Promise<string[]> {
+    const paths = parseStellarPathsPayload(dt.getData(STELLAR_PATHS_MIME));
+    for (const file of Array.from(dt.files)) {
+      let real: string | null = null;
+      try {
+        real = window.boardAssets.getPathForFile(file) || null;
+      } catch {
+        // Synthetic File (clipboard / in-memory image) — no OS path.
+      }
+      if (real) {
+        paths.push(real);
+        continue;
+      }
+      if (!file.type.startsWith("image/")) continue;
+      const saved = await window.clipboardImage.saveBytes(await fileToBase64(file), file.type);
+      if (saved.ok) paths.push(saved.path);
+      else toast(t("terminal.pasteImageFail", { error: saved.error }));
+    }
+    return [...new Set(paths)];
+  }
+
+  function onCardDragEnter(e: DragEvent) {
+    if (!hasDropFilePayload(e.dataTransfer.types)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dropDepthRef.current += 1;
+    if (decideTerminalDropHighlight({ live: dropLive, hasFilePayload: true })) {
+      setDropActive(true);
+    }
+  }
+
+  function onCardDragOver(e: DragEvent) {
+    if (!hasDropFilePayload(e.dataTransfer.types)) return;
+    // Own the gesture even when exited — otherwise the canvas creates a media card.
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = dropLive ? "copy" : "none";
+  }
+
+  function onCardDragLeave(e: DragEvent) {
+    if (!hasDropFilePayload(e.dataTransfer.types)) return;
+    e.stopPropagation();
+    dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
+    if (dropDepthRef.current === 0) setDropActive(false);
+  }
+
+  async function onCardDrop(e: DragEvent) {
+    if (!hasDropFilePayload(e.dataTransfer.types)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dropDepthRef.current = 0;
+    setDropActive(false);
+    if (!dropLive) return;
+    const paths = await resolveDropPaths(e.dataTransfer);
+    const refused = writeDroppedPaths(paths);
+    if (refused.length > 0) {
+      setDropRefuseNotice(t("terminal.dropRefusedControls", { name: refused.join(", ") }));
+    } else {
+      setDropRefuseNotice(null);
+    }
+  }
 
   // Achado ao vivo (resize "quebra e volta") — `fitNow()` (real
   // cols/rows + resize de PTY) só roda uma vez, em `onResizeSettled`
@@ -370,6 +459,46 @@ function TerminalCardInner({
   // sempre existiu pra evitar).
   const lastFittedRectRef = useRef({ w: rect.w, h: rect.h });
   const lastRealFitAtRef = useRef(0);
+
+  // Header 42 + footer 28 change the body box after first paint, and smoke
+  // (or any display:none → flex flip) can leave xterm at a stale cols/rows.
+  // Refit whenever the body element itself changes size.
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let lastW = 0;
+    let lastH = 0;
+    let frame = 0;
+    const scheduleFit = (force = false) => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w < 2 || h < 2) return;
+      if (!force && w === lastW && h === lastH) return;
+      lastW = w;
+      lastH = h;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (el.closest(".card-frame.dragging")) return;
+        fitNow();
+        lastFittedRectRef.current = { w: rectRef.current.w, h: rectRef.current.h };
+        el.style.transform = "";
+      });
+    };
+    // jsdom (unit/dom tests) has no ResizeObserver — still fit once so
+    // spawn geometry is applied; live Electron always has the observer.
+    const ResizeObs = typeof ResizeObserver !== "undefined" ? ResizeObserver : null;
+    const ro = ResizeObs ? new ResizeObs(() => scheduleFit(false)) : null;
+    ro?.observe(el);
+    scheduleFit(true);
+    const delayed = [32, 100, 250].map((ms) => window.setTimeout(() => scheduleFit(true), ms));
+    return () => {
+      ro?.disconnect();
+      cancelAnimationFrame(frame);
+      for (const timer of delayed) window.clearTimeout(timer);
+    };
+  }, [id, fitNow]);
 
   /**
    * VÍNCULOS VIVOS DESTE CARD — task + papel, no header (task b3f90d1d).
@@ -539,24 +668,40 @@ function TerminalCardInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, displayName]);
 
-  const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
-  const statusLabel =
-    spawnError !== null
-      ? t("terminal.errorLabel", { error: spawnError })
-      : exitCode !== null
-      ? t("terminal.processExited", { code: exitCode })
-      : t("terminal.processRunning");
+  const terminalFooter = decideTerminalFooter({
+    lastActivityAt: health?.lastActivityAt ?? null,
+    context: health?.context ?? null,
+    quota: health?.quota ?? null,
+  }, healthClock);
   useEffect(() => {
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spawnError, exitCode]);
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => {
+      void window.pty.health(id).then((next) => {
+        if (mounted) setHealth(next);
+      }).catch(() => {
+        if (mounted) setHealth(null);
+      });
+    };
+    refresh();
+    const poll = window.setInterval(refresh, 4000);
+    const clock = window.setInterval(() => setHealthClock(Date.now()), 1000);
+    return () => {
+      mounted = false;
+      window.clearInterval(poll);
+      window.clearInterval(clock);
+    };
+  }, [id]);
   const effectiveResumeId = resumeId || discoveredResumeId;
   const canIdentify = !effectiveResumeId && providerSupportsSessionIdentify(providerId);
+  // Header already carries model + cwd; the V2 foot only keeps session
+  // extras that are not measured pulse fields.
   const footerParts = [
-    cwd,
     effectiveResumeId ? `resume:${effectiveResumeId}` : null,
     !resumeId && continueLast ? "--continue" : null,
-    model ? `model:${model}` : null,
   ].filter(Boolean);
   // Achado ao vivo (2026-08-27): a tira antiga era `position: absolute`
   // por CIMA das linhas do terminal, sem limite/expiração — qualquer
@@ -584,8 +729,9 @@ function TerminalCardInner({
 
   return (
     <CardFrame
-      className={styles.terminalCard}
+      className={`${styles.terminalCard}${dropActive ? ` ${styles.dropTarget}` : ""}`}
       kind="terminal"
+      cardId={id}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -606,6 +752,10 @@ function TerminalCardInner({
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
+      onDragEnter={onCardDragEnter}
+      onDragOver={onCardDragOver}
+      onDragLeave={onCardDragLeave}
+      onDrop={onCardDrop}
       // The last onChange's state update lands in the DOM asynchronously
       // (React commit + layout) — measuring in fitNow() synchronously here
       // can read the pre-resize container size. Defer one frame.
@@ -616,83 +766,59 @@ function TerminalCardInner({
           if (containerRef.current) containerRef.current.style.transform = "";
         })
       }
+      headerIcon={
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M3 4l3 3-3 3M7.5 10H11" />
+        </svg>
+      }
+      headerContext={<>{model ? `${model} · ` : ""}{cwd}</>}
+      headerStatus={
+        <span data-tone={spawnError !== null ? "danger" : isActive ? "good" : undefined}>
+          {spawnError !== null
+            ? "erro"
+            : exitCode !== null
+              ? `saiu ${exitCode}`
+              : isActive
+                ? "trabalhando"
+                : "rodando"}
+          {isActive && <span className="card-head-status-live" aria-hidden="true" />}
+        </span>
+      }
+      headerTask={taskLinks.length > 0 ? (
+        <span
+          className="card-head-tasks"
+          data-role="terminal-task-links"
+          aria-label={t("terminal.taskLinks.aria", { list: taskLinksLabel })}
+          title={taskLinksLabel}
+        >
+          {taskLinks.slice(0, MAX_INLINE_TASK_LINKS).map((link) => (
+            <button
+              type="button"
+              data-no-drag
+              className="card-head-task"
+              key={`${link.taskId}-${link.role}`}
+              title={t("terminal.taskLinks.open", { label: `${describeCardRole(link.role)} ${shortTaskId(link.taskId)}` })}
+              onClick={() => onOpenTask?.(link.taskId)}
+            >
+              #{shortTaskId(link.taskId)}
+            </button>
+          ))}
+          {taskLinks.length > MAX_INLINE_TASK_LINKS && (
+            <button
+              type="button"
+              data-no-drag
+              className="card-head-task-more"
+              data-role="terminal-task-links-more"
+              title={taskLinksLabel}
+              onClick={() => onOpenTask?.(taskLinks[MAX_INLINE_TASK_LINKS]!.taskId)}
+            >
+              +{taskLinks.length - MAX_INLINE_TASK_LINKS}
+            </button>
+          )}
+        </span>
+      ) : null}
       headerContent={
         <>
-          <span className="card-head-label">
-            <span
-              className={`card-status-dot ${statusClass}`}
-              role="status"
-              title={statusLabel}
-              aria-label={statusLabel}
-            />
-            {(() => {
-              const metal = PROVIDER_GLYPH[providerId] ?? PROVIDER_GLYPH.bash;
-              return (
-                <span
-                  className={`${styles.terminalCardProviderGlyph}${metal.dark ? "" : ` ${styles.flat}`}`}
-                  style={
-                    {
-                      "--m-mid": metal.mid,
-                      ...(metal.dark ? { "--m-dark": metal.dark } : {}),
-                    } as React.CSSProperties
-                  }
-                  aria-hidden="true"
-                >
-                  {metal.glyph}
-                </span>
-              );
-            })()}
-            {isBoardOrchestrator && (
-              <span
-                className={styles.terminalCardOrchBadge}
-                data-role="terminal-orchestrator-badge"
-                title={t("terminal.orchestratorBadgeTitle")}
-              >
-                {t("terminal.orchestratorBadge")}
-              </span>
-            )}
-            {taskLinks.length > 0 && (
-              <span
-                className="card-head-tasks"
-                data-role="terminal-task-links"
-                aria-label={t("terminal.taskLinks.aria", { list: taskLinksLabel })}
-                title={taskLinksLabel}
-              >
-                {taskLinks.slice(0, MAX_INLINE_TASK_LINKS).map((link) => (
-                  <button
-                    type="button"
-                    // `data-no-drag`: o clique não pode também iniciar um
-                    // arraste de header (mesma razão do `<input>` do
-                    // CardTag) — o CardFrame exclui o que tem este atributo.
-                    data-no-drag
-                    className="card-head-task"
-                    key={`${link.taskId}-${link.role}`}
-                    title={t("terminal.taskLinks.open", { label: `${describeCardRole(link.role)} ${shortTaskId(link.taskId)}` })}
-                    onClick={() => onOpenTask?.(link.taskId)}
-                  >
-                    {describeCardRole(link.role)} <code>{shortTaskId(link.taskId)}</code>
-                  </button>
-                ))}
-                {taskLinks.length > MAX_INLINE_TASK_LINKS && (
-                  // Indicador de "há mais" EXPLÍCITO (task b3f90d1d): um
-                  // sufixo de texto passaria por parte do id. O número é o
-                  // resto NÃO mostrado; o `title` do grupo lista os vínculos
-                  // todos, e clicar aqui abre o PRIMEIRO que não coube — o
-                  // indicador leva a algum lugar em vez de só avisar.
-                  <button
-                    type="button"
-                    data-no-drag
-                    className="card-head-task-more"
-                    data-role="terminal-task-links-more"
-                    title={taskLinksLabel}
-                    onClick={() => onOpenTask?.(taskLinks[MAX_INLINE_TASK_LINKS]!.taskId)}
-                  >
-                    +{taskLinks.length - MAX_INLINE_TASK_LINKS}
-                  </button>
-                )}
-              </span>
-            )}
-          </span>
           <span className="card-head-actions">
             <button
               className={`${styles.terminalCardBell}${bellEnabled ? ` ${styles.on}` : ""}`}
@@ -728,7 +854,17 @@ function TerminalCardInner({
         </>
       }
       footerContent={
-        <span className={styles.terminalCardFootRow}>
+        <span className={`card-foot-row ${styles.terminalCardFootRow}`}>
+          {terminalFooter.activitySeconds != null && (
+            <span data-role="terminal-last-activity">
+              <span className="card-head-status-live" aria-hidden="true" />
+              {" "}ativo há {terminalFooter.activitySeconds} s
+            </span>
+          )}
+          {terminalFooter.contextPercent != null && (
+            <span data-role="terminal-context-fill">contexto {terminalFooter.contextPercent}%</span>
+          )}
+          {terminalFooter.quotaLabel && <span data-role="terminal-quota" title={health?.quota?.text}>{terminalFooter.quotaLabel}</span>}
           {/* DESIGN-BACKLOG.md, achado 2 (2026-09-11) — DOM de verdade, não
            * bytes no pty (review adversarial provou que uma TUI em tela
            * cheia apaga/corrompe qualquer coisa escrita ali antes do boot
@@ -746,6 +882,15 @@ function TerminalCardInner({
               ⚠ {resumeInvalidNotice.reason === "missing" ? t("terminal.resumeMissing") : t("terminal.resumeEmpty")}
             </span>
           )}
+          {dropRefuseNotice && (
+            <span
+              className={styles.terminalCardResumeWarning}
+              data-role="terminal-drop-refused"
+              title={dropRefuseNotice}
+            >
+              ⚠ {dropRefuseNotice}
+            </span>
+          )}
           {/* Aviso de perfil (task fb6542e6) — o card abriu, num perfil
            * isolated, um provider que NÃO separa por perfil: o perfil não vale
            * para ele. Mesmo lugar do aviso de resume: DOM de verdade no
@@ -755,7 +900,9 @@ function TerminalCardInner({
               ⚠ {t("terminal.homeUnsupported")}
             </span>
           )}
-          <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
+          {footerParts.length > 0 && (
+            <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
+          )}
           {canIdentify && (
             <span className={styles.terminalCardIdentifySlot}>
               <span className={styles.terminalCardResumeEmpty} data-role="terminal-resume-empty">
@@ -841,6 +988,11 @@ function TerminalCardInner({
           >
             <Icon name="keyboard" size={11} />
           </button>
+          {taskLinks[0] && (
+            <span data-role="terminal-task-role">
+              {describeCardRole(taskLinks[0].role)} · #{shortTaskId(taskLinks[0].taskId)}
+            </span>
+          )}
         </span>
       }
     >

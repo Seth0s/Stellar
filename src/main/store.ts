@@ -775,6 +775,18 @@ export type ReportRow = {
   authorship?: ReportAuthorship;
 };
 
+export type CrossBoardReadAuditRow = {
+  id: string;
+  requester_card_id: string | null;
+  caller_board_id: string;
+  target_board_id: string;
+  resource_kind: string;
+  resource_id: string;
+  reason: string;
+  decision: "allowed" | "denied" | "unavailable";
+  requested_at: number;
+};
+
 /**
  * DE QUEM É UM REPORT — a regra de LEITURA (task f2559b9b).
  *
@@ -1554,6 +1566,21 @@ export function openStore(userDataDir: string) {
       channel TEXT,
       updated_at INTEGER NOT NULL
     );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cross_board_read_audit (
+      id TEXT PRIMARY KEY,
+      requester_card_id TEXT,
+      caller_board_id TEXT NOT NULL,
+      target_board_id TEXT NOT NULL,
+      resource_kind TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      requested_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cross_board_read_audit_time ON cross_board_read_audit (requested_at);
   `);
 
   // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" — ver
@@ -2803,8 +2830,9 @@ export function openStore(userDataDir: string) {
       AND (t.status NOT IN ('done', 'failed', 'superseded') OR tc.role = 'reviewer')
     ORDER BY tc.linked_at ASC, tc.rowid ASC
   `);
-  /** Full card-side history (including terminal tasks). Diagnostics and
-   * audits only — never the report / participation write path. */
+  /** Full card-side history (including released and terminal tasks). Used by
+   * `report` when the payload declares a taskId/`task` ("has or had a link").
+   * Not used for live role stamping or undeclared resolution. */
   const listTaskCardsForCardHistoryStmt = db.prepare(
     "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, released_at, released_reason, released_by FROM task_cards WHERE card_id = ?",
   );
@@ -2834,8 +2862,8 @@ export function openStore(userDataDir: string) {
    * prevalece (hold + divergência `pending` declarada) e toda mudança
    * registra `kind:status`. A task é RELIDA DEPOIS do movimento do ponteiro
    * principal: upsertar a linha antiga desfaria a escrita (2) na mesma
-   * transação. `actor` vem do bus (mesma regra de `concludeTaskOnCardClose`):
-   * o mark de orquestrador assina `orchestrator`; os demais, `agent`.
+   * transação. `actor` vem do bus: o mark de orquestrador assina
+   * `orchestrator`; os demais, `agent`.
    */
   const releaseTaskCardStmt = db.prepare(`
     UPDATE task_cards
@@ -3018,15 +3046,17 @@ export function openStore(userDataDir: string) {
   //     handler (`message-bus.ts`'s `cmd === "report"`, com o mesmo `now`),
   //     então o timestamp identifica a rodada sem ambiguidade (medido: 576
   //     reports, ZERO pares `(card_id, updated_at)` repetidos).
-  //   - `declared_raw`: o `taskId` que o payload da rodada escreveu, extraído
-  //     AQUI e não em TS por custo MEDIDO — mandar o `report_json` inteiro
-  //     custaria ~2,3 MB por push do board (504 linhas com veredito × 4,5 KB
-  //     de payload médio) para decidir ~130 grupos. `json_valid` antes do
-  //     `json_extract` porque payload malformado faz o `json_extract`
-  //     LEVANTAR e derrubar a consulta inteira; e o valor cru NÃO é a
-  //     declaração — quem normaliza é `normalizeDeclaredTaskId`, a MESMA
-  //     função do caminho de escrita. As duas rotas foram conferidas linha a
-  //     linha nos 576 reports do banco vivo: 0 divergências.
+  //   - `declared_raw`: the task id the round's payload named (`taskId` or
+  //     `task`), extracted HERE rather than in TS for measured cost —
+  //     shipping full `report_json` would cost ~2.3 MB per board push to
+  //     decide ~130 groups. `json_valid` before `json_extract` because a
+  //     malformed payload makes `json_extract` THROW and abort the whole
+  //     query; the raw value is NOT the declaration — `normalizeDeclaredTaskId`
+  //     (same function as the write path) normalizes it. When `task` and
+  //     `taskId` conflict, `task` wins (same rule as
+  //     `declaredTaskIdFromReportBody`): the server stamp only writes
+  //     `taskId`, so the conflict recovers historical mis-stamps without
+  //     rewriting the row.
   //
   // O TAMANHO DA RODADA (quantas linhas o mesmo `(card_id, at)` carimbou) NÃO
   // vira subquery correlacionada: medido, ela custa 165 ms no board (1709
@@ -3036,7 +3066,20 @@ export function openStore(userDataDir: string) {
   const VERDICT_READ_COLUMNS = `
     tv.id, tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at,
     EXISTS(SELECT 1 FROM reports r WHERE r.card_id = tv.card_id AND r.updated_at = tv.at) AS report_found,
-    (SELECT CASE WHEN json_valid(r.report_json) THEN json_extract(r.report_json, '$.taskId') END
+    (SELECT CASE WHEN json_valid(r.report_json) THEN
+      CASE
+        WHEN typeof(json_extract(r.report_json, '$.task')) = 'text'
+         AND typeof(json_extract(r.report_json, '$.taskId')) = 'text'
+         AND json_extract(r.report_json, '$.task') != json_extract(r.report_json, '$.taskId')
+        THEN json_extract(r.report_json, '$.task')
+        ELSE COALESCE(
+          CASE WHEN typeof(json_extract(r.report_json, '$.taskId')) = 'text'
+               THEN json_extract(r.report_json, '$.taskId') END,
+          CASE WHEN typeof(json_extract(r.report_json, '$.task')) = 'text'
+               THEN json_extract(r.report_json, '$.task') END
+        )
+      END
+    END
        FROM reports r WHERE r.card_id = tv.card_id AND r.updated_at = tv.at) AS declared_raw
   `;
 
@@ -3102,26 +3145,36 @@ export function openStore(userDataDir: string) {
    *     chamado `report`) — a mesma rodada termina, sem veredito
    *     nenhum (`verdict: null`), pela causa oposta.
    *
-   * Fan-out: um `cardId` pode participar de mais de uma task ao mesmo
-   * tempo (schema de `task_cards` permite); `db.transaction` garante
-   * que, se o card estiver em N tasks VIVAS, ou as N linhas entram todas
-   * ou nenhuma — mesma garantia de atomicidade que `applyColumnDrop` já
-   * tem, mesmo motivo (um crash no meio não pode deixar a rodada
-   * registrada em ALGUMAS tasks e não noutras). Só links vivos
-   * (`listTaskCardsForCardStmt`: época do vínculo vs nascimento do card;
-   * fallback `done`/`failed` quando a época falta) — um vínculo
-   * histórico de outra incarnação NÃO fecha rodada nova. Card sem NENHUMA
-   * linha viva em `task_cards`: 0 linhas lidas, 0 gravadas — silêncio
-   * correto, não bug. */
+   * Fan-out: one `cardId` may participate in more than one task at once
+   * (`task_cards` schema allows it); `db.transaction` guarantees that if
+   * the card is on N live tasks, all N rows land or none — same atomicity
+   * as `applyColumnDrop` (a mid-write crash must not leave the round on
+   * some tasks and not others). Default = live links
+   * (`listTaskCardsForCardStmt`). When the caller passes a declared
+   * `taskId` that is not live but is in the card's history, write ONE row
+   * on that past participation — same "has or had" rule as report
+   * attribution. No `taskId` and no live link: 0 rows written. */
   const recordParticipationRound = db.transaction(
     (cardId: string, verdict: string | null, at: number, taskId?: string | null): TaskVerdictRow[] => {
       const links = listTaskCardsForCardStmt.all(cardId) as TaskCardRow[];
-      if (links.length === 0) return [];
+      let scoped =
+        typeof taskId === "string" && taskId.length > 0 ? links.filter((link) => link.task_id === taskId) : links;
+      // Declared task the card HAD (released/terminal) but not live now:
+      // still close the round on THAT task — same "has or had" rule as
+      // report attribution. Without this, the body stamps correctly while
+      // task_verdicts for the declared task stay empty.
+      if (scoped.length === 0 && typeof taskId === "string" && taskId.length > 0) {
+        const hist = (listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[]).filter(
+          (link) => link.task_id === taskId,
+        );
+        if (hist.length > 0) scoped = [hist[hist.length - 1]!];
+      }
+      // Nothing to stamp (no live link, no matching history): silent empty —
+      // including a lone verdict with no taskId on a recycled id.
+      if (scoped.length === 0) return [];
       if (verdict !== null && !taskId) {
         throw new Error("Cannot record a verdict without a declared taskId");
       }
-      const scoped =
-        typeof taskId === "string" && taskId.length > 0 ? links.filter((link) => link.task_id === taskId) : links;
       const written: TaskVerdictRow[] = [];
       for (const link of scoped) {
         const row: TaskVerdictRow = { id: randomUUID(), task_id: link.task_id, card_id: cardId, role: link.role, verdict, at };
@@ -3235,6 +3288,15 @@ export function openStore(userDataDir: string) {
     INSERT INTO reports (card_id, seq, report_json, verdict, role, channel, updated_at)
     VALUES (@card_id, @seq, @report_json, @verdict, @role, @channel, @updated_at)
   `);
+  const insertCrossBoardReadAuditStmt = db.prepare(`
+    INSERT INTO cross_board_read_audit
+      (id, requester_card_id, caller_board_id, target_board_id, resource_kind, resource_id, reason, decision, requested_at)
+    VALUES
+      (@id, @requester_card_id, @caller_board_id, @target_board_id, @resource_kind, @resource_id, @reason, @decision, @requested_at)
+  `);
+  const listCrossBoardReadAuditStmt = db.prepare(
+    "SELECT id, requester_card_id, caller_board_id, target_board_id, resource_kind, resource_id, reason, decision, requested_at FROM cross_board_read_audit ORDER BY requested_at, id",
+  );
   // A `seq` monotônica (message-bus.ts) precisa sobreviver ao restart
   // junto com os relatórios — senão o `afterSeq` do `read_report` passa a
   // MENTIR (relatório antigo com seq alta, novo com seq baixa depois de um
@@ -3729,8 +3791,8 @@ export function openStore(userDataDir: string) {
      * and closes participation rounds from this — never from the
      * historical `task_cards` dump. */
     listTaskCardsForCard: (cardId: string): TaskCardRow[] => listTaskCardsForCardStmt.all(cardId) as TaskCardRow[],
-    /** Every `task_cards` row for this card id, including done/failed —
-     * history/evidence. Do not use for role stamping. */
+    /** Every `task_cards` row for this card id, including released/terminal.
+     * Declared-report matching ("has or had"); never for live role stamping. */
     listTaskCardsForCardHistory: (cardId: string): TaskCardRow[] =>
       listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[],
     /** TROCA DE CARD (task e8802e32): libera a participacao de `cardId` na
@@ -3950,6 +4012,11 @@ export function openStore(userDataDir: string) {
         }),
       };
     },
+    recordCrossBoardReadAudit: (row: Omit<CrossBoardReadAuditRow, "id">): void => {
+      insertCrossBoardReadAuditStmt.run({ id: randomUUID(), ...row });
+    },
+    listCrossBoardReadAudit: (): CrossBoardReadAuditRow[] =>
+      listCrossBoardReadAuditStmt.all() as CrossBoardReadAuditRow[],
     /** Os task_id em que este `card_id` já participou. `[]` = nunca vinculado;
      * `>1` = o slot foi REUSADO, e um ponteiro por card_id é ambíguo. */
     listTaskIdsForCard: (cardId: string): string[] =>

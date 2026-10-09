@@ -29,6 +29,8 @@
  *   intentional (card 469, seq 222+223). Identity is the delivery `id`.
  */
 
+import { APP_NOTICE } from "./agent-facing-notices";
+
 /** True when `text` already opens with the authorship convention. */
 export function hasAgentFacingAuthorPrefix(text: string): boolean {
   return /^\[de:\s*[^\]]+\]/.test(text);
@@ -49,17 +51,17 @@ export function formatAgentFacingAuthorship(from: string | null | undefined, bod
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd. */
 export const REPORT_AVAILABLE_POINTER_BODY =
-  "report available — call read_report to see the result.";
+  APP_NOTICE.reportAvailable();
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd. */
-export function unreportedExitPointerBody(exitCode: number): string {
-  return `exited (code ${exitCode}) without calling report.`;
+export function unreportedExitPointerBody(exitCode: number, taskId?: string | null, cardId?: string | null): string {
+  return APP_NOTICE.exitedWithoutReport({ exitCode, taskId, cardId });
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd.
  * SINAL 3 — card still alive, idle long enough, never called report. */
 export function unreportedIdlePointerBody(): string {
-  return "idle without calling report.";
+  return APP_NOTICE.idleWithoutReport({ kind: "turn-ended" });
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd.
@@ -79,12 +81,8 @@ export function unreportedIdlePointerBody(): string {
  * AVISAR e NUNCA MATAR — a frase tem de caber nessa decisão. Então ela diz o
  * que se sabe (nenhum byte, quantos segundos), o que NÃO se sabe (por quê) e o
  * que NÃO foi feito (nada foi encerrado). */
-export function silentBootPointerBody(waitedSec: number): string {
-  return (
-    `came up and produced no byte at all in ${waitedSec}s — the process is ALIVE and silent, and nothing was terminated. ` +
-    "It may be a missing credential (CLI hanging before its first draw), a login prompt, or a stuck binary; " +
-    "check the screen before deciding."
-  );
+export function silentBootPointerBody(waitedSec: number, cardId = "unknown"): string {
+  return APP_NOTICE.silentBoot({ cardId, waitedSec });
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd.
@@ -99,8 +97,8 @@ export function silentBootPointerBody(waitedSec: number): string {
  * rastreamento (90080872) existe para não deixar acontecer. Por que NÃO é a
  * frase de cima: acusar quem não tem leitor ensina o orquestrador a ignorar o
  * alarme — e é assim que o sinal verdadeiro morre. */
-export function unreportedNoAgentPointerBody(): string {
-  return "idle with no agent reading (shell sitting at a free prompt) — start an agent in this card or re-link the task.";
+export function unreportedNoAgentPointerBody(taskId?: string | null, cardId?: string | null): string {
+  return APP_NOTICE.idleWithoutReport({ kind: "no-agent", taskId, cardId });
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd.
@@ -119,9 +117,8 @@ export function unreportedNoAgentPointerBody(): string {
  * Por que não silêncio: o card que MORREU calado tem exatamente esta assinatura.
  * Um watchdog que se cala nos dois casos perde o verdadeiro — e o que se
  * aprende a ignorar é o alarme que erra, que é o que esta frase conserta. */
-export function unreportedUnprovenIdlePointerBody(idleMs: number): string {
-  const minutes = Math.max(1, Math.round(idleMs / 60_000));
-  return `no report for ${minutes}min and no turn fact — silence, not abandonment: check the card before resuming.`;
+export function unreportedUnprovenIdlePointerBody(idleMs: number, taskId?: string | null, cardId?: string | null): string {
+  return APP_NOTICE.idleWithoutReport({ kind: "unproven", idleMinutes: idleMs / 60_000, taskId, cardId });
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd.
@@ -133,8 +130,5 @@ export function unreportedUnprovenIdlePointerBody(idleMs: number): string {
  * done — "if you are not done, ignore this" — because the screen proves the turn
  * ended, never that the work did. */
 export function selfReportReminderBody(taskId: string): string {
-  return (
-    `You ended your turn without calling the report tool for task ${taskId}. ` +
-    "If you are done, call report now; if you are not done, ignore this."
-  );
+  return APP_NOTICE.selfReportReminder(taskId);
 }

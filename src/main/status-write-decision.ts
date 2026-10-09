@@ -1,3 +1,6 @@
+import { formatAgentFacingAuthorship } from "./agent-facing-authorship";
+import { APP_NOTICE } from "./agent-facing-notices";
+
 /**
  * Pure decision for hybrid task-status precedence (DESIGN-BACKLOG.md §2.1
  * "Decisão 8 (status híbrido com precedência)").
@@ -354,9 +357,7 @@ export function describeStatusAskAlready(status: string): string {
 }
 
 export function describeStatusAskResolved(requestedStatus: string, allowed: boolean): string {
-  return allowed
-    ? `[de: stellar] the human accepted the status request "${requestedStatus}".`
-    : `[de: stellar] the human refused the status request "${requestedStatus}".`;
+  return formatAgentFacingAuthorship("stellar", APP_NOTICE.statusAskResolved({ requestedStatus, allowed }));
 }
 
 /** AGENT-FACING — ENGLISH ONLY, not i18n'd. Ask closed because a write made it true. */

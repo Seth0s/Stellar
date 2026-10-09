@@ -1,0 +1,543 @@
+/**
+ * Code card IDE chrome (app-v3 Codigo.dc.html / Codigo-SPEC.md).
+ * CardFrame / cards.css stay untouched — body interior only.
+ * Raw SPEC measures use sd:allow citing Codigo.dc.html / Codigo-SPEC.md.
+ */
+
+.ide {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--v2-bg, #0b0d12); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  color: var(--card-name);
+  font-family: var(--font-ui);
+  position: relative;
+}
+
+.row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.rail {
+  width: 48px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  border-right: 1px solid var(--card-divider);
+  background: var(--card-foot-surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 0;
+}
+
+.railBtn {
+  width: 40px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  height: 40px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border: 0;
+  border-radius: 9px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: transparent;
+  color: var(--card-context);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+}
+
+.railBtn:hover {
+  color: var(--card-name);
+  background: var(--card-pill-browser);
+}
+
+.railOn {
+  color: var(--card-name);
+  background: #1d2333; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.badge {
+  position: absolute;
+  right: 4px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  top: 4px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  min-width: 15px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  height: 15px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: var(--radius-4);
+  background: #4a5fe0; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  color: #fff; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  font-size: var(--text-1);
+  display: grid;
+  place-items: center;
+  padding: 0 3px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  box-sizing: border-box;
+}
+
+.badgeDanger {
+  background: #b5453a; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.side {
+  width: 270px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  border-right: 1px solid var(--card-divider);
+  background: #0d1016; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sideTitle {
+  height: 36px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-6);
+  font-size: var(--text-3);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--card-context);
+}
+
+.sideBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 26px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: 0 var(--space-5);
+  font-size: var(--text-4);
+  color: #c9cede; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.treeRow:hover {
+  background: var(--card-pill-browser);
+}
+
+.treeSel {
+  background: var(--card-pill-terminal);
+}
+
+.chev {
+  color: #6b7390; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  width: 10px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  font-size: var(--text-2);
+}
+
+.langBadge {
+  width: 16px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  height: 16px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: var(--radius-2);
+  display: grid;
+  place-items: center;
+  font: 600 var(--text-1) var(--font-mono);
+  flex: none;
+}
+
+.agentDot {
+  width: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  height: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: var(--radius-circle);
+  flex: none;
+}
+
+.gitLetter {
+  flex: none;
+  font-size: var(--text-4);
+}
+
+.legend {
+  margin-top: auto;
+  padding: var(--space-5) var(--space-6);
+  border-top: 1px solid var(--card-divider);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  font-size: var(--text-3);
+  color: var(--card-context);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--v2-bg, #0b0d12); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.tabs {
+  height: 36px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  display: flex;
+  background: #0d1016; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-bottom: 1px solid var(--card-divider);
+  overflow: hidden;
+}
+
+.tab {
+  height: 36px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-6);
+  font-size: var(--text-4);
+  color: var(--card-pill-browser-text);
+  border: 0;
+  border-right: 1px solid var(--card-divider);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.tabOn {
+  background: var(--v2-bg, #0b0d12); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  color: var(--card-name);
+  box-shadow: inset 0 2px 0 var(--card-live);
+}
+
+.tabActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  margin-left: auto;
+}
+
+.btn {
+  min-height: 28px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: 0 var(--space-5);
+  border-radius: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border: 1px solid #2a2f3d; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: var(--card-pill-browser);
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--text-4);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.btn:hover {
+  border-color: #3a4258; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.crumbs {
+  height: 26px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 14px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  font-size: var(--text-3);
+  color: var(--card-context);
+  border-bottom: 1px solid var(--card-pill-browser);
+  font-family: var(--font-mono);
+}
+
+.crumbSym {
+  color: #c9cede; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.editorRow {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.editorPane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diffPane {
+  width: 46%; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  border-left: 1px solid var(--card-divider);
+  background: #0c0e13; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--text-3);
+  color: var(--card-context);
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+}
+
+.minimap {
+  width: 70px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  border-left: 1px solid var(--card-pill-browser);
+  padding: var(--space-4) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  opacity: 0.55;
+}
+
+.minimapBar {
+  height: 3px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: #3a4258; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.bottom {
+  height: 150px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  flex: none;
+  border-top: 1px solid var(--card-divider);
+  display: flex;
+  flex-direction: column;
+  background: #0d1016; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.bottomTabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--card-divider);
+}
+
+.pt {
+  height: 30px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: 0 var(--space-5);
+  border: 0;
+  background: transparent;
+  color: var(--card-context);
+  font: inherit;
+  font-size: var(--text-4);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.ptOn {
+  color: var(--card-name);
+  border-bottom-color: var(--card-live);
+}
+
+.bottomBody {
+  padding: var(--space-4) 14px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--text-4);
+  font-family: var(--font-mono);
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.searchBox {
+  padding: 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.searchInput {
+  height: 30px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border: 1px solid #2a2f3d; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: var(--card-foot-surface);
+  color: var(--card-name);
+  padding: 0 var(--space-4);
+  font-size: var(--text-4);
+  font-family: var(--font-mono);
+}
+
+.searchInputFocus {
+  border-color: #3b4570; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.agentCard {
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius-5);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0 var(--space-5);
+}
+
+.goTo {
+  position: absolute;
+  left: 50%;
+  top: 48px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  transform: translateX(-50%);
+  width: min(420px, 90%); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  z-index: 5;
+  background: var(--card-head-surface);
+  border: 1px solid #343c55; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: 9px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  box-shadow: 0 8px 24px #000a; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 360px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  overflow: auto;
+}
+
+.goToHit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border: 0;
+  background: transparent;
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--text-4);
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  cursor: pointer;
+}
+
+.goToHitOn {
+  background: var(--card-pill-terminal);
+}
+
+.goToPath {
+  color: var(--card-context);
+  font-size: var(--text-3);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diffPre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c9cede; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  font-size: var(--text-4);
+  line-height: 1.45;
+}
+
+.warnOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  background: #0b0d12cc; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  display: grid;
+  place-items: center;
+}
+
+.warnDialog {
+  width: min(360px, 90%); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: var(--card-head-surface);
+  border: 1px solid #343c55; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: 9px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  padding: 14px var(--space-7); /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  font-size: var(--text-5);
+}
+
+.footExtras {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-7);
+  font-family: var(--font-mono);
+  font-size: var(--text-3);
+  color: var(--card-context);
+}
+
+.footDirty {
+  color: var(--card-warning);
+}
+
+.footErr {
+  color: #f2a093; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+}
+
+.footOk {
+  color: var(--card-browser-success);
+}
+
+/* Header slots (CardFrame headerContent) — Codigo.dc.html header go-to + agents pill */
+
+.headTools {
+  display: flex;
+  align-items: center;
+  gap: var(--card-head-gap);
+  min-width: 0;
+  flex: 1;
+}
+
+.headGoto {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 28px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  width: 300px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  max-width: 100%;
+  padding: 0 var(--space-5);
+  border: 1px solid #2a2f3d; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  border-radius: 7px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
+  background: var(--card-foot-surface);
+  box-sizing: border-box;
+  flex: none;
+}
+
+.headGoto input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--card-name);
+  font: inherit;
+  font-size: var(--text-4);
+  outline: none;
+}
+
+.headGoto svg {
+  flex: none;
+  color: var(--card-context);
+}
+
+.headAgentsPill {
+  font-size: var(--card-status-size);
+  padding: var(--card-status-padding);
+  border-radius: var(--radius-pill);
+  background: var(--card-pill-terminal);
+  color: var(--card-pill-terminal-text);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+  flex: none;
+}
+
+.headAgentsDot {
+  width: var(--card-live-size);
+  height: var(--card-live-size);
+  border-radius: var(--radius-circle);
+  background: var(--card-live);
+  flex: none;
+}
+
+/* Tree names: SPEC nowrap — do not ellipsis away filename stems at 270px. */
+.treeRow :global(.files-node-name) {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.treeRow :global(.files-node-main) {
+  overflow: visible;
+  min-width: 0;
+  flex: 1 1 auto;
+}

@@ -10,6 +10,7 @@ import {
   unreportedIdlePointerBody,
 } from "../../src/main/agent-facing-authorship";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { readBus } from "../helpers/bus-response";
 
 describe("formatAgentFacingAuthorship — uma forma só", () => {
   it("texto sem prefixo ganha um", () => {
@@ -193,9 +194,10 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
 
     const bodies = await waitForBodies(written, 2);
     const sendLine = bodies.find((t) => t.includes("ping"));
-    const pointerLine = bodies.find((t) => t.includes(REPORT_AVAILABLE_POINTER_BODY));
+    const pointerLine = bodies.find((t) => t.includes("report available") && t.includes("read_report"));
     expect(sendLine).toBe("[de: aviso-de-report] ping");
-    expect(pointerLine).toBe(`[de: aviso-de-report] ${REPORT_AVAILABLE_POINTER_BODY}`);
+    expect(pointerLine).toContain("[de: aviso-de-report] report available");
+    expect(pointerLine).toContain("read_report");
     expect(sendLine!.startsWith("[de: aviso-de-report] ")).toBe(true);
     expect(pointerLine!.startsWith("[de: aviso-de-report] ")).toBe(true);
   });
@@ -207,18 +209,18 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
     const { bus: b, written } = makeDeliveryBus();
     const twin = "[de: aviso-de-report] mesmo bytes de propósito";
 
-    const a = (await b.handleRequest({
+    const a = readBus<{ id: string }>(await b.handleRequest({
       cmd: "send",
       target: "spawner-1",
       text: twin,
       requesterId: "child-1",
-    } as BusRequest)) as { id: string };
-    const c = (await b.handleRequest({
+    } as BusRequest));
+    const c = readBus<{ id: string }>(await b.handleRequest({
       cmd: "send",
       target: "spawner-1",
       text: twin,
       requesterId: "child-1",
-    } as BusRequest)) as { id: string };
+    } as BusRequest));
 
     expect(a.id).not.toBe(c.id);
     const bodies = await waitForBodies(written, 2);

@@ -44,7 +44,7 @@ describe("provider → ícone: o mapa e o fallback", () => {
       </div>,
     );
 
-    const icons = [...container.querySelectorAll('[data-role="provider-icon"]')];
+    const icons = Array.from(container.querySelectorAll('[data-role="provider-icon"]'));
     expect(icons).toHaveLength(ids.length);
     expect(icons.map((el) => el.getAttribute("data-provider-icon"))).toEqual([
       ...PROVIDER_ICON_KEYS,

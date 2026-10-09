@@ -6,6 +6,7 @@ import { openStore, type ReportRow, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import {
   gateEvidenceFromResultJson,
+  resetGateRunCachesForTests,
   stampGateEvidenceJson,
   type GateRunEvidence,
 } from "../../src/main/gate-runner";
@@ -39,6 +40,7 @@ function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     card_id: `card-${id}`,
     board_id: "default",
     cwd: null,
+    spawn_profile: null,
     result_json: null,
     deps_json: null,
     retry_count: 0,
@@ -67,6 +69,9 @@ function evidence(ok: boolean, stdout: string): GateRunEvidence {
     commands: [
       {
         command: "npx vitest run",
+          normalizedCommand: null,
+          failureKind: "ok",
+          missingExecutable: null,
         exitCode: ok ? 0 : 1,
         signal: null,
         timedOut: false,
@@ -149,6 +154,7 @@ describe("message-bus: evidência de gate é do app", () => {
     store?.close();
     store = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
+    resetGateRunCachesForTests();
   });
 
   /** O default vive no OBJETO do parâmetro (não num `??` interno): assim
@@ -156,6 +162,7 @@ describe("message-bus: evidência de gate é do app", () => {
    * não cai de volta no default — foi exatamente esse `??` que fez a primeira
    * versão do teste abaixo passar verde pelo motivo errado. */
   function setup(opts: { declaredBoardRoot?: string } = { declaredBoardRoot: tmpdir() }) {
+    resetGateRunCachesForTests();
     dir = mkdtempSync(join(tmpdir(), "stellar-gate-evidence-"));
     store = openStore(dir);
     // A declared root do board é o `tmpdir`: os `workDir` de cada teste são

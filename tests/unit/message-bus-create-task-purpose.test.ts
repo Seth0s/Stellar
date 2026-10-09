@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { openStore } from "../../src/main/store";
+import { readBus } from "../helpers/bus-response";
 
 /**
  * `create_task.purpose` (2026-09-13) — the column entered in 51332f3
@@ -38,8 +39,10 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
             if (prop === "getTask") return (id: string) => s.getTask(id);
             if (prop === "upsertTask") return (task: Parameters<typeof s.upsertTask>[0]) => s.upsertTask(task);
             if (prop === "listTasks") return () => s.listTasks();
+            if (prop === "listTasksByBoard") return (boardId: string) => s.listTasksByBoard(boardId);
+            if (prop === "listTasksSummaryByBoard") return (boardId: string) => s.listTasksSummaryByBoard(boardId);
             if (prop === "boardExists") return () => true;
-            if (prop === "getCardBoardId") return () => undefined;
+            if (prop === "getCardBoardId") return (id: string) => id === "caller-card" ? "b1" : undefined;
             if (prop === "listAllConnectors") return () => [];
         if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
         if (prop === "findSpawnByChild") return () => undefined;
@@ -58,7 +61,7 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
     // `boardId` por padrão desde 2026-09-19: `create_task` sem board nenhum
     // é RECUSADO (task órfã, invisível na Fila). Os casos aqui são sobre
     // `purpose`, então o board não pode ser o que falta.
-    return (await bus!.handleRequest({ cmd: "create_task", boardId: "b1", ...fields } as BusRequest)) as { ok: boolean; taskId?: string; error?: string };
+    return (await bus!.handleRequest({ cmd: "create_task", requesterId: "caller-card", boardId: "b1", ...fields } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as { ok: boolean; taskId?: string; error?: string };
   }
 
   it("purpose válido é gravado e volta em list_tasks/get_task", async () => {
@@ -67,9 +70,9 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
     expect(res.ok).toBe(true);
     expect(store.getTask(res.taskId!)!.purpose).toBe("investigate");
 
-    const got = (await bus!.handleRequest({ cmd: "get_task", taskId: res.taskId } as BusRequest)) as { task: { purpose: unknown } };
+    const got = readBus<{ task: { purpose: unknown } }>(await bus!.handleRequest({ cmd: "get_task", taskId: res.taskId } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(got.task.purpose).toBe("investigate");
-    const listed = (await bus!.handleRequest({ cmd: "list_tasks", view: "full" } as BusRequest)) as { tasks: Array<{ id: string; purpose: unknown }> };
+    const listed = readBus<{ tasks: Array<{ id: string; purpose: unknown }> }>(await bus!.handleRequest({ cmd: "list_tasks", requesterId: "caller-card", view: "full" } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(listed.tasks.find((t) => t.id === res.taskId)!.purpose).toBe("investigate");
   });
 
@@ -78,7 +81,7 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
     const res = await createTask({ prompt: "no idea yet" });
     expect(res.ok).toBe(true);
     expect(store.getTask(res.taskId!)!.purpose).toBeNull();
-    const got = (await bus!.handleRequest({ cmd: "get_task", taskId: res.taskId } as BusRequest)) as { task: { purpose: unknown } };
+    const got = readBus<{ task: { purpose: unknown } }>(await bus!.handleRequest({ cmd: "get_task", taskId: res.taskId } as BusRequest, { callerCardId: "caller-card", scopeEnforced: true }));
     expect(got.task.purpose).toBeNull();
   });
 
@@ -102,9 +105,10 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
     const upd = (await bus!.handleRequest({
       cmd: "update_task",
       taskId: created.taskId,
+      requesterId: "caller-card",
       status: "done",
       purpose: "investigate",
-    } as unknown as BusRequest)) as { ok: boolean };
+    } as unknown as BusRequest, { callerCardId: "caller-card", scopeEnforced: true })) as { ok: boolean };
     expect(upd.ok).toBe(true);
     const row = store.getTask(created.taskId!)!;
     expect(row.status).toBe("done");
@@ -114,7 +118,7 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
   it("purpose imutável também quando nasceu null: update_task não consegue preenchê-lo depois", async () => {
     const { store } = boot();
     const created = await createTask({ prompt: "later" });
-    await bus!.handleRequest({ cmd: "update_task", taskId: created.taskId, purpose: "measure", status: "running" } as unknown as BusRequest);
+    await bus!.handleRequest({ cmd: "update_task", taskId: created.taskId, requesterId: "caller-card", purpose: "measure", status: "running" } as unknown as BusRequest, { callerCardId: "caller-card", scopeEnforced: true });
     expect(store.getTask(created.taskId!)!.purpose).toBeNull();
   });
 });

@@ -243,20 +243,38 @@ describe("close_card: conclusão exige report DA PRÓPRIA task (c10a1faf)", () =
     expect(rig.links.every((l) => l.released)).toBe(true);
   });
 
-  it("report ok:true ACEITO NA RODADA (depois do vínculo) segue concluindo — a intenção da regra", async () => {
+  it("DONO 2026-10-09: implementer com ok:true+final, close pelo orquestrador → task segue pending", async () => {
+    // Red-then-green: close_card must NEVER conclude. Real case faae5162 —
+    // closing the V3 card (no review) marked done solely because the
+    // implementer had reported ok:true. Done/failed only via reviewer,
+    // orchestrator, or human judgment — not via close.
     rig = makeRig({
       task: baseTask("T", { card_id: "C" }),
       links: [link("T", "C", { linked_at: 1000 })],
       reports: [
         { cardId: "C", seq: 500, body: { ok: true, taskId: "T" } }, // before the link: ignored
-        { cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } }, // na rodada: vale
+        { cardId: "C", seq: 2000, body: { ok: true, taskId: "T", estado: "final" } },
       ],
     });
     const res = await closeAndConsent(rig, "C", "O");
     expect(res.ok).toBe(true);
-    expect(res.concludedTasks).toEqual(["T"]);
-    expect(res.releasedTasks ?? []).toEqual([]);
-    expect(rig.state.tasks.get("T")!.row.status).toBe("done");
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+    expect(rig.state.upserts.some((u) => u.id === "T" && u.status === "done")).toBe(false);
+  });
+
+  it("ok:true without estado:final also only releases (absence is parcial; close never concludes)", async () => {
+    rig = makeRig({
+      task: baseTask("T", { card_id: "C" }),
+      links: [link("T", "C", { linked_at: 1000 })],
+      reports: [{ cardId: "C", seq: 2000, body: { ok: true, taskId: "T" } }],
+    });
+    const res = await closeAndConsent(rig, "C", "O");
+    expect(res.ok).toBe(true);
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
+    expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
   });
 
   it("report ok:false na rodada NÃO conclui (o último report da task decide)", async () => {
@@ -344,55 +362,24 @@ describe("close_card: conclusão exige report DA PRÓPRIA task (c10a1faf)", () =
     expect(rig.state.upserts.filter((u) => u.id === "B11")).toEqual([]);
   });
 
-  it("LEGÍTIMO: report ok:true DA PRÓPRIA task conclui com o fechamento (actor app)", async () => {
+  it("ok:true+final DA PRÓPRIA task no close só libera — concludedTasks vazio, status pending", async () => {
     rig = makeRig({
       task: baseTask("T", { card_id: "C" }),
       links: [link("T", "C")],
-      reports: [{ cardId: "C", seq: 10, body: { ok: true, taskId: "T" } }],
+      reports: [{ cardId: "C", seq: 10, body: { ok: true, taskId: "T", estado: "final" } }],
     });
 
     const pending = rig.bus.handleRequest({ cmd: "close_card", target: "C", requesterId: "O" } as BusRequest);
     await new Promise((r) => setTimeout(r, 20));
     expect(rig.closeRequests).toHaveLength(1);
     rig.bus.resolveCloseCard(rig.closeRequests[0]!.requestId, true);
-    const res = (await pending) as { ok: boolean; concludedTasks?: string[] };
+    const res = (await pending) as { ok: boolean; concludedTasks?: string[]; releasedTasks?: string[] };
 
     expect(res.ok).toBe(true);
-    expect(res.concludedTasks).toEqual(["T"]);
-    const st = rig.state.tasks.get("T")!;
-    expect(st.row.status).toBe("done");
-    // O done do FECHAMENTO é cerimônia do APP, não julgamento do orquestrador.
-    const doneUpsert = rig.state.upserts.find((u) => u.id === "T" && u.status === "done");
-    expect(doneUpsert?.actor).toBe("app");
-    expect(st.lastActor).toBe("app");
-  });
-
-  it("ITEM 3: o orquestrador REVERTE um done escrito pelo close (não fica retido como status humano)", async () => {
-    rig = makeRig({
-      task: baseTask("T", { card_id: "C" }),
-      links: [link("T", "C")],
-      reports: [{ cardId: "C", seq: 10, body: { ok: true, taskId: "T" } }],
-    });
-
-    // 1) close conclui a task (actor app).
-    const pendingClose = rig.bus.handleRequest({ cmd: "close_card", target: "C", requesterId: "O" } as BusRequest);
-    await new Promise((r) => setTimeout(r, 20));
-    rig.bus.resolveCloseCard(rig.closeRequests[0]!.requestId, true);
-    await pendingClose;
-    expect(rig.state.tasks.get("T")!.row.status).toBe("done");
-
-    // 2) O orquestrador reverte para pending. Antes do conserto, o done com
-    // actor `orchestrator` era autoritativo e RETINHA esta escrita (o write de
-    // `pending` é carimbado `agent`), com "the human status done prevails".
-    const revert = (await rig.bus.handleRequest({ cmd: "update_task", taskId: "T", status: "pending", requesterId: "O" } as BusRequest)) as {
-      ok: boolean;
-      status?: string;
-      warning?: string;
-    };
-    expect(revert.ok).toBe(true);
-    expect(revert.warning).toBeUndefined();
-    expect(revert.status).toBe("pending");
+    expect(res.concludedTasks ?? []).toEqual([]);
+    expect(res.releasedTasks).toEqual(["T"]);
     expect(rig.state.tasks.get("T")!.row.status).toBe("pending");
+    expect(rig.state.upserts.some((u) => u.id === "T" && u.status === "done")).toBe(false);
   });
 
   it("ITEM 4a: ligada → `update_task cardId:null` desliga de verdade → card fecha e a task continua pending", async () => {

@@ -18,6 +18,7 @@
 
 import { TASK_CARD_IMPLEMENTER_ROLE } from "../task-purpose";
 import { HUMAN_PRINCIPAL_ID } from "./judgment-write-decision";
+import { APP_NOTICE } from "./agent-facing-notices";
 
 /** The terminal status a task receives when it is swapped for another one. */
 export const SUPERSEDED_STATUS = "superseded";
@@ -130,9 +131,5 @@ export function describeSupersededDependencyNotice(input: {
   supersededTaskId: string;
   substituteTaskId: string;
 }): string {
-  return (
-    `[de: stellar] task ${input.dependentTaskId} depends on ${input.supersededTaskId}, ` +
-    `which was superseded by ${input.substituteTaskId} (${SUPERSEDED_STATUS}). ` +
-    `Replace the dependency (update_task deps) — the engine does not change it on its own.`
-  );
+  return APP_NOTICE.supersededDependency(input);
 }

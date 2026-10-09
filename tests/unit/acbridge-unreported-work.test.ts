@@ -68,10 +68,15 @@ describe("acbridge unreported-work", () => {
             if (prop === "countOrphanReports") return () => 0;
             if (prop === "listCards") return () => [];
             if (prop === "listAllConnectors") return () => [];
+            if (prop === "getCardBoardId") return () => "board-a";
             return () => undefined;
           },
         },
       ) as never,
+      {
+        getPeerPid: () => 1,
+        resolvePeerIdentity: () => ({ cardId: "987654", boardId: "board-a" }),
+      },
     );
     return sockPath;
   }

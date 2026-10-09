@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   decideCloseCardTaskEffect,
   describeCloseWithoutSuccessRefusal,
-  describeImplementerJudgmentRefusal,
   describeReviewerLeavingUnsignedRefusal,
   describeStrandedReviewTaskCloseRefusal,
   type CloseCardLinkedTask,
@@ -20,16 +19,17 @@ const base: CloseCardLinkedTask = {
 };
 
 describe("decideCloseCardTaskEffect", () => {
-  // S1: review="wanted", o card fechado É o reviewer e seu último round
-  // de reviewer foi aprovado — a assinatura viaja com o fechamento.
-  it("S1: reviewer aprovado conclui a task junto com o fechamento", () => {
+  // S1: review="wanted", reviewer with aprovado already on record — close
+  // releases the link only. Done is a separate judgment write (update_task /
+  // human), never a side effect of closing the card.
+  it("S1: reviewer aprovado no close só libera o vínculo — NÃO conclui", () => {
     const result = decideCloseCardTaskEffect({
       ...base,
       reviewWanted: true,
       targetRole: "reviewer",
       targetVerdicts: [{ role: "reviewer", verdict: "aprovado" }],
     });
-    expect(result).toEqual({ action: "conclude-task", taskId: "T1", reason: "reviewer-signature" });
+    expect(result).toEqual({ action: "release-link", taskId: "T1" });
   });
 
   // S2: reviewer julgou e reprovou — o destino da task não depende mais
@@ -165,20 +165,16 @@ describe("decideCloseCardTaskEffect", () => {
     });
   });
 
-  // S10: sem review, último report ok:true, mas quem fecha é o PRÓPRIO
-  // implementer da task — CAMADA 4 recusa mesmo aqui, fechar não vira uma
-  // porta lateral para autoconcluir.
-  it("S10: sem review, ok:true, mas quem pede é o implementer é recusado (CAMADA 4)", () => {
+  // S10: sem review, ok:true+final, o próprio implementer pede o close —
+  // libera o vínculo e NÃO conclui (done só por julgamento explícito).
+  it("S10: sem review, ok:true, implementer no próprio close → solta vínculo, não conclui", () => {
     const result = decideCloseCardTaskEffect({
       ...base,
       reviewWanted: false,
       lastReportOk: true,
       requesterRoleOnTask: "implementer",
     });
-    expect(result).toEqual({
-      action: "refuse",
-      error: describeImplementerJudgmentRefusal("done"),
-    });
+    expect(result).toEqual({ action: "release-link", taskId: "T1" });
   });
 
   // S12 (task 156e6d08): o round que o fan-out antigo carimbou NESTA task é
@@ -216,11 +212,9 @@ describe("decideCloseCardTaskEffect", () => {
     });
   });
 
-  // S14: e o carimbo não APAGA a assinatura de verdade: um aprovado real
-  // (declared_this_task) seguido de um carimbo antigo continua concluindo a
-  // task com o fechamento. A rodada que nem fala desta task não pode ser a
-  // "última palavra" sobre ela.
-  it("S14: aprovado REAL seguido de carimbo antigo continua concluindo a task", () => {
+  // S14: carimbo de outra task não apaga um aprovado real — close still
+  // only releases; it never concludes.
+  it("S14: aprovado REAL seguido de carimbo antigo → só libera vínculo", () => {
     const result = decideCloseCardTaskEffect({
       ...base,
       reviewWanted: true,
@@ -230,20 +224,20 @@ describe("decideCloseCardTaskEffect", () => {
         { role: "reviewer", verdict: null, rule: "declared_other_task" },
       ],
     });
-    expect(result).toEqual({ action: "conclude-task", taskId: "T1", reason: "reviewer-signature" });
+    expect(result).toEqual({ action: "release-link", taskId: "T1" });
   });
 
-  // S11: sem review, ok:true, quem pede NÃO é o implementer (reviewer,
-  // outsider, ou papel desconhecido) — conclui a task junto com o
-  // fechamento, o caso que a mensagem de S9 promete.
-  it("S11: sem review, ok:true, requester não-implementer conclui a task", () => {
+  // S11 (dono 2026-10-09): close_card NUNCA conclui. Implementer reported
+  // ok:true (+ final); orchestrator/outsider closes → release only, status
+  // untouched. Real case: faae5162 closed as done solely from ok:true.
+  it("S11: sem review, ok:true+final, requester não-implementer NÃO conclui — só libera", () => {
     const asReviewer = decideCloseCardTaskEffect({
       ...base,
       reviewWanted: false,
       lastReportOk: true,
       requesterRoleOnTask: "reviewer",
     });
-    expect(asReviewer).toEqual({ action: "conclude-task", taskId: "T1", reason: "success-report" });
+    expect(asReviewer).toEqual({ action: "release-link", taskId: "T1" });
 
     const asOutsider = decideCloseCardTaskEffect({
       ...base,
@@ -251,6 +245,6 @@ describe("decideCloseCardTaskEffect", () => {
       lastReportOk: true,
       requesterRoleOnTask: null,
     });
-    expect(asOutsider).toEqual({ action: "conclude-task", taskId: "T1", reason: "success-report" });
+    expect(asOutsider).toEqual({ action: "release-link", taskId: "T1" });
   });
 });

@@ -1,3 +1,5 @@
+import { APP_NOTICE } from "./agent-facing-notices";
+
 /**
  * CARD HEALTH FOR THE ORCHESTRATOR — context used and provider plan/quota.
  *
@@ -273,7 +275,6 @@ export function healthAlerts(opts: {
 }): HealthAlert[] {
   const { health, capability, cardLabel, provider } = opts;
   const alerts: HealthAlert[] = [];
-  const who = `card "${cardLabel}" (${provider})`;
 
   if (health.quota?.percent !== undefined) {
     const percent = health.quota.percent;
@@ -281,21 +282,18 @@ export function healthAlerts(opts: {
       if (percent < threshold) continue;
       alerts.push({
         key: `quota:${threshold}`,
-        message:
-          `[de: stellar] ${who} provider plan at ${percent}% used — over the ${threshold}% quota warning ` +
-          `threshold (reads: "${health.quota.text}"). A card that runs out of quota stops mid-task without ` +
-          `calling report; check the plan before relying on it.`,
+        message: APP_NOTICE.quotaHealth({ cardLabel, provider, percent, threshold }),
       });
     }
   }
 
   const decl = capability?.context;
   if (health.context && decl && isContextAboveThreshold(health.context, decl)) {
+    const warning = contextWarning(health, capability);
+    if (!warning) return alerts;
     alerts.push({
       key: "context",
-      message:
-        `[de: stellar] ${who} ${describeContextWarning(contextWarning(health, capability)!)} — little headroom ` +
-        `left before the provider compacts or truncates. Deliver a fresh task to it only if it still fits.`,
+      message: APP_NOTICE.contextHealth({ cardLabel, provider, percent: warning.percent }),
     });
   }
 

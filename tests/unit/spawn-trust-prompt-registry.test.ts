@@ -79,7 +79,7 @@ describe("pty-registry: the trust prompt is answered inside the root, reported o
     expect(writes).toHaveLength(0);
     expect(unconfirmed).toHaveLength(1);
     expect(unconfirmed[0]).toMatchObject({ id: "card-1", providerId: "antigravity" });
-    expect(unconfirmed[0].message).toContain("NOT confirmed");
+    expect(unconfirmed[0].message).toContain("unconfirmed");
   });
 
   it("a provider that declares no confirm input is never answered, even inside the root", async () => {
