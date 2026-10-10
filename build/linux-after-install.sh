@@ -11,4 +11,13 @@ fi
 if command -v xdg-icon-resource >/dev/null 2>&1; then
   xdg-icon-resource forceupdate --theme hicolor >/dev/null 2>&1 || true
 fi
+# electron-builder/fpm can ship the .desktop as 0600 root-only (seen in
+# stellar-0.8.4 rpm), which makes the launcher invisible to every
+# non-root user's app menu. Force world-readable, then refresh the index.
+for f in /usr/share/applications/stellar.desktop; do
+  [ -f "$f" ] && chmod 644 "$f" || true
+done
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
 exit 0
