@@ -26,6 +26,8 @@ function task(overrides: Partial<TeamTaskInfo> = {}): TeamTaskInfo {
   return {
     id: "t1",
     teamId: "team",
+    parentId: null,
+    changesUpdatedAt: null,
     shortId: 1,
     ref: "#1",
     title: "Tarefa",

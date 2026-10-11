@@ -19,6 +19,8 @@ function task(overrides: Partial<TeamTaskInfo> = {}): TeamTaskInfo {
   return {
     id: "t1",
     teamId: "team",
+    parentId: null,
+    changesUpdatedAt: null,
     shortId: 41,
     ref: "#41",
     title: "Cliente HTTP com timeout",
