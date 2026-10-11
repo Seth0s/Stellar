@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { MessageKey } from "../../shared/i18n";
 import type {
@@ -96,10 +96,20 @@ function MatrixCell({ value }: { value: "yes" | "no" | "partial" }) {
   return <span className={styles.matrixNo}>{t("teamTask.matrix.no")}</span>;
 }
 
-export function TeamPage({ boards }: { boards: TeamRef[] }) {
+export function TeamPage({
+  boards,
+  initialTeamId,
+  initialTaskId,
+}: {
+  boards: TeamRef[];
+  /** Open this team when arriving from the inbox notification click. */
+  initialTeamId?: string;
+  /** Select this task after the team board loads (inbox deep-link). */
+  initialTaskId?: string;
+}) {
   const [overview, setOverview] = useState<TeamOverviewInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialTeamId ?? null);
   const [detail, setDetail] = useState<TeamDetailInfo | null>(null);
   const [tasks, setTasks] = useState<TeamTaskInfo[]>([]);
   const [sprints, setSprints] = useState<TeamSprintInfo[]>([]);
@@ -122,7 +132,6 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
   const [deleteInitial, setDeleteInitial] = useState<DeleteMode>("archive");
   const [requested, setRequested] = useState<Record<string, boolean>>({});
   const [seatsFull, setSeatsFull] = useState<number | null>(null);
-  const pollRef = useRef<number | null>(null);
 
   const { plan: cloudPlan, loggedIn } = useCloudPlan();
   const plansUrl = usePlansUrl();
@@ -223,13 +232,33 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
   useEffect(() => {
     if (!selected) return;
     void loadTeam(selected);
-    pollRef.current = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadTasks(selected, true);
-    }, 15000);
-    return () => {
-      if (pollRef.current !== null) window.clearInterval(pollRef.current);
-    };
+    // Team board refresh follows the account SSE stream instead of a timed
+    // poll — inbox/task events nudge a silent reload of the open board.
+    if (!window.inbox?.onEvent) return;
+    return window.inbox.onEvent((event) => {
+      if (document.visibilityState !== "visible") return;
+      if (event.name === "task" || event.name === "inbox" || event.name === "") {
+        void loadTasks(selected, true);
+      }
+    });
   }, [selected, loadTeam, loadTasks]);
+
+  useEffect(() => {
+    if (!initialTeamId) return;
+    setSelected(initialTeamId);
+  }, [initialTeamId]);
+
+  useEffect(() => {
+    if (!initialTaskId || !selected || tasks.length === 0) return;
+    const hit = tasks.find((task) => task.id === initialTaskId);
+    if (hit) {
+      setSelectedTask(hit);
+      setSub("board");
+      void window.team.taskDetail(selected, hit.id).then((res) => {
+        if (res.ok) setTaskDetail(res.detail);
+      });
+    }
+  }, [initialTaskId, selected, tasks]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);

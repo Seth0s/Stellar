@@ -2794,6 +2794,90 @@ export type TeamWebhookDeliveryInfo = {
 export type TeamWebhookDeliveriesResult = { ok: true; deliveries: TeamWebhookDeliveryInfo[] } | { ok: false; error: string };
 export type TeamExportResult = { ok: true; body: string; contentType: string } | { ok: false; error: string };
 
+// ---- ACCOUNT INBOX (B8 / A5c) ---------------------------------------------
+
+export type InboxTabId = "all" | "review" | "requests" | "assigned" | "mentions";
+export type InboxActionId =
+  | "open"
+  | "review_now"
+  | "assign_to"
+  | "reject"
+  | "accept"
+  | "return"
+  | "redistribute"
+  | "gate_output"
+  | "reply"
+  | "view";
+export type InboxItemInfo = {
+  id: string;
+  source: "team" | "local";
+  kind: string;
+  title: string;
+  highlight: string;
+  meta: string;
+  avatarInitials: string;
+  avatarTone: number | "warn" | "info";
+  createdAt: number;
+  seen: boolean;
+  teamId: string | null;
+  taskId: string | null;
+  boardId: string | null;
+  claimId: string | null;
+  claimantName: string | null;
+  actions: InboxActionId[];
+  primaryAction: InboxActionId | null;
+};
+export type InboxSnapshotInfo = {
+  items: InboxItemInfo[];
+  counts: Record<InboxTabId, number>;
+  prefs: { inApp: boolean; system: boolean; dailyDigest: boolean };
+  offline: boolean;
+  updatedAt: number;
+};
+export type InboxPrefsInfo = { inApp: boolean; system: boolean; dailyDigest: boolean };
+
+export type InboxApi = {
+  snapshot: () => Promise<InboxSnapshotInfo>;
+  markSeen: (itemId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  markAllSeen: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  prefs: () => Promise<{ ok: true; prefs: InboxPrefsInfo; offline: boolean }>;
+  setPrefs: (patch: Partial<InboxPrefsInfo>) => Promise<{ ok: true; prefs: InboxPrefsInfo; offline: boolean } | { ok: false; error: string }>;
+  open: (itemId: string) => Promise<{ ok: boolean }>;
+  onSnapshot: (cb: (snapshot: InboxSnapshotInfo) => void) => () => void;
+  onEvent: (cb: (event: { id: number | null; name: string; data: string }) => void) => () => void;
+  onStatus: (cb: (status: { status: "connecting" | "open" | "offline" }) => void) => () => void;
+  onNavigate: (cb: (item: InboxItemInfo) => void) => () => void;
+};
+
+const inbox: InboxApi = {
+  snapshot: () => ipcRenderer.invoke("inbox:snapshot"),
+  markSeen: (itemId) => ipcRenderer.invoke("inbox:mark-seen", itemId),
+  markAllSeen: () => ipcRenderer.invoke("inbox:mark-all-seen"),
+  prefs: () => ipcRenderer.invoke("inbox:prefs"),
+  setPrefs: (patch) => ipcRenderer.invoke("inbox:set-prefs", patch),
+  open: (itemId) => ipcRenderer.invoke("inbox:open", itemId),
+  onSnapshot: (cb) => {
+    const listener = (_e: unknown, snapshot: InboxSnapshotInfo) => cb(snapshot);
+    ipcRenderer.on("inbox:snapshot", listener);
+    return () => ipcRenderer.removeListener("inbox:snapshot", listener);
+  },
+  onEvent: (cb) => {
+    const listener = (_e: unknown, event: { id: number | null; name: string; data: string }) => cb(event);
+    ipcRenderer.on("inbox:event", listener);
+    return () => ipcRenderer.removeListener("inbox:event", listener);
+  },
+  onStatus: (cb) => {
+    const listener = (_e: unknown, status: { status: "connecting" | "open" | "offline" }) => cb(status);
+    ipcRenderer.on("inbox:status", listener);
+    return () => ipcRenderer.removeListener("inbox:status", listener);
+  },
+  onNavigate: (cb) => {
+    const listener = (_e: unknown, item: InboxItemInfo) => cb(item);
+    ipcRenderer.on("inbox:navigate", listener);
+    return () => ipcRenderer.removeListener("inbox:navigate", listener);
+  },
+};
+
 const team: TeamApi = {
   overview: () => ipcRenderer.invoke("team:overview"),
   create: (input) => ipcRenderer.invoke("team:create", input),
@@ -2887,6 +2971,7 @@ contextBridge.exposeInMainWorld("profiles", profiles);
 contextBridge.exposeInMainWorld("cloud", cloud);
 contextBridge.exposeInMainWorld("workhome", workhome);
 contextBridge.exposeInMainWorld("team", team);
+contextBridge.exposeInMainWorld("inbox", inbox);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */

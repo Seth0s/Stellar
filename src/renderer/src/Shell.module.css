@@ -142,6 +142,31 @@
   flex: 1;
 }
 
+/* Inbox.dc.html sidebar foot — notifications prefs, shown only on that page. */
+.notifPrefs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s4);
+  padding: var(--v2-s6);
+  border-radius: var(--v2-r10);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-soft);
+  font-size: var(--v2-f12);
+  color: var(--v2-text-3);
+}
+
+.notifPrefsTitle {
+  color: var(--v2-text);
+  font-weight: 600;
+}
+
+.notifPrefsLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s4);
+  cursor: pointer;
+}
+
 .signInCard {
   display: flex;
   flex-direction: column;

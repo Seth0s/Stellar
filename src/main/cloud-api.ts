@@ -60,6 +60,12 @@ import {
   type WebhookDeliveryView,
   type WebhookView,
 } from "./integration-decision";
+import {
+  parseInboxListResponse,
+  parseNotificationPrefs,
+  type NotificationPrefs,
+  type TeamInboxItem,
+} from "./inbox-decision";
 
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: CloudApiError };
 
@@ -919,6 +925,65 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
       }
       const contentType = format === "csv" ? "text/csv" : "application/json";
       return { ok: true, value: { body: raw.text, contentType } };
+    },
+
+    // ---- Account inbox + notifications (B8 / A5c) -------------------------
+
+    /** GET /v1/inbox — open items with filters and per-kind counters. */
+    async listInbox(
+      token: string,
+      filter: { kind?: string; includeResolved?: boolean; unseen?: boolean; limit?: number; offset?: number } = {},
+    ): Promise<ApiResult<{ items: TeamInboxItem[]; raw: unknown }>> {
+      const params = new URLSearchParams();
+      if (filter.kind) params.set("kind", filter.kind);
+      if (filter.includeResolved) params.set("include_resolved", "true");
+      if (filter.unseen) params.set("unseen", "true");
+      if (filter.limit != null) params.set("limit", String(filter.limit));
+      if (filter.offset != null) params.set("offset", String(filter.offset));
+      const qs = params.toString();
+      const res = await request("GET", `/v1/inbox${qs ? `?${qs}` : ""}`, { token });
+      if (!res.ok) return res;
+      const parsed = parseInboxListResponse(res.value);
+      if (!parsed) return { ok: false, error: { status: 0, code: "invalid_response", message: "inbox list missing items" } };
+      return { ok: true, value: { items: parsed.items, raw: res.value } };
+    },
+
+    /** POST /v1/inbox/{id}/seen */
+    async markInboxSeen(token: string, itemId: string): Promise<ApiResult<null>> {
+      const res = await request("POST", `/v1/inbox/${encodeURIComponent(itemId)}/seen`, { token });
+      return res.ok ? { ok: true, value: null } : res;
+    },
+
+    /** POST /v1/inbox/seen — mark every open item seen. */
+    async markAllInboxSeen(token: string): Promise<ApiResult<null>> {
+      const res = await request("POST", "/v1/inbox/seen", { token });
+      return res.ok ? { ok: true, value: null } : res;
+    },
+
+    /** GET /v1/inbox/prefs */
+    async getInboxPrefs(token: string): Promise<ApiResult<NotificationPrefs>> {
+      const res = await request("GET", "/v1/inbox/prefs", { token });
+      if (!res.ok) return res;
+      const prefs = parseNotificationPrefs(res.value);
+      if (!prefs) return { ok: false, error: { status: 0, code: "invalid_response", message: "inbox prefs missing fields" } };
+      return { ok: true, value: prefs };
+    },
+
+    /** PUT /v1/inbox/prefs — partial update. */
+    async putInboxPrefs(
+      token: string,
+      body: { in_app?: boolean; system?: boolean; daily_digest?: boolean },
+    ): Promise<ApiResult<NotificationPrefs>> {
+      const res = await request("PUT", "/v1/inbox/prefs", { token, body });
+      if (!res.ok) return res;
+      const prefs = parseNotificationPrefs(res.value);
+      if (!prefs) return { ok: false, error: { status: 0, code: "invalid_response", message: "inbox prefs missing fields" } };
+      return { ok: true, value: prefs };
+    },
+
+    /** Absolute URL for GET /v1/events (SSE). */
+    eventsUrl(): string {
+      return `${baseUrl}/v1/events`;
     },
   };
 }

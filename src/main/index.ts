@@ -205,6 +205,7 @@ import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth"
 import { registerWorkHomeIpc } from "./work-home-ipc";
 import { registerTeamIpc, type LocalTeamTaskInput } from "./team-ipc";
 import { registerCloudAccountIpc } from "./cloud-account-ipc";
+import { registerInboxIpc } from "./inbox-ipc";
 import { parseDeepLink } from "./team-decision";
 import { parseIntegrationOAuthDeepLink } from "./integration-decision";
 import { resolveCloudApiBaseUrl } from "./cloud-auth-decision";
@@ -4710,6 +4711,42 @@ function createWindow() {
   });
 
   // ---- ACCOUNT: server-profile link + devices (A8) ------------------------
+  // ---- ACCOUNT INBOX (B8 / A5c) --------------------------------------------
+  // SSE lives in main (Last-Event-ID + backoff). The renderer only reads the
+  // aggregated snapshot and fires row actions through the existing team:* IPC.
+  registerInboxIpc({
+    baseUserDataDir: () => BASE_USER_DATA,
+    activeProfileId: () => activeProfileId,
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    listLocalAwaiting: () => {
+      const out: { boardId: string; boardName: string; taskId: string; title: string; updatedAt: number }[] = [];
+      for (const board of store.listBoards()) {
+        const awaiting = buildTaskBoard(board.id).filter((t) => t.phase === "awaiting_review");
+        for (const task of awaiting) {
+          out.push({
+            boardId: board.id,
+            boardName: board.name,
+            taskId: task.id,
+            title: task.promptPreview,
+            updatedAt: task.updatedAt,
+          });
+        }
+      }
+      return out;
+    },
+    openInboxItem: (item) => {
+      const win = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        safeSend(win, "inbox:navigate", item);
+      }
+    },
+    getMainWindow: () => mainWindow,
+  });
+
   registerCloudAccountIpc({
     baseUserDataDir: () => BASE_USER_DATA,
     activeProfileId: () => activeProfileId,

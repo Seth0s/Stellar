@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
-import type { BoardRow, BoardCounts, CloudStatusInfo } from "../../preload/index";
+import type { BoardRow, BoardCounts, CloudStatusInfo, InboxSnapshotInfo } from "../../preload/index";
 import type { SessionTemplate } from "./useBoardStore";
-import { Home, AwaitingList } from "./Home";
+import { Home } from "./Home";
 import { ProfileSelector } from "./ProfileSelector";
 import { WorkHomePage } from "./WorkHomePage";
 import { TeamPage } from "./TeamPage";
+import { InboxPage } from "./InboxPage";
 import { CloudLinkPanel } from "./CloudLinkPanel";
 import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries";
 import styles from "./Shell.module.css";
@@ -105,6 +106,8 @@ export function Shell({
 }) {
   const [section, setSection] = useState<ShellSection>(initialSection);
   const [hasInvite, setHasInvite] = useState(false);
+  const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
+  const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId: string } | null>(null);
 
   useEffect(() => {
     void window.team
@@ -114,15 +117,36 @@ export function Shell({
     return window.team.onInvite(() => setHasInvite(true));
   }, []);
 
+  useEffect(() => {
+    if (!window.inbox?.snapshot) return;
+    void window.inbox
+      .snapshot()
+      .then(setInboxSnap)
+      .catch(() => {});
+    const offSnap = window.inbox.onSnapshot(setInboxSnap);
+    const offNav = window.inbox.onNavigate((item) => {
+      setSection("inbox");
+      if (item.source === "local" && item.boardId) onOpenBoard(item.boardId);
+      else if (item.teamId && item.taskId) {
+        setTeamFocus({ teamId: item.teamId, taskId: item.taskId });
+        setSection("team");
+      }
+    });
+    return () => {
+      offSnap();
+      offNav();
+    };
+  }, [onOpenBoard]);
+
   const loggedIn = cloud?.state === "logged-in";
   const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : null;
   const summaries = useBoardSummaries(boards);
   const background = useBoardBackgroundStatus(boards);
-  const awaitingTotal = boards.reduce((n, b) => n + (summaries[b.id]?.tasksAwaitingReview ?? 0), 0);
+  const inboxBadge = inboxSnap?.counts.all ?? boards.reduce((n, b) => n + (summaries[b.id]?.tasksAwaitingReview ?? 0), 0);
 
   const items: { id: ShellSection; label: string; count?: number; sub?: string; badge?: number }[] = [
     { id: "sessions", label: t("shell.sessions"), count: boards.length },
-    { id: "inbox", label: t("shell.inbox"), badge: awaitingTotal > 0 ? awaitingTotal : hasInvite ? 1 : undefined },
+    { id: "inbox", label: t("shell.inbox"), badge: inboxBadge > 0 ? inboxBadge : hasInvite ? 1 : undefined },
     { id: "workhome", label: t("shell.workhome"), sub: loggedIn ? t("shell.workhome.synced") : t("shell.workhome.local") },
     { id: "team", label: t("shell.team"), sub: loggedIn ? t("shell.team.withAccount") : undefined },
     { id: "stats", label: t("shell.stats") },
@@ -154,35 +178,77 @@ export function Shell({
 
         <span className={styles.spacer} />
 
-        {loggedIn ? (
-          <button type="button" className={styles.account} data-role="account" onClick={() => setSection("account")} title={t("shell.account")}>
-            <span className={styles.accountAvatar}>{accountLabel ? initials(accountLabel) : "?"}</span>
-            <span className={styles.accountText}>
-              <span className={styles.accountName}>{accountLabel}</span>
-              <span className={styles.accountSub}>{t("shell.accountSub")}</span>
-            </span>
-          </button>
-        ) : (
-          <div className={styles.signInCard}>
-            <div className={styles.signInTitle}>{t("shell.signIn.title")}</div>
-            <div className={styles.signInDesc}>{t("shell.signIn.desc")}</div>
-            <button type="button" className={`${styles.primaryBtn} ${styles.signInBtn}`} data-role="sign-in" onClick={onSignIn}>
-              {t("shell.signIn.action")}
-            </button>
+        {section === "inbox" ? (
+          <div className={styles.notifPrefs} data-role="inbox-prefs">
+            <span className={styles.notifPrefsTitle}>{t("inbox.prefs.title")}</span>
+            <label className={styles.notifPrefsLabel}>
+              <input
+                type="checkbox"
+                checked={inboxSnap?.prefs.inApp ?? true}
+                onChange={(e) => {
+                  void window.inbox?.setPrefs({ inApp: e.target.checked }).then((res) => {
+                    if (res.ok) setInboxSnap((prev) => (prev ? { ...prev, prefs: res.prefs } : prev));
+                  });
+                }}
+              />
+              {t("inbox.prefs.inApp")}
+            </label>
+            <label className={styles.notifPrefsLabel}>
+              <input
+                type="checkbox"
+                checked={inboxSnap?.prefs.system ?? true}
+                onChange={(e) => {
+                  void window.inbox?.setPrefs({ system: e.target.checked }).then((res) => {
+                    if (res.ok) setInboxSnap((prev) => (prev ? { ...prev, prefs: res.prefs } : prev));
+                  });
+                }}
+              />
+              {t("inbox.prefs.system")}
+            </label>
+            <label className={styles.notifPrefsLabel}>
+              <input
+                type="checkbox"
+                checked={inboxSnap?.prefs.dailyDigest ?? false}
+                onChange={(e) => {
+                  void window.inbox?.setPrefs({ dailyDigest: e.target.checked }).then((res) => {
+                    if (res.ok) setInboxSnap((prev) => (prev ? { ...prev, prefs: res.prefs } : prev));
+                  });
+                }}
+              />
+              {t("inbox.prefs.dailyDigest")}
+            </label>
           </div>
-        )}
+        ) : null}
 
-        <button
-          type="button"
-          className={`${styles.navItem} ${styles.settingsItem}`}
-          onClick={onOpenSettings}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
-            <circle cx="8" cy="8" r="2.2" />
-            <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" />
-          </svg>
-          <span className={styles.navLabel}>{t("shell.settings")}</span>
-        </button>
+        {section !== "inbox" ? (
+          loggedIn ? (
+            <button type="button" className={styles.account} data-role="account" onClick={() => setSection("account")} title={t("shell.account")}>
+              <span className={styles.accountAvatar}>{accountLabel ? initials(accountLabel) : "?"}</span>
+              <span className={styles.accountText}>
+                <span className={styles.accountName}>{accountLabel}</span>
+                <span className={styles.accountSub}>{t("shell.accountSub")}</span>
+              </span>
+            </button>
+          ) : (
+            <div className={styles.signInCard}>
+              <div className={styles.signInTitle}>{t("shell.signIn.title")}</div>
+              <div className={styles.signInDesc}>{t("shell.signIn.desc")}</div>
+              <button type="button" className={`${styles.primaryBtn} ${styles.signInBtn}`} data-role="sign-in" onClick={onSignIn}>
+                {t("shell.signIn.action")}
+              </button>
+            </div>
+          )
+        ) : null}
+
+        {section !== "inbox" ? (
+          <button type="button" className={`${styles.navItem} ${styles.settingsItem}`} onClick={onOpenSettings}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.2" />
+              <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" />
+            </svg>
+            <span className={styles.navLabel}>{t("shell.settings")}</span>
+          </button>
+        ) : null}
       </aside>
 
       <main className={styles.main}>
@@ -206,7 +272,11 @@ export function Shell({
         ) : section === "workhome" ? (
           <WorkHomePage />
         ) : section === "team" ? (
-          <TeamPage boards={boards.map((b) => ({ id: b.id, name: b.name }))} />
+          <TeamPage
+            boards={boards.map((b) => ({ id: b.id, name: b.name }))}
+            initialTeamId={teamFocus?.teamId}
+            initialTaskId={teamFocus?.taskId}
+          />
         ) : section === "account" ? (
           <div className={styles.page}>
             <div className={styles.sectionSub}>{cloud?.state === "logged-in" ? cloud.account.displayName : t("shell.signIn.action")}</div>
@@ -220,10 +290,14 @@ export function Shell({
             ) : null}
           </div>
         ) : section === "inbox" ? (
-          <div className={styles.page}>
-            <h1 className={styles.sectionTitle}>{t("shell.inbox")}</h1>
-            <AwaitingList boards={boards} summaries={summaries} onOpenBoard={onOpenBoard} />
-          </div>
+          <InboxPage
+            boards={boards.map((b) => ({ id: b.id, name: b.name }))}
+            onOpenBoard={onOpenBoard}
+            onOpenTeamTask={(teamId, taskId) => {
+              setTeamFocus({ teamId, taskId });
+              setSection("team");
+            }}
+          />
         ) : (
           <InfoSection boardCount={boards.length} />
         )}

@@ -1,0 +1,243 @@
+.page {
+  padding: var(--v2-s15) var(--v2-s18) var(--v2-s18);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s9);
+  min-height: 100%;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--v2-s7);
+}
+
+.headText {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--v2-f26);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.sub {
+  font-size: var(--v2-f13h);
+  color: var(--v2-text-4);
+}
+
+.offline {
+  font-size: var(--v2-f12);
+  color: var(--v2-warn);
+}
+
+.ghost {
+  height: var(--v2-s17);
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r7);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: var(--v2-f12);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ghost:hover {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-bright);
+}
+
+.primary {
+  height: var(--v2-s17);
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r7);
+  border: 0;
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font: inherit;
+  font-size: var(--v2-f12);
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.primary:hover {
+  background: var(--v2-primary-hover);
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s2);
+}
+
+.tab {
+  height: var(--v2-s17);
+  padding: 0 var(--v2-s6);
+  border: 0;
+  border-radius: var(--v2-r8);
+  background: transparent;
+  color: var(--v2-text-3);
+  font: inherit;
+  font-size: var(--v2-f13);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s4);
+}
+
+.tabOn {
+  background: var(--v2-seg-active);
+  color: var(--v2-bright);
+}
+
+.cnt {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px; /* sd:allow: prototype .cnt horizontal padding */
+  box-sizing: border-box;
+  border-radius: var(--radius-pill);
+  background: var(--v2-line-mid);
+  color: var(--v2-text-2);
+  font-size: var(--v2-f10h);
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+
+.list {
+  border-radius: var(--v2-r14);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-soft);
+  overflow: hidden;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s7);
+  padding: var(--v2-s7) var(--v2-s8);
+  border-top: 1px solid var(--v2-line);
+}
+
+.item:first-child {
+  border-top: 0;
+}
+
+.av {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-circle);
+  display: grid;
+  place-items: center;
+  font-size: var(--v2-f11);
+  font-weight: 700;
+  flex: none;
+}
+
+.avWarn {
+  background: var(--v2-warn-bg);
+  color: var(--v2-warn);
+}
+
+.avInfo {
+  background: var(--v2-info-bg);
+  color: var(--v2-accent-soft);
+}
+
+.av0 {
+  background: var(--v2-av-bg-0);
+  color: var(--v2-av-fg-0);
+}
+
+.av1 {
+  background: var(--v2-av-bg-1);
+  color: var(--v2-av-fg-1);
+}
+
+.av2 {
+  background: var(--v2-av-bg-2);
+  color: var(--v2-av-fg-2);
+}
+
+.av3 {
+  background: var(--v2-av-bg-3);
+  color: var(--v2-av-fg-3);
+}
+
+.av4 {
+  background: var(--v2-av-bg-4);
+  color: var(--v2-av-fg-4);
+}
+
+.av5 {
+  background: var(--v2-av-bg-5);
+  color: var(--v2-av-fg-5);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s1h);
+}
+
+.line {
+  font-size: var(--v2-f13h);
+  color: var(--v2-text-3);
+}
+
+.hi {
+  color: var(--v2-bright);
+}
+
+.meta {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.metaDanger {
+  color: var(--v2-danger);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s4);
+  flex: none;
+}
+
+.empty {
+  padding: var(--v2-s18);
+  text-align: center;
+  color: var(--v2-text-3);
+  font-size: var(--v2-f13h);
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: var(--v2-s10) var(--v2-s8);
+  }
+
+  .item {
+    flex-wrap: wrap;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
