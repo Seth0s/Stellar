@@ -32,7 +32,7 @@
  * orquestração ser testada sem darwin. O caminho do log é dito na UI para o
  * testador mandar.
  */
-import { accessSync, constants, createReadStream, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, createReadStream, writeFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -309,7 +309,9 @@ export const macSwapNodeIo: MacSwapIo = {
     }
   },
   writeScript: async (path, content) => {
+    // mode on writeFile is masked by umask (e.g. 0077 → 0600); chmod forces 0755.
     writeFileSync(path, content, { mode: 0o755 });
+    chmodSync(path, 0o755);
   },
   spawnDetached: (scriptPath) => {
     // DESTACADO de propósito: quem troca o bundle não pode ser o processo que
