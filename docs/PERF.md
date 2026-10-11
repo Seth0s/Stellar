@@ -1,7 +1,7 @@
 # PERF — CPU ocioso e o caminho de saída do PTY
 
-Medido pelo orquestrador em 2026-09-15, e não remedido aqui (limite: **o app
-NÃO podia ser rodado** — instância do dono, single-instance, e build de
+Medido pelo orquestrador, e não remedido aqui (limite: **o app
+NÃO podia ser rodado** — instância em uso, single-instance, e build de
 Electron interdito por disco). Toda conclusão neste documento é **leitura de
 código mais a medição entregue**. Ganho argumentado é marcado como
 argumentado; nada aqui é "medido" sem ter sido medido.
@@ -157,7 +157,7 @@ card de agente (terminal, provider ≠ bash) **vivo**. Num board cheio de
 conectores manual/depends/context, só os de trabalho vivo se movem; o resto
 segue como tracejado estático.
 
-**Ganho: argumentado, não medido** (não rodei o app — instância do dono,
+**Ganho: argumentado, não medido** (não rodei o app — instância em uso,
 single-instance, build interdito). O que sustenta o argumento é a lista de
 propriedades compostas do Chromium e o defeito irmão medido na landing, não
 uma medição nova feita aqui. O gate de 4.1 continua por baixo: board parado →
@@ -207,7 +207,7 @@ exatamente essa guarda; `broadcastPtyData` era a exceção.
 
 ---
 
-## 7. Card de navegador: o encode JPEG no caminho quente (2026-09-15)
+## 7. Card de navegador: o encode JPEG no caminho quente 
 
 ### 7.1 A medição de partida
 
@@ -268,7 +268,7 @@ dado, não suposição.** `SHARED_TEXTURE_AVAILABLE = false` registra isso, e o
 caminho `shared-texture` (60fps, zero encode) já está modelado na decisão para
 o dia em que o consumidor nativo existir.
 
-> **CORRIGIDO em §15 (task dc01030b, 2026-10-03).** A premissa "exige módulo
+> **CORRIGIDO em §15 (uma task).** A premissa "exige módulo
 > nativo no consumidor" é **FALSA** para o Electron 42.3.0: existe consumidor de
 > primeira classe (`sharedTexture.setSharedTextureReceiver` →
 > `importedSharedTexture.getVideoFrame()` → `VideoFrame` → `drawImage`), e ele
@@ -297,7 +297,7 @@ consumido por `browser-registry.ts`:
   frame idêntico por hash de bitmap: `image.toBitmap()` é cópia O(pixels) e,
   no caso quente (animação), os frames diferem — pagaria cópia **e** encode.
 - **Taxa focado do caminho `cpu-jpeg`: 60 → 30.** É **REVERSÃO EXPLÍCITA**
-  do pedido de 2026-08-31 ("30fps focado sentia travado", subiu pra 60) —
+  do pedido de ("30fps focado sentia travado", subiu pra 60) —
   declarada no código e aqui, não um descuido. O pedido foi feito antes de se
   saber que cada frame custava um encode JPEG inteiro na thread principal. O
   teto de 60fps é preservado no caminho `shared-texture` (sem encode), para
@@ -309,7 +309,7 @@ consumido por `browser-registry.ts`:
 
 ### 7.4 Ganho: argumentado, não medido
 
-**O app NÃO foi rodado** (instância do dono, single-instance) e nenhum build
+**O app NÃO foi rodado** (instância em uso, single-instance) e nenhum build
 de Electron foi feito (disco). Não há uma única linha de CPU "depois" neste
 documento — todas as conclusões são leitura de código mais a medição de
 partida, e o ganho é **argumentado**:
@@ -337,7 +337,7 @@ partida, e o ganho é **argumentado**:
 - `npx vitest run` — 1675/1675 verdes (1665 pré-existentes + 10 novos em
   `tests/unit/browser-frame-decision.test.ts`).
 
-## 9. Sonda 4: recorte por área suja, `utilityProcess` de verdade, taxa dirigida por conteúdo (2026-09-15)
+## 9. Sonda 4: recorte por área suja, `utilityProcess` de verdade, taxa dirigida por conteúdo 
 
 Task de **medição pura** — nenhuma linha de `src/` mudou nesta rodada. Sonda:
 `scripts/probe/encode-route.js`. Rodar:
@@ -351,7 +351,7 @@ Evidência em `scripts/probe/out/encode-route/result.json`.
 ### 9.1 As três rotas fechadas antes desta rodada (rechecagem, não reabertura)
 
 A investigação que produziu §7 foi encerrada sem escrever este documento
-(decisão do dono — as métricas já estavam definidas). Ficaram só em mensagem
+(decisão de produto — as métricas já estavam definidas). Ficaram só em mensagem
 de commit, o que é frágil: registrando aqui pra quem pensar "e se a gente
 usasse X" não precisar reabrir a discussão.
 
@@ -569,7 +569,7 @@ a segunda já está coberta pelo que o recorte por `dirty` entrega de graça.
   código + medição já existente, não uma sonda de carga nova** simulando IPC
   represado ou comparando frame rates diferentes ao vivo.
 
-## 10. Recorte por área suja: implementado (2026-09-15)
+## 10. Recorte por área suja: implementado 
 
 A recomendação do §9.7 foi implementada — **ganho ARGUMENTADO, não
 remedido**: mesma restrição do resto deste documento, o app não podia ser
@@ -627,9 +627,9 @@ progresso), limiar (94%/95%/100%) e frame de área zero. Suíte inteira:
 
 ---
 
-## 11. RAM/VRAM por card: onde mora, medido (2026-10-01, task 5d24ada3)
+## 11. RAM/VRAM por card: onde mora, medido (, uma task)
 
-> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Todos os RSS desta seção
+> **CORREÇÃO DE UNIDADE — (review R8).** Todos os RSS desta seção
 > estavam **4× MENORES**: o harness lia o campo 24 de `/proc/<pid>/stat` (que é
 > em PÁGINAS) e o tratava como kB. Re-medido e re-derivado no **§14**. As
 > comparações RELATIVAS (ranking de custo, alavancas) sobrevivem; os ABSOLUTOS
@@ -717,9 +717,9 @@ páginas vivas — não de cards ociosos. Medir o custo por card de um `claude`/
 
 ---
 
-## 12. Custo por card de um PROVIDER DE AGENTE REAL (2026-10-01, task a0e2f41f)
+## 12. Custo por card de um PROVIDER DE AGENTE REAL (, uma task)
 
-> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Os RSS desta seção também
+> **CORREÇÃO DE UNIDADE — (review R8).** Os RSS desta seção também
 > estavam **4× MENORES** (mesmo bug de `/proc/<pid>/stat`). A tabela corrigida e
 > uma re-medição do `commandcode` estão no **§14**. O RANKING
 > (agy > commandcode > claude > bash) e a conclusão "o custo por card é a CLI"
@@ -757,7 +757,7 @@ cards, não só os extras; `bootIntoFreshSession` foi chamado com
 ```
 
 Ou seja: **por card de commandcode, ~40 MB é a CLI e ~18 MB é o shim
-`stellar-mcp` do Stellar** (o alvo da task f7a2ac84). O lado Stellar DENTRO do
+`stellar-mcp` do Stellar**. O lado Stellar DENTRO do
 app cresce pouco: renderer +~1–3 MB/card (§11: buffer de scrollback ~4,6 MB
 cheio, atlas WebGL ~0 de RSS), gpu +~0–2,5 MB/card, main +~0–10 MB/card. **O
 custo por card de um agente é ~90–100% a CLI dele.**
@@ -785,9 +785,9 @@ esses 373/379 MB.
 
 ---
 
-## 13. Acúmulo de RAM ao longo do tempo: vazamento × custo (2026-10-01, task d752b50c)
+## 13. Acúmulo de RAM ao longo do tempo: vazamento × custo (, uma task)
 
-> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Os RSS desta seção eram
+> **CORREÇÃO DE UNIDADE — (review R8).** Os RSS desta seção eram
 > **4× MENORES**. A série de HEAP por CDP NÃO foi afetada (é bytes, não RSS) e
 > continua PLANTA. Os RSS re-medidos, o CRASH do ciclo — que esta seção declara
 > como "não medido", quando na verdade o harness ABORTA — e a re-derivação
@@ -825,7 +825,7 @@ retido**, **+~55 nós de DOM** e +1 xterm — é o custo POR CARD (o mesmo que a
 §11/§12 já situavam: card ocioso é barato).
 
 **(2) CICLO ABRIR/FECHAR — o HARNESS ABORTA (não é só "não fechou").**
-Reproduzido em 2026-10-02 (task d752b50c, review R8), `--cards 2 --cycle 2`:
+reproduzido (uma task, review R8), `--cards 2 --cycle 2`:
 o ciclo 1 ABRE um 3º card (`xterms` 2→3) mas o fechamento FALHA —
 `[ram] ciclo 1: NAO fechou (botao="")`: o "último botão de `.card-head-inner`"
 tem rótulo VAZIO (não é o close). No ciclo 2 o harness **MORRE**:
@@ -861,7 +861,7 @@ conserto).
 
 ---
 
-## 14. CORREÇÃO DE UNIDADE (RSS 4×): re-derivação de §11–§13 e o baseline do app (2026-10-02, task d752b50c, review R8)
+## 14. CORREÇÃO DE UNIDADE (RSS 4×): re-derivação de §11–§13 e o baseline do app (, uma task, review R8)
 
 ### 14.1 O bug e o número real
 
@@ -914,7 +914,7 @@ Não é ajuste de tabela: os números re-medidos batem com os antigos ×4.
 
 **MUDAM (absolutos, ×4):** todo RSS/VRAM de §11/§12/§13. Exemplos: §11 baseline
 renderer 51→**~204**, gpu 74→**~296**, main 63→**~252**; §12 claude/card 51→**~204**,
-commandcode/card 64→**~256**, agy/card 104→**~416**; §13 renderer 47–49→**~190**.
+commandcode/card 64→**~256**, agy/um card→**~416**; §13 renderer 47–49→**~190**.
 
 **SOBREVIVEM (relativos — escala uniforme preserva):**
 - **Card ocioso custa ~0** no lado do app: 3 bash (1143–1146) vs baseline (987) é
@@ -992,7 +992,7 @@ bibliotecas de driver residentes (RSS de páginas compartilhadas, PSS ~metade) +
 scripts/measure/ram-accretion.mjs --cards 2 --minutes 1 --interval 10` (curva) e
 `--cards 2 --cycle 2` (revela o ABORT).
 
-## 15. Sonda 5: shared texture do Electron 42 — a rota NÃO funciona nesta máquina (2026-10-03, task dc01030b)
+## 15. Sonda 5: shared texture do Electron 42 — a rota NÃO funciona nesta máquina (, uma task)
 
 Sonda: `scripts/probe/shared-texture.js`. Rodar (da raiz, sem subir o Stellar):
 
@@ -1112,7 +1112,7 @@ barato e ela já fala), ou (b) medição nos outros dois sistemas, onde o handle
 outro. A alternativa que JÁ tem número e não depende de nada disto continua a de
 §9.3 (recorte por `dirty`) e o teto de 30fps de §7.
 
-## 16. Cinco cards de navegador: de 99% para 75% de um núcleo (2026-10-07)
+## 16. Cinco cards de navegador: de 99% para 75% de um núcleo 
 
 **Queixa do dono:** com cinco navegadores abertos, usados ou não, a CPU chega a
 99%.
@@ -1158,7 +1158,7 @@ não a página — e a conta antiga era 30 fps (o card mais alto da pilha) + 4×
   ponteiro: é o custo do quadro, e o caminho de textura de GPU que o eliminaria não
   existe nesta máquina (§15).
 
-## 17. Abrir o board vindo do segundo plano: tudo monta no mesmo instante (2026-10-07)
+## 17. Abrir o board vindo do segundo plano: tudo monta no mesmo instante 
 
 Medido numa instância isolada (cópia descartável de `057e263`): 11 cards (8
 terminais bash com saída densa contínua, 2 navegadores fora da tela com animação, a
@@ -1188,7 +1188,7 @@ Causas, com o código:
    porque nunca houve fit. Então a saída já nasce a 80 colunas. A correção certa é o
    PTY receber o tamanho do card na criação, e não depender do primeiro fit.
 
-Plano (task `63151a58`):
+Plano (uma task):
 
 - **Ordem:** o card com foco primeiro; depois os visíveis, do centro para fora;
   depois os de fora da tela, quando ocioso ou ao chegarem perto da área visível.

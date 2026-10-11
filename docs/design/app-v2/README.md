@@ -26,11 +26,7 @@ tokens do app (`src/renderer/src/styles/tokens.css`). Cor nova vira token.
 | 12 Visão do membro | TeamMemberBoard.dc.html | A5a |
 | 13 Task do time na Fila | FilaTeam.dc.html | A5a |
 | 14 Nova task | CreateTask.dc.html | A5b |
-| 15 Criar pelo board / Ctrl K | BoardQuickTask.dc.html | A5b |
 | 16 Detalhe da task | TaskDetail.dc.html | A5b |
 | 17 Arquivar/excluir | DeleteTask.dc.html | A5b |
-| 18 Importar | Import.dc.html | A6 |
-| 19 Integrações | Integrations.dc.html | A6 |
-| 20 Aguardando você | Inbox.dc.html | A5c |
 
 Números e nomes nas telas (Maestro, Ana, #58…) são exemplos: o app mostra os dados reais.

@@ -6,7 +6,7 @@ conseguir conduzir uma rodada inteira — decidir, despachar, verificar, commita
 no mesmo nível de quem já opera este repo há meses.
 
 Este arquivo é o **manual de operação**. Ele não repete o que já está escrito em outro
-lugar; quando o assunto tem dono, ele aponta:
+lugar; quando o assunto tem documento canônico, ele aponta:
 
 | Você quer saber | Leia |
 |---|---|
@@ -14,7 +14,6 @@ lugar; quando o assunto tem dono, ele aponta:
 | Regras inegociáveis do repo (segurança, sandbox, git) | [`AGENTS.md`](../AGENTS.md) |
 | Arquitetura: três processos, IPC, tipos de card | [`SYSTEM.md`](../SYSTEM.md) |
 | Tokens, CSS, anatomia de card | [`docs/SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) |
-| O que está para fazer e por quê | [`DESIGN-BACKLOG.md`](../DESIGN-BACKLOG.md) |
 | Como empacotar e publicar | [`docs/packaging.md`](packaging.md) |
 | **Como orquestrar agentes com o app** | **este arquivo** |
 
@@ -95,7 +94,7 @@ tasks. São dois grafos diferentes e o autodispatch lê apenas `deps` — nunca 
 
 ## 2. As quatro camadas da task
 
-Este é o modelo aprovado pelo dono do repo. Cada camada responde a uma pergunta distinta, e
+Este é o modelo aprovado para o produto. Cada camada responde a uma pergunta distinta, e
 misturá-las foi o defeito de todas as versões anteriores.
 
 ### Camada 1 — Contrato: *o que é esta task*
@@ -185,14 +184,14 @@ humano não deve burocracia a ninguém.
 comando do `acbridge` para ler ou escrever `boards.orchestrator_card_id`, e isso é
 deliberado: o único caminho é o menu ⋮ de um card de terminal ("marcar como orquestrador do
 board"), e a Topbar mostra um chip quando o board está sem marca. O caminho existe e é
-completo; o que falta é uso. Medido em 2026-09-20: a coluna era `NULL` nos três boards em
+completo; o que falta é uso. Medido: a coluna era `NULL` nos três boards em
 atividade.
 
 **Ao assumir um board, essa é a sua primeira pergunta ao humano** — antes de despachar,
 antes de esperar relatório. Enquanto não há marca, o relatório de cada card vai para a
 **linhagem** dele (a aresta `spawned`, depois o registro durável `spawns`) e, quando não há
 linhagem nenhuma, para o **último card que falou com ele** (`send_to_card`) — um alvo que
-depende de quem passou por ali, não de quem é o dono. Com a marca, o board inteiro tem **um**
+depende de quem passou por ali, não de quem opera o board. Com a marca, o board inteiro tem **um**
 alvo estável, e este fallback deixa de ser a regra de fato. Peça ao humano que marque o card
 que assina pelo board — normalmente você.
 
@@ -298,7 +297,7 @@ ou isso cabe num campo do contrato, ou você manda explicitamente, ou ele não v
 
 ### O erro mais caro é o brief sem "como"
 
-Briefar *"meça X no card 330"* sem dizer **como medir** já produziu um card que disparou 12
+Briefar *"meça X no um card"* sem dizer **como medir** já produziu um card que disparou 12
 sondas em 23 segundos dentro da conversa do usuário. Briefar *"mexa na região da função
 F apenas"* sem dizer o que fazer com a fonte antiga já produziu uma **segunda** fonte de
 verdade ao lado da primeira.
@@ -425,7 +424,7 @@ identidade/segurança: review dedicado, em outro provider.
 > Nenhum comando git que descarte estado: `reset --hard`, `checkout <arquivo>`, `restore`,
 > `stash`, `clean`.
 
-**O custo medido (2026-09-14):** um agente rodou um reset destrutivo para "isolar" a própria
+**O custo medido :** um agente rodou um reset destrutivo para "isolar" a própria
 entrega e apagou trabalho não commitado de **três cards**. Os blobs não eram recuperáveis
 por `lost-found`. A recuperação só foi possível porque os cards tinham relatado o que
 fizeram — o relatório salvou o que o git não salvou.
@@ -528,7 +527,7 @@ npm run verify               # tsc + build + suíte CDP/Electron contra o app re
 ### O que CADA gate cobre — e o que nenhum deles cobre
 
 **"`tsc` + `vitest`" soa como cobertura total e não é.** A tabela abaixo é a fonte única
-dessa resposta, medida em 2026-09-21 (task `9870a781`) — não deduzida:
+dessa resposta, medida (uma task) — não deduzida:
 
 | Comando | O que ele REALMENTE cobre | O que ele NÃO cobre |
 |---|---|---|
@@ -628,7 +627,7 @@ zero, o recurso nunca existiu de verdade.
 
 | Anti-padrão | O que aconteceu de verdade |
 |---|---|
-| **Brief sem "como"** | "meça no card 330" → 12 sondas em 23s na conversa do usuário, que teve de interceptá-las à mão |
+| **Brief sem "como"** | "meça no um card" → 12 sondas em 23s na conversa do usuário, que teve de interceptá-las à mão |
 | **Limpar a árvore para isolar a própria entrega** | reset destrutivo apagou trabalho não commitado de 3 cards, irrecuperável |
 | **Commitar por filtro sem verificar isolado** | `main` sem compilar, duas vezes, achado por outro card |
 | **Repassar relatório de agente como fato** | atribuição errada de culpa publicada num commit; corrigida depois pela confissão do card certo |
@@ -691,7 +690,7 @@ zero, o recurso nunca existiu de verdade.
 - [ ] `board_mode` — autônomo ou human-in-the-loop
 - [ ] `build_identity` / `acbridge version` — o app é o repo?
 - [ ] `git log --oneline -5` e `git status` — a árvore está limpa? quem está escrevendo?
-- [ ] ler [`AGENTS.md`](../AGENTS.md) e a seção de bugs urgentes do [`DESIGN-BACKLOG.md`](../DESIGN-BACKLOG.md)
+- [ ] ler [`AGENTS.md`](../AGENTS.md)
 
 ### Despachar uma task
 
@@ -724,7 +723,7 @@ zero, o recurso nunca existiu de verdade.
 - [ ] `update_task status=done` com `result` contendo commit e gates
 - [ ] `close_card` nos cards que terminaram
 - [ ] conferir se o autodispatch acordou as dependentes
-- [ ] o que ficou aberto virou nota no `DESIGN-BACKLOG` ou task?
+- [ ] o que ficou aberto virou task no board?
 
 ---
 

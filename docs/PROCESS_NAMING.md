@@ -1,8 +1,8 @@
 # NOMES DE PROCESSO POR AGENTE — agrupar por tipo, não por pilha genérica
 
-Task **817daa3e**. O relato do dono (com print): o monitor de processos vira uma
-pilha genérica — vários `stellar`, `node-22`, `agy` aninhados — e não dá para
-saber **qual processo pertence a qual agente/card**.
+O relato de uso (com print): o monitor de processos vira uma pilha genérica —
+vários `stellar`, `node-22`, `agy` aninhados — e não dá para saber **qual
+processo pertence a qual agente/card**.
 
 Nada aqui muda o CLI de terceiro. O objetivo é o **NOSSO** processo (o shim/stub
 do bridge MCP) dizer o que é, para o conjunto ficar agrupável.
@@ -18,7 +18,7 @@ Instância isolada (`userData` e porta próprios), 2 cards criados pela UI
 PID    PPID   PGRP   SESS   TTY    COMM            TIPO           CMDLINE
 20698  20550  20698  20698  34825  command-code    cli            command-code
 20744  20698  20744  20744  0      node            cli            /usr/bin/node …/resources/bin/stellar-mcp   ← O NOSSO processo, nome GENÉRICO
-20751  20550  20751  20751  34826  claude          cli            /home/lucas/.local/bin/claude --session-id …
+20751 20550 20751 20751 34826 claude cli ~/.local/bin/claude --session-id …
 ```
 
 O que a árvore diz:
@@ -40,7 +40,7 @@ O que a árvore diz:
 
 ## 2. `oQueOMonitorLe` — `comm`, não `cmdline`
 
-**Evidência:** o print do dono exibe nomes curtos (`stellar`, `node-22`, `agy`).
+**Evidência:** o print de uso exibe nomes curtos (`stellar`, `node-22`, `agy`).
 Um monitor que lesse o `cmdline` exibiria caminhos completos. Logo o monitor lê o
 **nome do processo** — `/proc/<pid>/comm` (o que `ps` sem args, `htop` e o GNOME
 System Monitor mostram na coluna de nome).

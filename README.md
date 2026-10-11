@@ -62,8 +62,6 @@ npm run verify   # tsc + build + the full CDP/Electron smoke suite
   one cost. Start here if you (human or AI) are taking over a board.
 - [`AGENTS.md`](AGENTS.md) — architecture, decisions, and a running log
   of what's been built/fixed and how it was verified.
-- [`DESIGN-BACKLOG.md`](DESIGN-BACKLOG.md) — the product backlog, one
-  numbered item per feature/fix, each closed only once verified live.
 
 ## Contributing
 

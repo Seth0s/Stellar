@@ -1,15 +1,12 @@
 # Empacotamento e distribuição
 
-Checklist e procedimento pra organizar o pacote do agent-canvas ("Stellar" —
-ver `DESIGN-BACKLOG.md` item 13) — o que já existe, o que falta, como
-implementar cada peça. Mesma estrutura do `docs/packaging.md` do
-`CentralByte` (projeto irmão), traduzida pra Electron/`electron-builder`/
-`electron-updater` — lá é Tauri/Rust, aqui não, então nenhuma peça se
-copia literalmente, só o formato do checklist e as decisões de produto já
-tomadas lá (updater silencioso, instalar só no clique, etc.).
+Checklist e procedimento pra organizar o pacote do Stellar — o que já
+existe, o que falta, como implementar cada peça. Estrutura típica de
+checklist de empacotamento Electron/`electron-builder`/
+`electron-updater` (updater silencioso, instalar só no clique, etc.).
 
 Estado actual: **nenhuma release ainda existe**. Nome/ícone/appId fechados
-2026-08-26; updater in-app **implementado em código, feed configurado
+; updater in-app **implementado em código, feed configurado
 (§3)**; pacotes Linux `.rpm`+`.deb` **configurados e verificados
 localmente** (§2), mac/Windows **configurados, não verificados** (sem
 toolchain aqui); assinatura de código **não iniciada**; pipeline de
@@ -20,13 +17,9 @@ cria a tag/push.
 
 ## 1. Git remote — resolvido
 
-O `git remote` apontava pra `Seth0s/CentralByte.git`, sem URL própria
-confirmada — ficou documentado como bloqueio (2026-08-26). Usuário deu a
-URL inequívoca em 2026-08-26: `git@github.com:Seth0s/Stellar.git`.
+O remote canônico é `git@github.com:Seth0s/Stellar.git`.
 `git remote set-url origin` já aplicado — **nenhum push/tag feito ainda**,
-isso continua exigindo pedido explícito. Renomear a pasta raiz local
-(`agent-canvas/` → algo tipo `Stellar/`) fica pra depois, por pedido do
-usuário — ver `DESIGN-BACKLOG.md` item 15.
+isso continua exigindo pedido explícito.
 
 ---
 
@@ -34,14 +27,14 @@ usuário — ver `DESIGN-BACKLOG.md` item 15.
 
 | Peça | Estado | Notas |
 |---|---|---|
-| `appId` | `com.stellar.app` | Trocado de `com.agentcanvas.app` em 2026-08-26 — seguro trocar agora porque nunca houve instalação real distribuída (ver §7, "mudanças perigosas") |
+| `appId` | `com.stellar.app` | Trocado de `com.agentcanvas.app` — seguro trocar agora porque nunca houve instalação real distribuída (ver §7, "mudanças perigosas") |
 | `productName` | `Stellar` | UI/instaladores mostram este nome |
-| Nome interno (`package.json`'s `"name"`, `app.setName()`) | `agent-canvas` | **Deliberadamente não trocado** — `app.setName()` determina `userData` (`~/.config/agent-canvas`), e a sessão de dev já tinha dados reais nesse caminho; trocar exigiria migração, exactamente o que o CentralByte documenta como perigoso. Diretório do repo **já foi renomeado** (`agent-canvas/` → `Stellar/`, `DESIGN-BACKLOG.md` item 15) — sem relação com isso, o `"name"` do `package.json` é o que importa aqui, não o caminho do checkout |
+| Nome interno (`package.json`'s `"name"`, `app.setName()`) | `agent-canvas` | **Deliberadamente não trocado** — `app.setName()` determina `userData` (`~/.config/agent-canvas`); trocar exigiria migração de dados locais existentes. O `"name"` do `package.json` é o que importa aqui, não o caminho do checkout |
 | Ícone | `build/icon.png` (1024×1024, gerado de `build/icon.svg`) | `electron-builder` deriva `.icns`/`.ico`/hicolor automaticamente de um PNG único — não precisa de arquivos por plataforma. **Verificado no `.rpm`**: `/usr/share/icons/hicolor/1024x1024/apps/stellar.png`, único tamanho (não múltiplos, mas funciona — a maioria dos DEs re-escala) |
-| Nome/ícone do pacote Linux | **Corrigido 2026-08-26** | Sem `linux.executableName`/`rpm.packageName` explícitos, o electron-builder usa `package.json`'s `"name"` no Linux (não `productName`, ao contrário de mac/Windows) — o `.rpm` saía como `agent-canvas-0.0.0.x86_64.rpm`. Agora `executableName: "stellar"` + `rpm.packageName: "stellar"` — verificado via `rpm -qip`/`rpm -qlp`: `Name: stellar`, `Exec=/opt/Stellar/stellar`, `Icon=stellar`, `Categories=Development;` |
+| Nome/ícone do pacote Linux | **Corrigido** | Sem `linux.executableName`/`rpm.packageName` explícitos, o electron-builder usa `package.json`'s `"name"` no Linux (não `productName`, ao contrário de mac/Windows) — o `.rpm` saía como `agent-canvas-0.0.0.x86_64.rpm`. Agora `executableName: "stellar"` + `rpm.packageName: "stellar"` — verificado via `rpm -qip`/`rpm -qlp`: `Name: stellar`, `Exec=/opt/Stellar/stellar`, `Icon=stellar`, `Categories=Development;` |
 | Updater | Código pronto (`src/main/updater.ts`, `UpdateBanner.tsx`) + UI completa (item 17: "lembrar depois", changelog, ícone de pendência) | **Feed configurado** (`publish` em `package.json`, §3) — ainda não testado ponta a ponta contra uma release real |
-| Assinatura macOS/Windows | Não iniciada | Mesma decisão do CentralByte: fica pra depois, não bloqueia o resto |
-| CI de release | `.github/workflows/release.yml` (novo, 2026-08-26) | Dispara em push de tag `v*`, 3 jobs independentes (`build-linux`/`build-mac`/`build-windows`) — ver §5 |
+| Assinatura macOS/Windows | Não iniciada | Deixada para depois — não bloqueia o resto |
+| CI de release | `.github/workflows/release.yml` (novo) | Dispara em push de tag `v*`, 3 jobs independentes (`build-linux`/`build-mac`/`build-windows`) — ver §5 |
 | Linux | `.rpm` + `.deb`, **os dois verificados localmente** (`npm run package:linux`) | `Package: stellar` confirmado nos dois via `rpm -qip`/extração do `control` do `.deb`. AppImage ainda não configurado (não foi pedido) |
 | macOS | `dmg`/`zip` configurados | **Não verificado** — sem toolchain macOS disponível nesta máquina; config espelha o padrão do `electron-builder`, primeira validação real só na CI |
 | Windows | `nsis` (instalador)/`portable` configurados | **Não verificado** — mesma limitação, sem toolchain Windows aqui |
@@ -50,8 +43,7 @@ usuário — ver `DESIGN-BACKLOG.md` item 15.
 
 ## 3. Updater in-app — o que foi feito
 
-Mesmo contrato de produto que o CentralByte já decidiu (`docs/packaging.md`
-§6.2 de lá):
+Contrato de produto do updater:
 
 - Verifica **uma vez no boot**, silencioso — sem rede/feed configurado,
   sem toast, só `console.warn` (`src/main/updater.ts`).
@@ -75,8 +67,8 @@ Peças:
 
 **Falta pra funcionar de verdade**:
 
-1. ~~Resolver §1 (remote/repo correto).~~ Feito 2026-08-26.
-2. ~~`publish` em `package.json`.~~ Feito 2026-08-26 —
+1. ~~Resolver §1 (remote/repo correto).~~ Feito.
+2. ~~`publish` em `package.json`.~~ Feito —
    `{ "provider": "github", "owner": "Seth0s", "repo": "Stellar" }`.
 3. Uma release de teste ponta a ponta (publicar `v0.1.0`, abrir uma build
    mais antiga, confirmar que o pill aparece e instala) — **ainda não
@@ -89,8 +81,7 @@ Peças:
 
 ## 4. Assinatura de código — não iniciada
 
-Mesma lacuna que o CentralByte tinha até assinatura entrar em pauta —
-decisão explícita de deixar pra depois, não um esquecimento:
+Lacuna conhecida — decisão explícita de deixar pra depois, não um esquecimento:
 
 - **macOS**: Developer ID Application + notarização.
   [`electron-builder` — macOS signing](https://www.electron.build/code-signing#macos).
@@ -98,14 +89,13 @@ decisão explícita de deixar pra depois, não um esquecimento:
   [`electron-builder` — Windows signing](https://www.electron.build/code-signing#windows).
 - **Linux**: opcional (GPG no RPM/repo) — early adopters recebendo
   `.AppImage`/`.deb`/`.rpm` direto de uma Release do GitHub sem GPG é
-  aceitável desde que o checksum esteja documentado (mesmo raciocínio do
-  CentralByte).
+  aceitável desde que o checksum esteja documentado.
 
 ---
 
 ## 5. Pipeline de release — existe, Linux testado localmente, mac/Windows não
 
-`.github/workflows/release.yml` (novo, 2026-08-26) — dispara em push de
+`.github/workflows/release.yml` (novo) — dispara em push de
 tag `v*`, **3 jobs independentes** (não uma matriz com `fail-fast`,
 deliberado: `.rpm` foi pedido como obrigatório, um job separado garante
 que uma falha em macOS/Windows nunca cancela ou bloqueia o job do Linux):
@@ -163,11 +153,11 @@ corrigido, warning sumiu, `StartupWMClass=stellar` confirmado.
    encontra a própria release que acabou de sair.
 5. Assinatura de código (§4) — sem ela, os binários mac/Windows disparam
    Gatekeeper/SmartScreen no primeiro uso. Decisão já registrada de
-   deixar pra depois, mesmo caminho do CentralByte.
+   deixar pra depois.
 
 ---
 
-## 6. Achados reais construindo isto (2026-08-26)
+## 6. Achados reais construindo isto 
 
 - **`import { autoUpdater } from "electron-updater"` quebrava o app
   inteiro no boot** — `SyntaxError: Named export 'autoUpdater' not
@@ -185,10 +175,9 @@ corrigido, warning sumiu, `StartupWMClass=stellar` confirmado.
 
 ## 7. Mudanças perigosas (não são "só packaging")
 
-Mesmo espírito do CentralByte (`AGENTS.md` de lá — "Limites de
-alteração"):
+Espírito dos limites de mutação deste repo:
 
-- **`appId`** → já trocado (2026-08-26, `com.agentcanvas.app` →
+- **`appId`** → já trocado (`com.agentcanvas.app` →
   `com.stellar.app`), mas só porque nunca houve instalação real. Depois
   da primeira release publicada, trocar de novo quebra a continuidade de
   `userData` de quem já instalou — exige plano de migração a partir daí.
@@ -203,9 +192,9 @@ usuários reais, script ou instruções de migração.
 
 ---
 
-## 8. Buildar de árvore compartilhada suja — o que acontece, e a receita (2026-10-01)
+## 8. Buildar de árvore compartilhada suja — o que acontece, e a receita 
 
-**Defeito medido (2026-10-01):** `npm run package:rpm` morreu dentro do
+**Defeito medido :** `npm run package:rpm` morreu dentro do
 `electron-vite build` com erro de **sintaxe JSX** em
 `src/renderer/src/App.tsx:4040` — um comentário `{/* … */}` na **lista de
 atributos** de um elemento. Em posição de atributo o `{` é lido como *spread*,

@@ -140,7 +140,7 @@ código usa" mais tarde.
 A "Opinião 2" (§4, virtualização/culling) descreve dezenas de cards como
 "camadas GPU aceleradas independentes" (`translate3d`, layer promotion).
 Esta máquina tem histórico documentado de fragilidade real de GPU
-(`AGENTS.md`/DESIGN-BACKLOG item 9): aceleração de hardware já causou
+(`AGENTS.md`): aceleração de hardware já causou
 segfault do processo de GPU (`libGLESv2.so`, Mesa/NVIDIA), já foi
 desabilitada e só reabilitada após teste empírico repetido; forçar ozone
 X11 quebrou a janela por completo (nunca mapeou na tela); e não há driver

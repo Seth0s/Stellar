@@ -1,9 +1,8 @@
 # Dados por trás do design v3 — rodapé dos cards e Fila
 
-Levantamento do código em 2026-10-07 (report seq 1336 da task `c4673fc3`), com as
-decisões do Master. Vale para a V2 (`31254094`, rodapé e header dos cards) e a V3
-(`faae5162`, Fila e detalhe da task). Regra geral: dado que não existe fica
-**ausente** na tela, nunca inventado.
+Levantamento do código e das decisões de produto. Vale para a V2 (rodapé e
+header dos cards) e a V3 (Fila e detalhe da task). Regra geral: dado que não
+existe fica **ausente** na tela, nunca inventado.
 
 ## 1. Lacunas no processo principal (fazer antes da tela)
 

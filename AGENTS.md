@@ -8,9 +8,9 @@ Camada operacional do projeto **Stellar**. Este documento é o contrato de traba
 
 **Stellar** é um canvas infinito de desenvolvimento visual e orquestração de IA. Ele combina:
 * **Terminais reais via PTY** com zoom óptico contínuo (sem reflow de colunas/linhas no zoom).
-* **Editor de arquivos & diffs** integrados ([CodeMirror 6](file:///home/lucas/Workplace/Projects/Stellar/src/renderer/src/CodeEditor.tsx) lazy-loaded).
+* **Editor de arquivos & diffs** integrados ([CodeMirror 6](src/renderer/src/CodeEditor.tsx) lazy-loaded).
 * **Navegador embutido offscreen** com renderização em `<canvas>` e suporte a snapshots pixel-a-pixel.
-* **Chatbox multi-provedores** (Anthropic, Gemini, OpenAI) com sandbox real ([Bubblewrap](file:///home/lucas/Workplace/Projects/Stellar/src/main/sandbox.ts)) para ferramentas de shell/arquivos.
+* **Chatbox multi-provedores** (Anthropic, Gemini, OpenAI) com sandbox real ([Bubblewrap](src/main/sandbox.ts)) para ferramentas de shell/arquivos.
 * **Orquestrador de múltiplos agentes** com servidor MCP embutido, controle de concorrência e dependências estruturais entre tarefas.
 
 ---
@@ -43,7 +43,7 @@ Camada operacional do projeto **Stellar**. Este documento é o contrato de traba
    * Nunca versionar ou expor tokens reais nos logs ou testes.
 5. **Nenhum Comando Git que Descarte Estado:**
    * Proibidos `reset --hard`, `checkout <arquivo>`, `restore`, `stash` e `clean` nesta árvore.
-   * Motivo medido (2026-09-14): um agente rodou um reset destrutivo para "isolar" a própria entrega e destruiu trabalho não commitado de três cards; os blobs não eram recuperáveis por `lost-found`. Esta árvore é compartilhada por vários agentes simultâneos com frequência — o custo de um comando destrutivo aqui nunca é local.
+   * Motivo medido: um agente rodou um reset destrutivo para "isolar" a própria entrega e destruiu trabalho não commitado de outros cards; os blobs não eram recuperáveis por `lost-found`. Esta árvore é compartilhada por vários agentes simultâneos com frequência — o custo de um comando destrutivo aqui nunca é local.
    * Precisa de árvore limpa para um gate? `git worktree add /tmp/<nome> HEAD`, rode lá, remova depois.
    * Vale para agentes E para humanos: quem está sozinho na árvore não sabe se um card vai nascer no minuto seguinte.
 
@@ -83,7 +83,7 @@ Os agentes em execução no Stellar podem interagir com o ambiente e coordenar o
 | `list_tasks` | Consulta tarefas registradas e seus grafos de dependência | Passivo (Sem prompt) |
 | `run_locked` | Roda um comando pesado do próprio agente sob o MESMO lock do gate-runner (scope `repo` ou `machine`) | Passivo — exige identidade de card |
 
-**Comando pesado vai pelo lock.** `e2e`, a suíte inteira, Lighthouse e afins concorrem por CPU/disco com o gate de outro card; rodar solto produz falso vermelho (medido 2026-10-04: Lighthouse 0.72/CLS 0.14 numa corrida contra 1.0/0.005 sozinho). Use `acbridge gate-lock [--scope repo|machine] -- <comando>` ou a tool `run_locked`: `repo` (default) serializa contra os gates do mesmo repositório; `machine` usa um lock global, para o que mede desempenho. Gates **declarados** com `{ "cmd": "...", "exclusive": "machine" }` rodam por último, sob o lock global. O lock é em memória (por processo do app) e é liberado quando o processo do comando morre.
+**Comando pesado vai pelo lock.** `e2e`, a suíte inteira, Lighthouse e afins concorrem por CPU/disco com o gate de outro card; rodar solto produz falso vermelho (medido: Lighthouse 0.72/CLS 0.14 numa corrida contra 1.0/0.005 sozinho). Use `acbridge gate-lock [--scope repo|machine] -- <comando>` ou a tool `run_locked`: `repo` (default) serializa contra os gates do mesmo repositório; `machine` usa um lock global, para o que mede desempenho. Gates **declarados** com `{ "cmd": "...", "exclusive": "machine" }` rodam por último, sob o lock global. O lock é em memória (por processo do app) e é liberado quando o processo do comando morre.
 
 Coordenar mais de um agente por estas ferramentas tem mecânica própria — contrato de relatório, briefing por arquivo, polling e sticky como painel — no skill local `orchestrate-on-stellar-board`. A decisão de *o que* delegar (decomposição, modelo, esforço, concorrência) continua no `orchestrate-parallel-agents` do workspace.
 
@@ -102,7 +102,5 @@ Coordenar mais de um agente por estas ferramentas tem mecânica própria — con
 ## 7. 📚 Fontes Canônicas & Handoff
 
 * **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md)** — **Manual do Orquestrador.** Como conduzir um board com agentes: modelo de quatro camadas da task, marca do orquestrador, superfície MCP/acbridge e quando cada uma está disponível, como escrever um contrato de task, entrega e seus estados (`parked` ≠ `delivered`), commit por hunk filtrado em árvore compartilhada, princípios de engenharia e o catálogo de anti-padrões com o custo medido de cada um. **Leitura obrigatória para quem assume um board vindo do zero** — inclusive o agente master.
-* **[SYSTEM.md](file:///home/lucas/Workplace/Projects/Stellar/SYSTEM.md)** — Mapa detalhado de IPCs, processos main/renderer, schemas do SQLite e limites de plataforma.
-* **[docs/SYSTEM_DESIGN.md](file:///home/lucas/Workplace/Projects/Stellar/docs/SYSTEM_DESIGN.md)** — Design System formal, catálogo de componentes, tokens visuais, animações e regras de acessibilidade.
-* **[DESIGN-BACKLOG.md](file:///home/lucas/Workplace/Projects/Stellar/DESIGN-BACKLOG.md)** — Backlog consolidado de design, tarefas pendentes, acessibilidade e ideias futuras.
-* **[docs/HISTORY.md](file:///home/lucas/Workplace/Projects/Stellar/docs/HISTORY.md)** — Registro histórico e cronológico detalhado das sessões de engenharia anteriores (25 a 31 de agosto de 2026).
+* **[SYSTEM.md](SYSTEM.md)** — Mapa detalhado de IPCs, processos main/renderer, schemas do SQLite e limites de plataforma.
+* **[docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)** — Design System formal, catálogo de componentes, tokens visuais, animações e regras de acessibilidade.

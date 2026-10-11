@@ -1,7 +1,6 @@
 # Caixa de mensagens entre cards — desenho aprovado
 
-Decisão do dono em 2026-10-07. Implementação na task M2 (`d80ed90c`). Levantamento
-do código atual: report seq 1334 da task `aa5b177d`.
+Desenho de produto para substituir o `send_to_card` baseado em colagem no PTY.
 
 ## 1. O problema
 
@@ -24,7 +23,7 @@ destinatário:
 Linha de aviso, sempre com o começo da mensagem para nada urgente ficar escondido:
 
 ```
-📨 Master: "PARE AGORA. Não apague nada…" (6 linhas) · read_message m-812
+📨 Orquestrador: "PARE AGORA. Não apague nada…" (6 linhas) · read_message m-812
 ```
 
 Os limites são dado declarado num lugar só:
@@ -108,7 +107,7 @@ caixa não pode virar um atalho para um card dar ordens a outro.
 Reaproveita os dois passos de `src/main/idle-self-reminder-decision.ts`:
 
 1. Card ocioso há 20 s com mensagem `unread`: UMA linha
-   `📨 Lembrete: mensagem não lida de Master · read_message m-812`.
+   `📨 Lembrete: mensagem não lida do orquestrador · read_message m-812`.
 2. Mais 60 s sem leitura: avisa o remetente (ou o orquestrador), uma vez.
 
 `read_message` desarma o lembrete. Não há repetição.

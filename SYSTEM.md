@@ -1,9 +1,6 @@
 # SYSTEM.md — mapa do estado atual
 
-Referência rápida da forma atual do sistema — **não é histórico**. O
-porquê de cada decisão (o que foi tentado, o que quebrou, o que foi
-verificado ao vivo) vive em `docs/HISTORY.md`, em ordem cronológica
-(`AGENTS.md` ficou só com diretrizes ativas depois da migração); este
+Referência rápida da forma atual do sistema — **não é histórico**. Este
 arquivo existe pra não precisar ler milhares de linhas de changelog só pra
 entender "o que existe hoje e onde". Atualize-o quando a FORMA do sistema
 mudar (novo processo, novo canal IPC, novo tipo de card) — não precisa
@@ -92,8 +89,7 @@ Union em `App.tsx` (`type Card = ...`). Cada kind tem seu componente em
 
 `CardRow.kind` é `string` solto (não union no schema) — adicionar um novo
 kind não pede migração de banco, só as ~7-8 edições espalhadas em
-`App.tsx`/`icons.tsx` catalogadas no `DESIGN-BACKLOG.md` (item 4,
-deferido: um registro declarativo reduziria isso).
+`App.tsx`/`icons.tsx` (um registro declarativo reduziria isso).
 
 ## Mecanismos externos (o que vale lembrar sem ler a história toda)
 
@@ -103,13 +99,10 @@ deferido: um registro declarativo reduziria isso).
 - **`desktopCapturer.getSources()` não enumera janelas no Wayland** desta
   máquina sem a flag `WebRTCPipeWireCapturer` (ligada em `index.ts`) —
   sem ela, devolve 1 fonte genérica sem nome/thumbnail.
-- **GPU acelerada** (reabilitada 2026-08-26, ver `main/index.ts` — foi
-  desabilitada uma vez em 2026-08-25 por segfault do driver, reteste
-  posterior veio limpo e não regrediu desde então; confirmado ao vivo de
-  novo em 2026-09-03 via `nvidia-smi`, VRAM real alocada pro processo GPU
-  do Stellar). `useTerminal.ts` ainda tenta `@xterm/addon-webgl` com
-  fallback defensivo pro renderer canvas2d (`try/catch`) — não é mais o
-  caminho esperado nesta máquina, só proteção contra driver/combinação
+- **GPU acelerada** (ligada em `main/index.ts`; foi desabilitada uma vez
+  por segfault do driver e reabilitada após reteste limpo).
+  `useTerminal.ts` ainda tenta `@xterm/addon-webgl` com fallback defensivo
+  pro renderer canvas2d (`try/catch`) — proteção contra driver/combinação
   de GPU que falhe a criação do contexto WebGL em outra máquina.
 - **`org.freedesktop.portal.RemoteDesktop`** (D-Bus/xdg-desktop-portal) é
   o mecanismo real por trás do controle de janela externa — sessão
@@ -125,8 +118,7 @@ antes de declarar qualquer mudança "funcionando"; não afirmar sem rodar.
 
 ## O que este arquivo NÃO é
 
-Não repete decisões de produto em aberto (isso é `DESIGN-BACKLOG.md`),
-não narra o histórico de como cada peça chegou nessa forma (isso é
+Não narra o histórico de como cada peça chegou nessa forma (isso é
 `AGENTS.md`), e não é um tutorial de onboarding passo-a-passo — é um
 mapa, pra orientar onde procurar, não pra substituir ler o código real de
 onde a resposta mora.

@@ -1,9 +1,9 @@
 # Rust — o que MAIS vale migrar (proposta ordenada, não implementação)
 
-Task `6a533da1-fea4-4bd6-a63c-bc2025c1d706` — **DISCUSSÃO**. Nada aqui foi
-implementado; o app não foi rodado (instância do dono, single-instance). Todo
-número é rastreável à medição que o produziu; ganho **argumentado** (não medido)
-vem marcado como argumentado, no mesmo idioma do `PERF.md`.
+**DISCUSSÃO.** Nada aqui foi implementado; o app não foi rodado nesta análise
+(single-instance em uso). Todo número é rastreável à medição que o produziu;
+ganho **argumentado** (não medido) vem marcado como argumentado, no mesmo
+idioma do `PERF.md`.
 
 Este documento **usa os números corrigidos** da correção de unidade (§14 do
 `PERF.md`): as seções §11–§13 estavam **4× menores** (campo 24 de
@@ -41,7 +41,7 @@ a CLI dele**, não o Stellar. E o único custo por card que era do Stellar — o
 **Conclusão do piso:** a superfície que sobra para migrar em Rust é **pequena e
 estreita**. O grosso (baseline gpu/renderer/main, custo por card) não é código
 nosso ou já está em Rust. A proposta abaixo é curta de propósito — e a lista de
-"o que NÃO vale" é longa, porque é ela que protege o tempo do dono.
+"o que NÃO vale" é longa, porque é ela que protege o tempo de desenvolvimento.
 
 ---
 
@@ -149,7 +149,7 @@ VOLUME** — mas **não priorizar sem uma medição da main sob saída de build*
 (`resources/bin/stellar-mcp:2`) nem existe, então o ramo do relay **não é
 alcançável** (declarado no cabeçalho de `resources/relay/src/main.rs`).
 
-**Ganho:** é **paridade**, não ganho novo na máquina do dono. **Risco: BAIXO**;
+**Ganho:** é **paridade**, não ganho novo na máquina de desenvolvimento. **Risco: BAIXO**;
 **Esforço: BAIXO–MÉDIO** (toolchain mingw/MSVC + remover a dependência do `sh`).
 
 **Veredito:** fechar por completude do "1 fonte / 3 alvos"; não é prioridade de
@@ -227,7 +227,7 @@ inteiro (~50 MB), mas **invocações são raras e curtas** — não é processo 
 
 ## 4. Não medido / notDone
 
-- **O app não foi rodado** (regra do board: instância do dono, single-instance).
+- **O app não foi rodado** (regra do board: instância em uso, single-instance).
   **Nenhum número NOVO** foi produzido; todos vêm de `docs/PERF.md` (§7–§14),
   `docs/WRY_SPIKE.md`, `docs/BROWSER_ENGINE_OPTIONS.md`,
   `docs/BROWSER_IN_CANVAS_PRIOR_ART.md` e dos comentários de medição no código do

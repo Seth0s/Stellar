@@ -37,9 +37,8 @@ Um subagente do tipo "fork" herda a identidade MCP do card pai: o Stellar ainda 
 
 ## Armadilhas
 
-Detalhe (sintoma / porquê / o que fazer): docs do site —
-[Orquestrar na prática](https://stellar.idyplatform.com/pt/docs/orquestrar-na-pratica/)
-([EN](https://stellar.idyplatform.com/en/docs/orchestrating-in-practice/)). Em resumo:
+Detalhe (sintoma / porquê / o que fazer): ver
+[docs/ORCHESTRATION.md](../../../docs/ORCHESTRATION.md). Em resumo:
 
 - **a.** `deps` em board autônomo disparam o filho no `done` do pai — crie o filho antes; ao pausar, marque dependentes `blocked` com pergunta.
 - **b.** `send_to_card` só enfileira — veredito em `get_delivery` (`unconfirmed` comum); confirme com `read_card`.
