@@ -43,6 +43,23 @@ import {
   type TeamTaskList,
   type TeamTaskView,
 } from "./team-task-decision";
+import {
+  parseImportJob,
+  parseImportJobList,
+  parseImportPreview,
+  type ImportJobView,
+  type ImportPreview,
+} from "./import-decision";
+import {
+  parseIntegration,
+  parseIntegrationList,
+  parseWebhook,
+  parseWebhookDeliveryList,
+  parseWebhookList,
+  type IntegrationView,
+  type WebhookDeliveryView,
+  type WebhookView,
+} from "./integration-decision";
 
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: CloudApiError };
 
@@ -750,6 +767,158 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
     async deleteTeamSprint(token: string, teamId: string, sprintId: string): Promise<ApiResult<null>> {
       const res = await request("DELETE", `/v1/teams/${encodeURIComponent(teamId)}/sprints/${encodeURIComponent(sprintId)}`, { token });
       return res.ok ? { ok: true, value: null } : res;
+    },
+
+    // ---- TEAM INTEGRATIONS & IMPORTS (B9a / B9b) ----------------------------
+    // Cohesive block: connectors, OAuth, credential connect, import jobs,
+    // outbound webhooks and board export. Secrets never return from the server.
+
+    /** GET /v1/teams/{id}/integrations — any member. */
+    async listIntegrations(token: string, teamId: string): Promise<ApiResult<IntegrationView[]>> {
+      const res = await request("GET", `/v1/teams/${encodeURIComponent(teamId)}/integrations`, { token });
+      if (!res.ok) return res;
+      return { ok: true, value: parseIntegrationList(res.value) };
+    },
+
+    /** PATCH /v1/teams/{id}/integrations/{kind} — owner/admin; merges config. */
+    async updateIntegration(
+      token: string,
+      teamId: string,
+      kind: string,
+      body: { config?: Record<string, unknown>; status?: string },
+    ): Promise<ApiResult<IntegrationView>> {
+      const res = await request("PATCH", `/v1/teams/${encodeURIComponent(teamId)}/integrations/${encodeURIComponent(kind)}`, {
+        token,
+        body,
+      });
+      if (!res.ok) return res;
+      const integ = parseIntegration(res.value);
+      if (!integ) return { ok: false, error: { status: 0, code: "invalid_response", message: "update integration response missing integration" } };
+      return { ok: true, value: integ };
+    },
+
+    /** DELETE /v1/teams/{id}/integrations/{kind} — 204. */
+    async disconnectIntegration(token: string, teamId: string, kind: string): Promise<ApiResult<null>> {
+      const res = await request("DELETE", `/v1/teams/${encodeURIComponent(teamId)}/integrations/${encodeURIComponent(kind)}`, { token });
+      return res.ok ? { ok: true, value: null } : res;
+    },
+
+    /** POST …/integrations/{kind}/oauth — returns authorize_url for the system browser. */
+    async startIntegrationOAuth(
+      token: string,
+      teamId: string,
+      kind: string,
+      returnUrl: string,
+    ): Promise<ApiResult<{ authorizeUrl: string }>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/integrations/${encodeURIComponent(kind)}/oauth`, {
+        token,
+        body: { return_url: returnUrl },
+      });
+      if (!res.ok) return res;
+      const rec = (res.value ?? {}) as Record<string, unknown>;
+      const authorizeUrl = typeof rec.authorize_url === "string" ? rec.authorize_url : "";
+      if (!authorizeUrl) {
+        return { ok: false, error: { status: 0, code: "invalid_response", message: "oauth response missing authorize_url" } };
+      }
+      return { ok: true, value: { authorizeUrl } };
+    },
+
+    /** POST …/integrations/{kind}/connect — GitHub/Linear/Jira credentials (encrypted at rest). */
+    async connectIntegration(
+      token: string,
+      teamId: string,
+      kind: string,
+      body: { config: Record<string, unknown>; secrets: Record<string, string> },
+    ): Promise<ApiResult<IntegrationView>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/integrations/${encodeURIComponent(kind)}/connect`, {
+        token,
+        body,
+      });
+      if (!res.ok) return res;
+      const integ = parseIntegration(res.value);
+      if (!integ) return { ok: false, error: { status: 0, code: "invalid_response", message: "connect integration response missing integration" } };
+      return { ok: true, value: integ };
+    },
+
+    /** GET /v1/teams/{id}/imports */
+    async listImports(token: string, teamId: string): Promise<ApiResult<ImportJobView[]>> {
+      const res = await request("GET", `/v1/teams/${encodeURIComponent(teamId)}/imports`, { token });
+      if (!res.ok) return res;
+      return { ok: true, value: parseImportJobList(res.value) };
+    },
+
+    /** POST /v1/teams/{id}/imports/preview — read-only; marks duplicates. */
+    async previewImport(token: string, teamId: string, body: Record<string, unknown>): Promise<ApiResult<ImportPreview>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/imports/preview`, { token, body });
+      if (!res.ok) return res;
+      const preview = parseImportPreview(res.value);
+      if (!preview) return { ok: false, error: { status: 0, code: "invalid_response", message: "preview response invalid" } };
+      return { ok: true, value: preview };
+    },
+
+    /** POST /v1/teams/{id}/imports — creates the job and runs it once (201). */
+    async createImport(token: string, teamId: string, body: Record<string, unknown>): Promise<ApiResult<ImportJobView>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/imports`, { token, body });
+      if (!res.ok) return res;
+      const job = parseImportJob(res.value);
+      if (!job) return { ok: false, error: { status: 0, code: "invalid_response", message: "create import response missing job" } };
+      return { ok: true, value: job };
+    },
+
+    /** POST /v1/teams/{id}/imports/{jobId}/run — continue / re-run. */
+    async runImport(token: string, teamId: string, jobId: string): Promise<ApiResult<ImportJobView>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/imports/${encodeURIComponent(jobId)}/run`, { token });
+      if (!res.ok) return res;
+      const job = parseImportJob(res.value);
+      if (!job) return { ok: false, error: { status: 0, code: "invalid_response", message: "run import response missing job" } };
+      return { ok: true, value: job };
+    },
+
+    /** GET /v1/teams/{id}/webhooks */
+    async listWebhooks(token: string, teamId: string): Promise<ApiResult<WebhookView[]>> {
+      const res = await request("GET", `/v1/teams/${encodeURIComponent(teamId)}/webhooks`, { token });
+      if (!res.ok) return res;
+      return { ok: true, value: parseWebhookList(res.value) };
+    },
+
+    /** POST /v1/teams/{id}/webhooks — 201. */
+    async createWebhook(
+      token: string,
+      teamId: string,
+      body: { url: string; secret: string; events: string[] },
+    ): Promise<ApiResult<WebhookView>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/webhooks`, { token, body });
+      if (!res.ok) return res;
+      const webhook = parseWebhook(res.value);
+      if (!webhook) return { ok: false, error: { status: 0, code: "invalid_response", message: "create webhook response missing webhook" } };
+      return { ok: true, value: webhook };
+    },
+
+    /** DELETE /v1/teams/{id}/webhooks/{webhookId} — 204. */
+    async deleteWebhook(token: string, teamId: string, webhookId: string): Promise<ApiResult<null>> {
+      const res = await request("DELETE", `/v1/teams/${encodeURIComponent(teamId)}/webhooks/${encodeURIComponent(webhookId)}`, { token });
+      return res.ok ? { ok: true, value: null } : res;
+    },
+
+    /** GET /v1/teams/{id}/webhooks/{webhookId}/deliveries */
+    async listWebhookDeliveries(token: string, teamId: string, webhookId: string): Promise<ApiResult<WebhookDeliveryView[]>> {
+      const res = await request(
+        "GET",
+        `/v1/teams/${encodeURIComponent(teamId)}/webhooks/${encodeURIComponent(webhookId)}/deliveries`,
+        { token },
+      );
+      if (!res.ok) return res;
+      return { ok: true, value: parseWebhookDeliveryList(res.value) };
+    },
+
+    /** GET /v1/teams/{id}/export?format=csv|json — raw body (not JSON-wrapped). */
+    async exportTeamBoard(token: string, teamId: string, format: "csv" | "json"): Promise<ApiResult<{ body: string; contentType: string }>> {
+      const raw = await requestRaw("GET", `/v1/teams/${encodeURIComponent(teamId)}/export?format=${encodeURIComponent(format)}`, { token });
+      if (!raw.ok) {
+        return { ok: false, error: parseCloudApiError(raw.status, parseJson(raw.text), `export failed (${raw.status})`) };
+      }
+      const contentType = format === "csv" ? "text/csv" : "application/json";
+      return { ok: true, value: { body: raw.text, contentType } };
     },
   };
 }

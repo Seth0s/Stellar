@@ -1,0 +1,319 @@
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--v2-s15) var(--v2-s18);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s11);
+  background-color: var(--v2-bg);
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0); /* sd:allow: Integrations.dc.html dot grid */
+  background-size: 22px 22px; /* sd:allow: Integrations.dc.html dot grid */
+  color: var(--v2-text);
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--v2-s7);
+}
+
+.headerMain {
+  flex: 1;
+  min-width: 260px; /* sd:allow: Integrations.dc.html header min */
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+}
+
+.back {
+  font-size: var(--v2-f13);
+  color: var(--v2-text-3);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.back:hover {
+  color: var(--v2-accent-soft2);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--v2-f26);
+  font-weight: 600;
+  letter-spacing: -0.015em; /* sd:allow: Integrations.dc.html title tracking */
+}
+
+.subtitle {
+  font-size: var(--v2-f13h);
+  color: var(--v2-text-4);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-s7);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s6);
+  padding: var(--v2-s9);
+  border-radius: var(--v2-r14);
+  background: var(--v2-card);
+  border: var(--v2-hair) solid var(--v2-line-soft);
+}
+
+.cardWide {
+  grid-column: span 2;
+  border-color: #3a4a8a; /* sd:allow: Integrations.dc.html Slack card accent */
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+}
+
+.logo {
+  width: 38px; /* sd:allow: Integrations.dc.html logo */
+  height: 38px; /* sd:allow: Integrations.dc.html logo */
+  border-radius: var(--v2-r10);
+  display: grid;
+  place-items: center;
+  font-size: var(--v2-f15);
+  font-weight: 700;
+  flex: none;
+}
+
+.logoSlack {
+  background: #3b1f3d; /* sd:allow: Integrations.dc.html Slack mark */
+  color: #f2a6ef; /* sd:allow: Integrations.dc.html Slack mark */
+}
+
+.logoGithub {
+  background: var(--v2-line-soft);
+  color: var(--v2-text);
+}
+
+.logoLinear {
+  background: #1d2240; /* sd:allow: Integrations.dc.html Linear mark */
+  color: var(--v2-accent-soft);
+}
+
+.logoJira {
+  background: #13263f; /* sd:allow: Integrations.dc.html Jira mark */
+  color: #8fc2ff; /* sd:allow: Integrations.dc.html Jira mark */
+}
+
+.logoWh {
+  background: var(--v2-line-soft);
+  color: var(--v2-text-2);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f12);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--v2-f16);
+  font-weight: 600;
+}
+
+.cardStatus {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.cardStatusOn {
+  color: var(--v2-good-fg);
+}
+
+.cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--v2-s7);
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s5);
+}
+
+.colLabel {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-2);
+}
+
+.sw {
+  appearance: none;
+  width: 34px; /* sd:allow: Integrations.dc.html switch */
+  height: var(--v2-s10);
+  border-radius: var(--v2-r10);
+  background: var(--v2-line-input);
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+  flex: none;
+}
+
+.sw::after {
+  content: "";
+  position: absolute;
+  top: var(--v2-s1h);
+  left: var(--v2-s1h);
+  width: var(--v2-s7);
+  height: var(--v2-s7);
+  border-radius: var(--radius-circle);
+  background: var(--v2-text-2);
+}
+
+.sw:checked {
+  background: var(--v2-primary);
+}
+
+.sw:checked::after {
+  left: 17px; /* sd:allow: Integrations.dc.html switch thumb on */
+  background: var(--v2-bright);
+}
+
+.sw:disabled {
+  opacity: 0.55; /* sd:allow: disabled switch opacity */
+  cursor: not-allowed;
+}
+
+.desc {
+  font-size: var(--v2-f12h);
+  line-height: 1.5;
+  color: var(--v2-text-3);
+}
+
+.ghost {
+  height: var(--v2-s16);
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r8);
+  border: var(--v2-hair) solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: var(--v2-f12h);
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-bright);
+}
+
+.primary {
+  height: var(--v2-s16);
+  padding: 0 var(--v2-s7);
+  border-radius: var(--v2-r8);
+  border: 0;
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font: inherit;
+  font-size: var(--v2-f12h);
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.primary:hover {
+  background: var(--v2-primary-hover);
+}
+
+.primary:disabled,
+.ghost:disabled {
+  opacity: 0.5; /* sd:allow: disabled control opacity */
+  cursor: not-allowed;
+}
+
+.rowBtns {
+  display: flex;
+  gap: var(--v2-s4);
+}
+
+.readonly {
+  font-size: var(--v2-f12h);
+  color: var(--v2-warn);
+}
+
+.error {
+  font-size: var(--v2-f13);
+  color: var(--v2-danger);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55); /* sd:allow: modal veil */
+  display: grid;
+  place-items: center;
+  z-index: 40; /* sd:allow: modal stacking */
+}
+
+.modalCard {
+  width: min(420px, 92vw); /* sd:allow: connect modal width */
+  padding: var(--v2-s9);
+  border-radius: var(--v2-r14);
+  background: var(--v2-card);
+  border: var(--v2-hair) solid var(--v2-line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s6);
+}
+
+.input {
+  height: var(--v2-s17);
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r8);
+  border: var(--v2-hair) solid var(--v2-line-input);
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f12h);
+}
+
+@media (max-width: 1100px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cardWide {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .page {
+    padding: var(--v2-s10) var(--v2-s8);
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cardWide {
+    grid-column: span 1;
+  }
+
+  .cols {
+    grid-template-columns: 1fr;
+  }
+}

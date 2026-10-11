@@ -57,6 +57,27 @@ import type { TeamRole } from "./team-decision";
 import { TEAM_TASK_PURPOSE, localGateCommands, teamTaskPrompt, type TeamTaskView } from "./team-task-decision";
 import type { TaskPurpose } from "../task-purpose";
 import type { WorkHomeConflictChoice } from "./work-home-apply-decision";
+import {
+  awaitImportJob,
+  createTeamImport,
+  listTeamImports,
+  previewTeamImport,
+  runTeamImport,
+} from "./import";
+import {
+  connectTeamIntegration,
+  createTeamWebhook,
+  deleteTeamWebhook,
+  disconnectTeamIntegration,
+  exportTeamBoardOp,
+  listTeamIntegrations,
+  listTeamWebhookDeliveries,
+  listTeamWebhooks,
+  startTeamIntegrationOAuth,
+  updateTeamIntegration,
+  type IntegrationContext,
+} from "./integration";
+import { INTEGRATION_OAUTH_RETURN_URL } from "./integration-decision";
 
 export type LocalTeamTaskInput = {
   boardId: string;
@@ -85,6 +106,8 @@ export type TeamIpcDeps = {
   /** Local Fila task of a bridged entry, for the state reconcile: the stored
    *  status plus whether a card is live on it (this app never stores `running`). */
   getLocalTaskStatus: (taskId: string) => { status: string; cardAlive: boolean } | null;
+  /** Opens OAuth authorize URLs in the system browser (smoke may log instead). */
+  openUrl: (url: string) => void;
 };
 
 export function registerTeamIpc(deps: TeamIpcDeps): void {
@@ -436,5 +459,131 @@ export function registerTeamIpc(deps: TeamIpcDeps): void {
     if (!built.ok) return { ok: false as const, error: built.error };
     const synced = await reconcileTeamQueue(built.ctx, deps.getLocalTaskStatus);
     return { ok: true as const, reports: synced.reports, entries: queueWithStatus(built.ctx.activeProfile.dir) };
+  });
+
+  function integrationCtx(built: { ctx: TeamContext }): IntegrationContext {
+    return { api: built.ctx.api, token: built.ctx.token, openUrl: deps.openUrl };
+  }
+
+  // ---- integrations & imports (B9a / B9b) ---------------------------------
+
+  ipcMain.handle("team:integrations-list", async (_e, teamId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    return listTeamIntegrations(integrationCtx(built), teamId);
+  });
+
+  ipcMain.handle("team:integrations-update", async (_e, teamId: unknown, kind: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof kind !== "string") return { ok: false as const, error: "integração inválida" };
+    const rec = (typeof body === "object" && body !== null ? body : {}) as { config?: Record<string, unknown>; status?: string };
+    return updateTeamIntegration(integrationCtx(built), teamId, kind, rec);
+  });
+
+  ipcMain.handle("team:integrations-disconnect", async (_e, teamId: unknown, kind: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof kind !== "string") return { ok: false as const, error: "integração inválida" };
+    return disconnectTeamIntegration(integrationCtx(built), teamId, kind);
+  });
+
+  ipcMain.handle("team:integrations-oauth", async (_e, teamId: unknown, kind: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof kind !== "string") return { ok: false as const, error: "integração inválida" };
+    return startTeamIntegrationOAuth(integrationCtx(built), teamId, kind, INTEGRATION_OAUTH_RETURN_URL);
+  });
+
+  ipcMain.handle("team:integrations-connect", async (_e, teamId: unknown, kind: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof kind !== "string") return { ok: false as const, error: "integração inválida" };
+    const rec = (typeof body === "object" && body !== null ? body : {}) as {
+      config?: Record<string, unknown>;
+      secrets?: Record<string, string>;
+    };
+    return connectTeamIntegration(integrationCtx(built), teamId, kind, {
+      config: rec.config ?? {},
+      secrets: rec.secrets ?? {},
+    });
+  });
+
+  ipcMain.handle("team:imports-list", async (_e, teamId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    return listTeamImports({ api: built.ctx.api, token: built.ctx.token }, teamId);
+  });
+
+  ipcMain.handle("team:imports-preview", async (_e, teamId: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    const rec = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    return previewTeamImport({ api: built.ctx.api, token: built.ctx.token }, teamId, rec);
+  });
+
+  ipcMain.handle("team:imports-create", async (_e, teamId: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    const rec = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    const created = await createTeamImport({ api: built.ctx.api, token: built.ctx.token }, teamId, rec);
+    if (!created.ok) return created;
+    if (created.job.status === "done" || created.job.status === "failed") return created;
+    return awaitImportJob({ api: built.ctx.api, token: built.ctx.token }, teamId, created.job.id);
+  });
+
+  ipcMain.handle("team:imports-run", async (_e, teamId: unknown, jobId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof jobId !== "string") return { ok: false as const, error: "importação inválida" };
+    return runTeamImport({ api: built.ctx.api, token: built.ctx.token }, teamId, jobId);
+  });
+
+  ipcMain.handle("team:webhooks-list", async (_e, teamId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    return listTeamWebhooks(integrationCtx(built), teamId);
+  });
+
+  ipcMain.handle("team:webhooks-create", async (_e, teamId: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    const rec = (typeof body === "object" && body !== null ? body : {}) as { url?: string; secret?: string; events?: string[] };
+    if (typeof rec.url !== "string" || typeof rec.secret !== "string" || !Array.isArray(rec.events)) {
+      return { ok: false as const, error: "webhook inválido" };
+    }
+    return createTeamWebhook(integrationCtx(built), teamId, {
+      url: rec.url,
+      secret: rec.secret,
+      events: rec.events.filter((e): e is string => typeof e === "string"),
+    });
+  });
+
+  ipcMain.handle("team:webhooks-delete", async (_e, teamId: unknown, webhookId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof webhookId !== "string") return { ok: false as const, error: "webhook inválido" };
+    return deleteTeamWebhook(integrationCtx(built), teamId, webhookId);
+  });
+
+  ipcMain.handle("team:webhooks-deliveries", async (_e, teamId: unknown, webhookId: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof webhookId !== "string") return { ok: false as const, error: "webhook inválido" };
+    return listTeamWebhookDeliveries(integrationCtx(built), teamId, webhookId);
+  });
+
+  ipcMain.handle("team:export", async (_e, teamId: unknown, format: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    const fmt = format === "json" ? "json" : "csv";
+    return exportTeamBoardOp(integrationCtx(built), teamId, fmt);
   });
 }

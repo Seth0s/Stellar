@@ -206,6 +206,7 @@ import { registerWorkHomeIpc } from "./work-home-ipc";
 import { registerTeamIpc, type LocalTeamTaskInput } from "./team-ipc";
 import { registerCloudAccountIpc } from "./cloud-account-ipc";
 import { parseDeepLink } from "./team-decision";
+import { parseIntegrationOAuthDeepLink } from "./integration-decision";
 import { resolveCloudApiBaseUrl } from "./cloud-auth-decision";
 import { resolvePlansUrl } from "./plan-decision";
 import { hostname } from "node:os";
@@ -769,6 +770,12 @@ function focusMainWindow(): void {
 }
 
 function handleDeepLink(url: string): void {
+  const oauth = parseIntegrationOAuthDeepLink(url);
+  if (oauth) {
+    focusMainWindow();
+    if (mainWindow) safeSend(mainWindow, "team:integration-oauth", { status: oauth.status });
+    return;
+  }
   const link = parseDeepLink(url);
   if (!link) return;
   pendingInviteToken = link.token;
@@ -4699,6 +4706,7 @@ function createWindow() {
       if (!task) return null;
       return { status: task.status, cardAlive: task.card_id ? registry.isAlive(task.card_id) : false };
     },
+    openUrl: openCloudUrl,
   });
 
   // ---- ACCOUNT: server-profile link + devices (A8) ------------------------

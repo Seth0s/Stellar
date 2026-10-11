@@ -42,9 +42,11 @@ import type { DeleteMode } from "./team-task-delete-decisions";
 import { canWrite, decidePlanAccess, describePlanFailure } from "./PlanAccess";
 import { PlanNotice, PlanSeatsNotice } from "./PlanGate";
 import { useCloudPlan, usePlansUrl } from "./PlanHooks";
+import { ImportWizard } from "./ImportWizard";
+import { IntegrationsPage } from "./IntegrationsPage";
 import styles from "./TeamPage.module.css";
 
-type Sub = "overview" | "board" | "members" | "home" | "audit";
+type Sub = "overview" | "board" | "members" | "home" | "audit" | "import" | "integrations";
 type TeamRef = { id: string; name: string };
 
 function ageLabel(iso: string | null): string {
@@ -102,6 +104,7 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
   const [tasks, setTasks] = useState<TeamTaskInfo[]>([]);
   const [sprints, setSprints] = useState<TeamSprintInfo[]>([]);
   const [sub, setSub] = useState<Sub>("overview");
+  const [cmdOpen, setCmdOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -123,6 +126,19 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
 
   const { plan: cloudPlan, loggedIn } = useCloudPlan();
   const plansUrl = usePlansUrl();
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdOpen(true);
+      }
+      if (e.key === "Escape") setCmdOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // The team right is paid: on Free the section explains the Team plan and
   // locks create/invite/board; an expired plan keeps reading but blocks writes.
   const teamAccess = decidePlanAccess(cloudPlan, "team");
@@ -422,6 +438,8 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
     { id: "board", label: "teamTask.subnav.board" },
     { id: "members", label: "teamTask.subnav.members" },
     { id: "home", label: "teamTask.subnav.home" },
+    { id: "import", label: "teamTask.subnav.import" },
+    { id: "integrations", label: "teamTask.subnav.integrations" },
     { id: "audit", label: "teamTask.subnav.audit" },
   ];
 
@@ -475,6 +493,24 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
       onDelete={(confirm) => void handleDeleteTask(deleteTarget, confirm)}
     />
   ) : null;
+
+  if (sub === "import" && selected) {
+    return (
+      <ImportWizard teamId={selected} teamName={team?.name ?? ""} role={myRole} onBack={() => setSub("overview")} />
+    );
+  }
+
+  if (sub === "integrations" && selected) {
+    return (
+      <IntegrationsPage
+        teamId={selected}
+        teamName={team?.name ?? ""}
+        role={myRole}
+        members={detail?.members ?? []}
+        onBack={() => setSub("overview")}
+      />
+    );
+  }
 
   if (sub === "board") {
     return (
@@ -662,12 +698,76 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
         <button type="button" className={styles.btn} onClick={() => setSub("board")}>
           {t("teamTask.openBoard")}
         </button>
+        <button type="button" className={styles.btn} data-part="team-open-import" onClick={() => setSub("import")}>
+          {t("teamTask.subnav.import")}
+        </button>
+        <button type="button" className={styles.btn} data-part="team-open-integrations" onClick={() => setSub("integrations")}>
+          {t("teamTask.subnav.integrations")}
+        </button>
         {isAdmin ? (
           <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => setSub("members")}>
             {t("teamTask.invite")}
           </button>
         ) : null}
       </div>
+
+      {cmdOpen ? (
+        <div
+          role="dialog"
+          aria-label={t("team.cmdPalette.aria")}
+          data-part="team-cmd-palette"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.55)",
+            display: "grid",
+            placeItems: "start center",
+            paddingTop: 80,
+            zIndex: 50,
+          }}
+          onClick={() => setCmdOpen(false)}
+        >
+          <div
+            style={{
+              width: "min(520px, 92vw)",
+              borderRadius: 14,
+              border: "1px solid var(--v2-line-soft)",
+              background: "var(--v2-card)",
+              padding: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, padding: "4px 8px" }}>{t("team.cmdPalette.title")}</div>
+            <button
+              type="button"
+              className={styles.btn}
+              data-part="cmd-import"
+              style={{ justifyContent: "flex-start", textAlign: "left" }}
+              onClick={() => {
+                setCmdOpen(false);
+                setSub("import");
+              }}
+            >
+              {t("teamImport.cmdPalette")}
+            </button>
+            <button
+              type="button"
+              className={styles.btn}
+              data-part="cmd-integrations"
+              style={{ justifyContent: "flex-start", textAlign: "left" }}
+              onClick={() => {
+                setCmdOpen(false);
+                setSub("integrations");
+              }}
+            >
+              {t("teamIntegrations.cmdPalette")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
       {seatsFull !== null ? <PlanSeatsNotice seats={seatsFull} /> : null}

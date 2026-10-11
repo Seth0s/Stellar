@@ -2696,7 +2696,104 @@ export type TeamApi = {
   sprints: (teamId: string) => Promise<TeamSprintsResult>;
   queue: () => Promise<TeamQueueResult>;
   queueSync: () => Promise<TeamQueueSyncResult>;
+  // --- integrations & imports (B9a / B9b) ---
+  listIntegrations: (teamId: string) => Promise<TeamIntegrationsResult>;
+  updateIntegration: (
+    teamId: string,
+    kind: string,
+    body: { config?: Record<string, unknown>; status?: string },
+  ) => Promise<TeamIntegrationResult>;
+  disconnectIntegration: (teamId: string, kind: string) => Promise<TeamSimpleResult>;
+  startIntegrationOAuth: (teamId: string, kind: string) => Promise<TeamOAuthResult>;
+  connectIntegration: (
+    teamId: string,
+    kind: string,
+    body: { config: Record<string, unknown>; secrets: Record<string, string> },
+  ) => Promise<TeamIntegrationResult>;
+  onIntegrationOAuth: (cb: (payload: { status: "connected" | "error" }) => void) => () => void;
+  listImports: (teamId: string) => Promise<TeamImportsResult>;
+  previewImport: (teamId: string, body: Record<string, unknown>) => Promise<TeamImportPreviewResult>;
+  createImport: (teamId: string, body: Record<string, unknown>) => Promise<TeamImportJobResult>;
+  runImport: (teamId: string, jobId: string) => Promise<TeamImportJobResult>;
+  listWebhooks: (teamId: string) => Promise<TeamWebhooksResult>;
+  createWebhook: (
+    teamId: string,
+    body: { url: string; secret: string; events: string[] },
+  ) => Promise<TeamWebhookResult>;
+  deleteWebhook: (teamId: string, webhookId: string) => Promise<TeamSimpleResult>;
+  listWebhookDeliveries: (teamId: string, webhookId: string) => Promise<TeamWebhookDeliveriesResult>;
+  exportBoard: (teamId: string, format: "csv" | "json") => Promise<TeamExportResult>;
 };
+
+export type TeamIntegrationInfo = {
+  id: string;
+  kind: string;
+  status: string;
+  config: Record<string, unknown>;
+  connectedBy: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+export type TeamIntegrationsResult = { ok: true; integrations: TeamIntegrationInfo[] } | { ok: false; error: string };
+export type TeamIntegrationResult = { ok: true; integration: TeamIntegrationInfo } | { ok: false; error: string };
+export type TeamOAuthResult = { ok: true; authorizeUrl: string } | { ok: false; error: string };
+
+export type TeamImportJobInfo = {
+  id: string;
+  kind: string;
+  status: string;
+  rule: Record<string, unknown>;
+  mapping: Record<string, unknown>;
+  continueImport: boolean;
+  cursor: string;
+  createdCount: number;
+  skippedCount: number;
+  error: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+export type TeamImportPreviewItemInfo = {
+  title: string;
+  externalId: string;
+  duplicate: boolean;
+  existingRef: string | null;
+  meta: string | null;
+  selected: boolean;
+};
+export type TeamImportPreviewInfo = {
+  kind: string;
+  items: TeamImportPreviewItemInfo[];
+  total: number;
+  duplicates: number;
+};
+export type TeamImportsResult = { ok: true; imports: TeamImportJobInfo[] } | { ok: false; error: string };
+export type TeamImportPreviewResult = { ok: true; preview: TeamImportPreviewInfo } | { ok: false; error: string };
+export type TeamImportJobResult = { ok: true; job: TeamImportJobInfo } | { ok: false; error: string };
+
+export type TeamWebhookInfo = {
+  id: string;
+  url: string;
+  events: string[];
+  status: string;
+  consecutiveFailures: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+export type TeamWebhooksResult = { ok: true; webhooks: TeamWebhookInfo[] } | { ok: false; error: string };
+export type TeamWebhookResult = { ok: true; webhook: TeamWebhookInfo } | { ok: false; error: string };
+export type TeamWebhookDeliveryInfo = {
+  id: string;
+  event: string;
+  status: string;
+  attempts: number;
+  responseStatus: number | null;
+  error: string;
+  nextAttemptAt: string | null;
+  createdAt: string | null;
+};
+export type TeamWebhookDeliveriesResult = { ok: true; deliveries: TeamWebhookDeliveryInfo[] } | { ok: false; error: string };
+export type TeamExportResult = { ok: true; body: string; contentType: string } | { ok: false; error: string };
+
 const team: TeamApi = {
   overview: () => ipcRenderer.invoke("team:overview"),
   create: (input) => ipcRenderer.invoke("team:create", input),
@@ -2739,6 +2836,25 @@ const team: TeamApi = {
   sprints: (teamId) => ipcRenderer.invoke("team:sprints", teamId),
   queue: () => ipcRenderer.invoke("team:queue"),
   queueSync: () => ipcRenderer.invoke("team:queue-sync"),
+  listIntegrations: (teamId) => ipcRenderer.invoke("team:integrations-list", teamId),
+  updateIntegration: (teamId, kind, body) => ipcRenderer.invoke("team:integrations-update", teamId, kind, body),
+  disconnectIntegration: (teamId, kind) => ipcRenderer.invoke("team:integrations-disconnect", teamId, kind),
+  startIntegrationOAuth: (teamId, kind) => ipcRenderer.invoke("team:integrations-oauth", teamId, kind),
+  connectIntegration: (teamId, kind, body) => ipcRenderer.invoke("team:integrations-connect", teamId, kind, body),
+  onIntegrationOAuth: (cb) => {
+    const listener = (_e: unknown, payload: { status: "connected" | "error" }) => cb(payload);
+    ipcRenderer.on("team:integration-oauth", listener);
+    return () => ipcRenderer.removeListener("team:integration-oauth", listener);
+  },
+  listImports: (teamId) => ipcRenderer.invoke("team:imports-list", teamId),
+  previewImport: (teamId, body) => ipcRenderer.invoke("team:imports-preview", teamId, body),
+  createImport: (teamId, body) => ipcRenderer.invoke("team:imports-create", teamId, body),
+  runImport: (teamId, jobId) => ipcRenderer.invoke("team:imports-run", teamId, jobId),
+  listWebhooks: (teamId) => ipcRenderer.invoke("team:webhooks-list", teamId),
+  createWebhook: (teamId, body) => ipcRenderer.invoke("team:webhooks-create", teamId, body),
+  deleteWebhook: (teamId, webhookId) => ipcRenderer.invoke("team:webhooks-delete", teamId, webhookId),
+  listWebhookDeliveries: (teamId, webhookId) => ipcRenderer.invoke("team:webhooks-deliveries", teamId, webhookId),
+  exportBoard: (teamId, format) => ipcRenderer.invoke("team:export", teamId, format),
 };
 
 contextBridge.exposeInMainWorld("pty", pty);
