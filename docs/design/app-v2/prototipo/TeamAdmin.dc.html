@@ -23,14 +23,38 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 .ghost:hover{border-color:#3a4258;color:#fff}
 .primary{height:36px;padding:0 14px;border-radius:8px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .primary:hover{background:#5770f0;color:#fff}
+.primary:disabled,.ghost:disabled{opacity:.45;cursor:not-allowed}
+.danger{height:36px;padding:0 14px;border-radius:8px;border:1px solid #5a2a2a;background:#1a1010;color:#f0a8a8;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.danger:hover{border-color:#7a3a3a;color:#ffc8c8}
 .icon{width:30px;height:30px;border-radius:7px;border:0;background:transparent;color:#858da0;display:grid;place-items:center;cursor:pointer}
 .icon:hover{background:#1c2130;color:#e8eaf0}
 .sel{height:30px;padding:0 28px 0 10px;border-radius:7px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:12.5px}
+.inp{height:36px;padding:0 12px;border-radius:8px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:13px;box-sizing:border-box;width:100%}
+.inp:focus{outline:none;border-color:#4a5fe0}
 td,th{padding:12px 14px;text-align:left;border-top:1px solid #1d2130;font-weight:400}
 th{font-size:11px;letter-spacing:.06em;color:#8d94a6;font-family:'JetBrains Mono',monospace;border-top:0}
+.pill{font-size:11.5px;font-weight:600;letter-spacing:.02em;border-radius:6px;padding:4px 9px;display:inline-flex;align-items:center;gap:6px}
+.pill-ok{color:#a6ecc0;background:#1d3a2a}
+.pill-warn{color:#f2c96a;background:#3a2f12}
+.pill-bad{color:#f0a8a8;background:#3a1a1a}
+.pill-info{color:#c7d0ff;background:#232b52}
+.hint{font-size:12.5px;color:#8d94a6;line-height:1.45}
+.warn{font-size:13px;color:#f2c96a;background:#2a2414;border:1px solid #3a3218;border-radius:10px;padding:12px 14px;line-height:1.45}
+.info{font-size:13px;color:#c7d0ff;background:#181e36;border:1px solid #2a3358;border-radius:10px;padding:12px 14px;line-height:1.45}
+.states{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;background:#090b0f;border-bottom:1px solid #1a1e28;font-size:11.5px}
+.states a{color:#8d94a6;padding:4px 8px;border-radius:6px;border:1px solid transparent}
+.states a:hover{color:#e8eaf0;background:#161a24}
+.states a.on{color:#e8eaf0;background:#182037;border-color:#2a3358}
+.view{display:none}
+.view.on{display:flex}
+.linkbox{font-family:'JetBrains Mono',monospace;font-size:12px;padding:10px 12px;border-radius:8px;background:#0f1218;border:1px solid #2a2f3d;color:#c7d0ff;word-break:break-all}
+.modal-veil{position:absolute;inset:0;background:rgba(5,6,10,.72);display:flex;align-items:center;justify-content:center;padding:40px;box-sizing:border-box;z-index:5}
+.modal{width:100%;max-width:480px;display:flex;flex-direction:column;gap:16px;padding:24px;border-radius:16px;background:#12151d;border:1px solid #262c3d;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.lbl{font-size:12px;font-weight:600;color:#a3aabb;margin-bottom:6px;display:block}
+.row-actions{display:inline-flex;align-items:center;gap:6px}
 </style>
 </helmet>
-<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background-color: #0b0d12; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; position: relative">
   <div style="height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: #090b0f; border-bottom: 1px solid #1a1e28">
     <svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="t-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d6bff"></stop><stop offset=".55" stop-color="#9c8cff"></stop><stop offset="1" stop-color="#c46cf0"></stop></linearGradient></defs><rect x="2.5" y="2.5" width="59" height="59" rx="15" fill="none" stroke="url(#t-f)" stroke-width="4"></rect><path d="M32.5 14c1.1 11.4 4.1 14.5 15.6 15.6-11.5 1.1-14.5 4.2-15.6 15.6-1.1-11.4-4.1-14.5-15.6-15.6 11.5-1.1 14.5-4.2 15.6-15.6z" fill="#b9c4ff"></path></svg>
     <span style="font-size: 12px; font-weight: 600; color: #c9cede">Stellar</span>
@@ -40,94 +64,291 @@ th{font-size:11px;letter-spacing:.06em;color:#8d94a6;font-family:'JetBrains Mono
     <button class="wc" aria-label="Fechar janela"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3l6 6M9 3l-6 6"></path></svg></button>
   </div>
 
-  <div style="flex: 1; min-height: 0; display: flex">
-    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
-      <a href="Profiles.dc.html" style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #141823; border: 1px solid #222838; color: #e8eaf0">
-        <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #123a35; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #8ee6d8">I</span>
-        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Idy Platform</span><span style="font-size: 12px; color: #8d94a6">você é owner</span></span>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg>
-      </a>
-      <nav style="display: flex; flex-direction: column; gap: 2px" aria-label="Seções">
-        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"></rect><rect x="9" y="2" width="5" height="5" rx="1.2"></rect><rect x="2" y="9" width="5" height="5" rx="1.2"></rect><rect x="9" y="9" width="5" height="5" rx="1.2"></rect></svg><span style="flex: 1">Sessões</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">9</span></a>
-        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5v3.2l2 1.3"></path></svg><span style="flex: 1">Aguardando você</span><span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: #3a2f12; color: #f2c96a; font-size: 11px; font-weight: 600; display: grid; place-items: center">3</span></a>
-        <a class="nav" href="WorkHome.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8z"></path><path d="M6.3 13.8V9.6h3.4v4.2"></path></svg><span style="flex: 1">Casa de trabalho</span></a>
-        <a class="nav" href="TeamAdmin.dc.html" style="color: #ffffff"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.8" cy="5.6" r="2.3"></circle><circle cx="11" cy="6.3" r="1.8"></circle><path d="M1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4"></path></svg><span style="flex: 1">Time</span></a>
-        <a class="sub" href="TeamAdmin.dc.html" style="background: #182037; color: #ffffff" aria-current="page">Visão geral</a>
-        <a class="sub" href="TeamBoard.dc.html">Board do time</a>
-        <a class="sub" href="TeamAdmin.dc.html">Membros e papéis</a>
-        <a class="sub" href="WorkHome.dc.html">Casa do time</a>
-        <a class="sub" href="TeamAdmin.dc.html">Auditoria</a>
-        <a class="nav" href="Home.dc.html"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5"></path></svg><span style="flex: 1">Estatísticas</span></a>
-      </nav>
-      <span style="flex: 1"></span>
-      <div style="display: flex; align-items: center; gap: 10px; padding: 10px">
-        <span style="width: 30px; height: 30px; flex: none; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #c7d0ff">LS</span>
-        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500">owner@example.com</span><span style="font-size: 11.5px; color: #8d94a6">owner · Idy Platform</span></span>
-      </div>
-    </aside>
+  <nav class="states" aria-label="Estados do protótipo">
+    <a href="#team" data-nav="team">Time · 3/5</a>
+    <a href="#team-full" data-nav="team-full">Time · assentos cheios</a>
+    <a href="#invite" data-nav="invite">Convidar</a>
+    <a href="#invite-copied" data-nav="invite-copied">Convidar · link copiado</a>
+    <a href="#invite-full" data-nav="invite-full">Convidar · sem assento</a>
+    <a href="#settings" data-nav="settings">Configurações</a>
+    <a href="#create-beta" data-nav="create-beta">Criar time · beta</a>
+  </nav>
 
-    <main style="flex: 1; min-width: 0; overflow: auto; padding: 30px 40px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
-      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px">
-        <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 6px">
-          <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Idy Platform</h1>
-          <div style="font-size: 13.5px; color: #9aa1b2">Painel do time · você tem acesso total como owner</div>
+  <!-- ========== SHELL + TEAM (default / full) ========== -->
+  <div id="view-shell" class="view on" style="flex: 1; min-height: 0; flex-direction: column">
+    <div style="flex: 1; min-height: 0; display: flex">
+      <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
+        <a href="#team" style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #141823; border: 1px solid #222838; color: #e8eaf0">
+          <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #123a35; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #8ee6d8">N</span>
+          <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Nebula Labs</span><span style="font-size: 12px; color: #8d94a6">você é owner</span></span>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><path d="M4 5.5l3 3 3-3"></path></svg>
+        </a>
+        <nav style="display: flex; flex-direction: column; gap: 2px" aria-label="Seções">
+          <a class="nav" href="#team"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"></rect><rect x="9" y="2" width="5" height="5" rx="1.2"></rect><rect x="2" y="9" width="5" height="5" rx="1.2"></rect><rect x="9" y="9" width="5" height="5" rx="1.2"></rect></svg><span style="flex: 1">Sessões</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8d94a6">4</span></a>
+          <a class="nav" href="#team" style="color: #ffffff"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.8" cy="5.6" r="2.3"></circle><circle cx="11" cy="6.3" r="1.8"></circle><path d="M1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4"></path></svg><span style="flex: 1">Time</span></a>
+          <a class="sub" href="#team" style="background: #182037; color: #ffffff" aria-current="page">Visão geral</a>
+          <a class="sub" href="#settings">Configurações</a>
+          <a class="nav" href="#team"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5"></path></svg><span style="flex: 1">Estatísticas</span></a>
+        </nav>
+        <span style="flex: 1"></span>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px">
+          <span style="width: 30px; height: 30px; flex: none; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #c7d0ff">MC</span>
+          <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 500">maya@example.com</span><span style="font-size: 11.5px; color: #8d94a6">owner · Nebula Labs</span></span>
         </div>
-        <a class="ghost" href="TeamBoard.dc.html">Abrir o board do time</a>
-        <button class="primary"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Convidar pessoa</button>
-      </div>
+      </aside>
 
-      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
-        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Membros</span><span style="font-size: 24px; font-weight: 600">4</span><span style="font-size: 12px; color: #8d94a6">1 convite pendente</span></div>
-        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Tasks abertas</span><span style="font-size: 24px; font-weight: 600">18</span><span style="font-size: 12px; color: #8d94a6">5 sem dono</span></div>
-        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #3a3218; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Aguardando revisão</span><span style="font-size: 24px; font-weight: 600; color: #f2c96a">3</span><span style="font-size: 12px; color: #8d94a6">a mais antiga há 2 h</span></div>
-        <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Casa do time</span><span style="font-size: 24px; font-weight: 600">rev. 7</span><span style="font-size: 12px; color: #8d94a6">publicada por você, ontem</span></div>
-      </div>
+      <main id="main-team" style="flex: 1; min-width: 0; overflow: auto; padding: 30px 40px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+        <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px">
+          <div style="flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 8px">
+            <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Nebula Labs</h1>
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+              <span id="seats-pill" class="pill pill-ok" data-part="seats">3 de 5 assentos</span>
+              <span style="font-size: 13.5px; color: #9aa1b2">slug <span style="font-family: 'JetBrains Mono', monospace; color: #c9cede">nebula-labs</span></span>
+            </div>
+          </div>
+          <a class="ghost" href="#settings">Configurações</a>
+          <a class="primary" href="#invite" id="btn-invite"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Convidar pessoa</a>
+        </div>
 
-      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
-        <section style="flex: 999 1 640px; min-width: 0; border-radius: 14px; background: #12151d; border: 1px solid #20242f; overflow: hidden" aria-labelledby="mb">
+        <div id="seats-full-banner" class="warn" style="display: none" data-part="seats-full">
+          Todos os 5 assentos estão ocupados. Novos convites ficam bloqueados até liberar um assento ou o operador ampliar o plano do time.
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+          <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Membros</span><span style="font-size: 24px; font-weight: 600" id="stat-members">3</span><span style="font-size: 12px; color: #8d94a6" id="stat-pending">1 convite pendente</span></div>
+          <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Assentos</span><span style="font-size: 24px; font-weight: 600" id="stat-seats">3 / 5</span><span style="font-size: 12px; color: #8d94a6">plano do time (operador)</span></div>
+          <div style="padding: 16px; border-radius: 12px; background: #12151d; border: 1px solid #20242f; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #a3aabb">Tasks abertas</span><span style="font-size: 24px; font-weight: 600">11</span><span style="font-size: 12px; color: #8d94a6">2 sem dono</span></div>
+        </div>
+
+        <section style="border-radius: 14px; background: #12151d; border: 1px solid #20242f; overflow: hidden" aria-labelledby="mb">
           <div style="display: flex; align-items: center; gap: 10px; padding: 16px">
             <h2 id="mb" style="margin: 0; flex: 1; font-size: 15px; font-weight: 600">Membros e papéis</h2>
-            <span style="font-size: 12px; color: #8d94a6">sempre ao menos 1 owner</span>
+            <span class="hint">sempre ao menos 1 owner</span>
           </div>
           <div style="overflow-x: auto">
             <table style="width: 100%; border-collapse: collapse; font-size: 13px">
-              <thead><tr><th>PESSOA</th><th>PAPEL</th><th>TASKS</th><th>MÁQUINAS</th><th>ÚLTIMO ACESSO</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Ações</span></th></tr></thead>
+              <thead><tr><th>PESSOA</th><th>PAPEL</th><th>TASKS</th><th><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Ações</span></th></tr></thead>
               <tbody>
-                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #c7d0ff">LS</span><span style="display: flex; flex-direction: column"><span>Lucas Sabino</span><span style="font-size: 11.5px; color: #8d94a6">você</span></span></span></td><td><select class="sel" aria-label="Papel de Lucas"><option selected>Owner</option><option>Admin</option><option>Membro</option></select></td><td>4</td><td>2</td><td style="color: #a3aabb">agora</td><td><button class="icon" aria-label="Ações de Lucas"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
-                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #3a2350; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #e2c4ff">AR</span><span style="display: flex; flex-direction: column"><span>Ana Ribeiro</span><span style="font-size: 11.5px; color: #8d94a6">ana@example.com</span></span></span></td><td><select class="sel" aria-label="Papel de Ana"><option>Owner</option><option selected>Admin</option><option>Membro</option></select></td><td>6</td><td>1</td><td style="color: #a3aabb">há 12 min</td><td><button class="icon" aria-label="Ações de Ana"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
-                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #1d3a2a; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #a6ecc0">BM</span><span style="display: flex; flex-direction: column"><span>Bruno Melo</span><span style="font-size: 11.5px; color: #8d94a6">github: brunomelo</span></span></span></td><td><select class="sel" aria-label="Papel de Bruno"><option>Owner</option><option>Admin</option><option selected>Membro</option></select></td><td>5</td><td>1</td><td style="color: #a3aabb">há 1 h</td><td><button class="icon" aria-label="Ações de Bruno"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
-                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #3a2a18; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #ffd2a6">CP</span><span style="display: flex; flex-direction: column"><span>Carla Pinto</span><span style="font-size: 11.5px; color: #8d94a6">carla@example.com</span></span></span></td><td><select class="sel" aria-label="Papel de Carla"><option>Owner</option><option>Admin</option><option selected>Membro</option></select></td><td>3</td><td>2</td><td style="color: #a3aabb">ontem</td><td><button class="icon" aria-label="Ações de Carla"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"></circle><circle cx="8" cy="8" r="1.3"></circle><circle cx="13" cy="8" r="1.3"></circle></svg></button></td></tr>
-                <tr><td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; border: 1px dashed #4a5163; box-sizing: border-box; display: grid; place-items: center; font-size: 13px; color: #8d94a6">@</span><span style="display: flex; flex-direction: column"><span>invitee@example.com</span><span style="font-size: 11.5px; color: #f2c96a">convite pendente · expira em 5 dias</span></span></span></td><td style="color: #a3aabb">Membro</td><td style="color: #8d94a6">—</td><td style="color: #8d94a6">—</td><td style="color: #8d94a6">—</td><td><button class="ghost" style="height: 28px; font-size: 12px">Revogar</button></td></tr>
+                <tr>
+                  <td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #2a3150; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #c7d0ff">MC</span><span style="display: flex; flex-direction: column"><span>Maya Chen</span><span style="font-size: 11.5px; color: #8d94a6">você · maya@example.com</span></span></span></td>
+                  <td><select class="sel" aria-label="Papel de Maya" disabled title="Único owner — não dá para rebaixar"><option selected>Owner</option></select></td>
+                  <td>4</td>
+                  <td>
+                    <span class="row-actions">
+                      <button class="ghost" style="height: 28px; font-size: 12px" disabled title="Você é o único owner. Promova outra pessoa a owner antes de sair.">Sair</button>
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #3a2350; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #e2c4ff">RA</span><span style="display: flex; flex-direction: column"><span>Rio Alvarez</span><span style="font-size: 11.5px; color: #8d94a6">rio@example.com</span></span></span></td>
+                  <td><select class="sel" aria-label="Papel de Rio"><option>Owner</option><option selected>Admin</option><option>Membro</option></select></td>
+                  <td>6</td>
+                  <td><span class="row-actions"><button class="ghost" style="height: 28px; font-size: 12px; color: #f0a8a8; border-color: #5a2a2a">Remover</button></span></td>
+                </tr>
+                <tr>
+                  <td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; background: #1d3a2a; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #a6ecc0">SO</span><span style="display: flex; flex-direction: column"><span>Sam Okonkwo</span><span style="font-size: 11.5px; color: #8d94a6">github: samok</span></span></span></td>
+                  <td><select class="sel" aria-label="Papel de Sam"><option>Owner</option><option>Admin</option><option selected>Membro</option></select></td>
+                  <td>5</td>
+                  <td><span class="row-actions"><button class="ghost" style="height: 28px; font-size: 12px; color: #f0a8a8; border-color: #5a2a2a">Remover</button></span></td>
+                </tr>
+                <tr id="pending-row">
+                  <td><span style="display: flex; align-items: center; gap: 10px"><span style="width: 28px; height: 28px; border-radius: 50%; border: 1px dashed #4a5163; box-sizing: border-box; display: grid; place-items: center; font-size: 13px; color: #8d94a6">@</span><span style="display: flex; flex-direction: column"><span>kai@example.com</span><span style="font-size: 11.5px; color: #f2c96a">convite pendente · expira em 5 dias</span></span></span></td>
+                  <td style="color: #a3aabb">Membro</td>
+                  <td style="color: #8d94a6">—</td>
+                  <td><button class="ghost" style="height: 28px; font-size: 12px">Revogar</button></td>
+                </tr>
               </tbody>
             </table>
           </div>
+          <div class="hint" style="padding: 12px 16px; border-top: 1px solid #1d2130">
+            Único owner: o select e “Sair” ficam bloqueados até existir outro owner.
+          </div>
+        </section>
+      </main>
+
+      <!-- SETTINGS -->
+      <main id="main-settings" style="display: none; flex: 1; min-width: 0; overflow: auto; padding: 30px 40px 40px; box-sizing: border-box; flex-direction: column; gap: 22px; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <a href="#team" class="hint" style="color: #a9b8ff">← Voltar ao time</a>
+          <h1 style="margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.015em">Configurações do time</h1>
+          <div style="font-size: 13.5px; color: #9aa1b2">Nebula Labs · só owner pode apagar</div>
+        </div>
+
+        <section style="max-width: 560px; display: flex; flex-direction: column; gap: 14px; padding: 20px; border-radius: 14px; background: #12151d; border: 1px solid #20242f">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600">Nome do time</h2>
+          <div>
+            <label class="lbl" for="rename">Nome</label>
+            <input class="inp" id="rename" value="Nebula Labs">
+          </div>
+          <div class="hint">O slug <span style="font-family: 'JetBrains Mono', monospace; color: #c9cede">nebula-labs</span> não muda ao renomear.</div>
+          <div><button class="primary">Salvar nome</button></div>
         </section>
 
-        <section style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 14px; background: #12151d; border: 1px solid #20242f" aria-labelledby="pp">
-          <h2 id="pp" style="margin: 0; font-size: 15px; font-weight: 600">O que cada papel pode</h2>
-          <div style="display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 52px); gap: 8px 6px; align-items: center; font-size: 12.5px">
-            <span style="color: #8d94a6"></span><span style="font-size: 11px; color: #8d94a6; text-align: center">Owner</span><span style="font-size: 11px; color: #8d94a6; text-align: center">Admin</span><span style="font-size: 11px; color: #8d94a6; text-align: center">Membro</span>
-            <span style="color: #c9cede">Criar e distribuir tasks</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
-            <span style="color: #c9cede">Mover as próprias tasks</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span>
-            <span style="color: #c9cede">Revisar e aprovar</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
-            <span style="color: #c9cede">Publicar a casa do time</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span>
-            <span style="color: #c9cede">Convidar e remover membros</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #f2c96a">membros</span><span style="text-align: center; color: #8d94a6">não</span>
-            <span style="color: #c9cede">Mudar papéis e excluir o time</span><span style="text-align: center; color: #5fd08a">sim</span><span style="text-align: center; color: #8d94a6">não</span><span style="text-align: center; color: #8d94a6">não</span>
+        <section style="max-width: 560px; display: flex; flex-direction: column; gap: 14px; padding: 20px; border-radius: 14px; background: #1a1010; border: 1px solid #5a2a2a">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #f0a8a8">Zona de perigo</h2>
+          <p class="hint" style="margin: 0; color: #c9a0a0">Apagar o time remove membros, convites e o board do time. Não dá para desfazer.</p>
+          <div>
+            <label class="lbl" for="del-slug" style="color: #c9a0a0">Digite o slug <span style="font-family: 'JetBrains Mono', monospace; color: #f0a8a8">nebula-labs</span> para confirmar</label>
+            <input class="inp" id="del-slug" placeholder="nebula-labs" autocomplete="off" style="border-color: #5a2a2a">
           </div>
-          <div style="height: 1px; background: #1d2130"></div>
-          <h3 style="margin: 0; font-size: 13.5px; font-weight: 600">Atividade recente</h3>
-          <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: #a3aabb">
-            <span><span style="color: #e8eaf0">Ana</span> atribuiu "Fila de retries" a Bruno · há 12 min</span>
-            <span><span style="color: #e8eaf0">Bruno</span> entregou "Paginação de membros" para revisão · há 1 h</span>
-            <span><span style="color: #e8eaf0">Você</span> publicou a casa do time rev. 7 · ontem</span>
-          </div>
-          <a href="TeamAdmin.dc.html" style="font-size: 12.5px">Ver auditoria completa</a>
+          <div><button class="danger" id="btn-delete" disabled>Apagar time</button></div>
         </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ========== CREATE BETA (no team plan) ========== -->
+  <div id="view-create-beta" class="view" style="flex: 1; min-height: 0; flex-direction: column">
+    <div style="flex: 1; min-height: 0; display: flex">
+      <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 22px; padding: 18px 14px; background: #0e1016; border-right: 1px solid #1a1e28; box-sizing: border-box">
+        <div style="display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 10px; background: #141823; border: 1px solid #222838; color: #e8eaf0">
+          <span style="width: 34px; height: 34px; flex: none; border-radius: 9px; background: #2a3150; display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #c7d0ff">MC</span>
+          <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Maya Chen</span><span style="font-size: 12px; color: #8d94a6">conta · só esta máquina</span></span>
+        </div>
+        <nav style="display: flex; flex-direction: column; gap: 2px" aria-label="Seções">
+          <a class="nav" href="#create-beta"><span style="flex: 1">Sessões</span></a>
+          <a class="nav" href="#create-beta" style="color: #ffffff; background: #182037"><span style="flex: 1">Time</span></a>
+        </nav>
+        <span style="flex: 1"></span>
+      </aside>
+      <main style="flex: 1; min-width: 0; overflow: auto; padding: 48px 40px; box-sizing: border-box; display: flex; align-items: flex-start; justify-content: center; background-color: #0b0d12; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0); background-size: 22px 22px">
+        <div style="width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 18px; padding: 28px; border-radius: 16px; background: #12151d; border: 1px solid #20242f">
+          <h1 style="margin: 0; font-size: 22px; font-weight: 600">Criar um time</h1>
+          <div class="info" data-part="beta-notice">
+            Times são liberados pelo Stellar durante o beta. Peça ao operador para abrir um plano de time na sua conta — depois você convida as pessoas daqui.
+          </div>
+          <div>
+            <label class="lbl" for="new-team">Nome do time</label>
+            <input class="inp" id="new-team" placeholder="ex.: Nebula Labs" disabled>
+          </div>
+          <button class="primary" disabled>Criar time</button>
+          <p class="hint" style="margin: 0">Não é um upgrade de plano na loja: no beta o assento vem do operador.</p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ========== INVITE MODALS (overlay on team) ========== -->
+  <div id="modal-invite" class="modal-veil" style="display: none" data-part="invite-modal">
+    <div class="modal" role="dialog" aria-labelledby="inv-form-t">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <h2 id="inv-form-t" style="margin: 0; flex: 1; font-size: 18px; font-weight: 600">Convidar pessoa</h2>
+        <a href="#team" class="icon" aria-label="Fechar"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l8 8M11 3l-8 8"></path></svg></a>
       </div>
-    </main>
+      <p class="hint" style="margin: 0">Mesmo convite nominal: e-mail ou login GitHub. Envie ou copie o link — só essa pessoa consegue usar.</p>
+      <div>
+        <label class="lbl" for="inv-target">E-mail ou login GitHub</label>
+        <input class="inp" id="inv-target" value="kai@example.com" placeholder="nome@empresa.com ou login">
+      </div>
+      <div>
+        <label class="lbl" for="inv-role">Papel</label>
+        <select class="sel" id="inv-role" style="height: 36px; width: 100%"><option selected>Membro</option><option>Admin</option></select>
+      </div>
+      <div id="invite-actions" style="display: flex; flex-wrap: wrap; gap: 10px">
+        <button class="primary" type="button">Enviar por e-mail</button>
+        <a class="ghost" href="#invite-copied">Copiar link</a>
+      </div>
+      <div id="invite-copied-block" style="display: none; flex-direction: column; gap: 10px" data-part="invite-copied">
+        <div style="display: flex; gap: 8px; align-items: stretch">
+          <div class="linkbox" style="flex: 1">https://api.stellar.idyplatform.com/invite#t=ex_tok_7f3a9c2e1b</div>
+          <button class="ghost" type="button" data-copied="false" onclick="this.textContent='Copiado';this.dataset.copied='true'">Copiar</button>
+        </div>
+        <div class="hint" style="margin: 0">O link abre uma página que leva ao app Stellar (ou ao download, se ainda não estiver instalado).</div>
+        <div class="warn">Só esta pessoa consegue usar este link. Vale 7 dias. Não reaparece depois que você fechar.</div>
+        <a class="ghost" href="#team" style="align-self: flex-start">Pronto</a>
+      </div>
+      <div id="invite-full-block" class="warn" style="display: none" data-part="invite-full">
+        Sem assento livre. O plano deste time tem 5 assentos e todos estão em uso. Peça ao operador para ampliar o plano — ou remova alguém antes de convidar.
+      </div>
+      <div id="invite-full-actions" style="display: none; gap: 10px">
+        <button class="primary" disabled>Enviar por e-mail</button>
+        <button class="ghost" disabled>Copiar link</button>
+        <a class="ghost" href="#team-full">Voltar</a>
+      </div>
+    </div>
   </div>
 </div>
 </x-dc>
+<script>
+(function () {
+  var views = {
+    team: "shell",
+    "team-full": "shell",
+    invite: "shell",
+    "invite-copied": "shell",
+    "invite-full": "shell",
+    settings: "shell",
+    "create-beta": "create-beta"
+  };
+
+  function apply() {
+    var hash = (location.hash || "#team").replace(/^#/, "") || "team";
+    if (!views[hash]) hash = "team";
+
+    document.querySelectorAll(".states a").forEach(function (a) {
+      a.classList.toggle("on", a.getAttribute("data-nav") === hash);
+    });
+
+    var shell = document.getElementById("view-shell");
+    var beta = document.getElementById("view-create-beta");
+    var showBeta = views[hash] === "create-beta";
+    shell.classList.toggle("on", !showBeta);
+    beta.classList.toggle("on", showBeta);
+
+    var mainTeam = document.getElementById("main-team");
+    var mainSettings = document.getElementById("main-settings");
+    var showSettings = hash === "settings";
+    if (mainTeam) mainTeam.style.display = showSettings || showBeta ? "none" : "flex";
+    if (mainSettings) mainSettings.style.display = showSettings ? "flex" : "none";
+
+    var full = hash === "team-full" || hash === "invite-full";
+    var seatsPill = document.getElementById("seats-pill");
+    var seatsBanner = document.getElementById("seats-full-banner");
+    var statSeats = document.getElementById("stat-seats");
+    var statMembers = document.getElementById("stat-members");
+    var btnInvite = document.getElementById("btn-invite");
+    if (seatsPill) {
+      seatsPill.textContent = full ? "5 de 5 assentos" : "3 de 5 assentos";
+      seatsPill.className = "pill " + (full ? "pill-bad" : "pill-ok");
+    }
+    if (seatsBanner) seatsBanner.style.display = full ? "block" : "none";
+    if (statSeats) statSeats.textContent = full ? "5 / 5" : "3 / 5";
+    if (statMembers) statMembers.textContent = full ? "5" : "3";
+    if (btnInvite) {
+      btnInvite.href = full ? "#invite-full" : "#invite";
+      btnInvite.style.opacity = full ? "0.85" : "1";
+    }
+
+    var modal = document.getElementById("modal-invite");
+    var showModal = hash === "invite" || hash === "invite-copied" || hash === "invite-full";
+    if (modal) modal.style.display = showModal ? "flex" : "none";
+
+    var actions = document.getElementById("invite-actions");
+    var copied = document.getElementById("invite-copied-block");
+    var fullBlock = document.getElementById("invite-full-block");
+    var fullActions = document.getElementById("invite-full-actions");
+    var isCopied = hash === "invite-copied";
+    var isFull = hash === "invite-full";
+    if (actions) actions.style.display = isCopied || isFull ? "none" : "flex";
+    if (copied) copied.style.display = isCopied ? "flex" : "none";
+    if (fullBlock) fullBlock.style.display = isFull ? "block" : "none";
+    if (fullActions) fullActions.style.display = isFull ? "flex" : "none";
+
+    var del = document.getElementById("del-slug");
+    var btnDel = document.getElementById("btn-delete");
+    if (del && btnDel && !del._bound) {
+      del._bound = true;
+      del.addEventListener("input", function () {
+        btnDel.disabled = del.value.trim() !== "nebula-labs";
+      });
+    }
+  }
+
+  window.addEventListener("hashchange", apply);
+  if (!location.hash) location.hash = "#team";
+  apply();
+})();
+</script>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
   renderVals() { return {}; }
