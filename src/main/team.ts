@@ -591,6 +591,29 @@ export async function createTeamTaskOp(
   return { ok: false, error: res.error.message };
 }
 
+export async function createTeamSubtasksOp(
+  ctx: TeamContext,
+  teamId: string,
+  taskId: string,
+  subtasks: Array<{ title: string; kind: string; priority?: string }>,
+): Promise<{ ok: true; tasks: TeamTaskView[] } | { ok: false; error: string }> {
+  const res = await ctx.api.createTeamSubtasks(ctx.token, teamId, taskId, subtasks);
+  if (res.ok) return { ok: true, tasks: res.value };
+  noteTeamAccessDenied(ctx, teamId, res.error);
+  return { ok: false, error: res.error.message };
+}
+
+export async function patchTeamOp(
+  ctx: TeamContext,
+  teamId: string,
+  shareFilePaths: boolean,
+): Promise<{ ok: true; team: { id: string; name: string; slug: string; shareFilePaths: boolean } } | { ok: false; error: string }> {
+  const res = await ctx.api.patchTeam(ctx.token, teamId, { share_file_paths: shareFilePaths });
+  if (res.ok) return { ok: true, team: res.value };
+  noteTeamAccessDenied(ctx, teamId, res.error);
+  return { ok: false, error: res.error.message };
+}
+
 export type TeamTaskUpdateOutcome =
   | { ok: true; task: TeamTaskView }
   | { ok: false; conflict: true; current: TeamTaskView | null }
@@ -744,7 +767,7 @@ export async function reportTeamTaskStateOp(
   ctx: TeamContext,
   teamId: string,
   taskId: string,
-  report: { state?: string; report_delivered?: boolean; gates_passed?: number; gates_total?: number; verdict?: string },
+  report: Record<string, unknown>,
 ): Promise<{ ok: true; task: TeamTaskView } | { ok: false; error: string }> {
   return simpleTaskAction(await ctx.api.reportTeamTaskState(ctx.token, teamId, taskId, report), ctx, teamId);
 }

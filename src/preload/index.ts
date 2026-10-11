@@ -2459,7 +2459,7 @@ const workhome: WorkHomeApi = {
  *  and stays pending for the UI to accept. Every action requires a login; the
  *  main process is the authority (roles and permissions come from the backend). */
 export type TeamRole = "owner" | "admin" | "member";
-export type TeamSummaryInfo = { id: string; name: string; slug: string };
+export type TeamSummaryInfo = { id: string; name: string; slug: string; shareFilePaths: boolean };
 export type TeamMemberInfo = {
   accountId: string;
   role: TeamRole;
@@ -2562,12 +2562,40 @@ export type TeamTaskInfo = {
   archivedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  parentId: string | null;
+  changesUpdatedAt: string | null;
 };
 export type TeamTaskDependencyInfo = { id: string; shortId: number; title: string; state: TeamTaskState };
 export type TeamTaskEventInfo = { id: number; kind: string; actorId: string | null; actorName: string; payload: unknown; at: string | null };
 export type TeamTaskCommentInfo = { id: string; authorId: string | null; authorName: string; body: string; mentions: string[]; createdAt: string | null };
 export type TeamTaskClaimInfo = { id: string; accountId: string; accountName: string; status: string; createdAt: string | null };
 export type TeamTaskContractInfo = { version: number; markdown: string; authorId: string | null; createdAt: string | null };
+export type TeamFileChangeInfo = {
+  path: string;
+  status: "A" | "M" | "D" | "R";
+  additions: number;
+  deletions: number;
+  inTerritory: boolean;
+};
+export type TeamTaskChangesInfo = {
+  files: TeamFileChangeInfo[];
+  truncated: boolean;
+  totalFiles: number;
+  additions: number;
+  deletions: number;
+};
+export type TeamRoundReportInfo = {
+  id: string;
+  taskId: string;
+  round: number;
+  actorId: string | null;
+  role: "implementer" | "reviewer";
+  summary: { decisao: string; evidencia: string; oQueNaoFez: string };
+  gatesPassed: number | null;
+  gatesTotal: number | null;
+  verdict: "aprovado" | "reprovado" | null;
+  createdAt: string | null;
+};
 export type TeamTaskDetailInfo = {
   task: TeamTaskInfo;
   contract: TeamTaskContractInfo | null;
@@ -2577,6 +2605,8 @@ export type TeamTaskDetailInfo = {
   events: TeamTaskEventInfo[];
   comments: TeamTaskCommentInfo[];
   claims: TeamTaskClaimInfo[];
+  changes: TeamTaskChangesInfo;
+  reports: TeamRoundReportInfo[];
 };
 export type TeamSprintInfo = {
   id: string;
@@ -2653,11 +2683,16 @@ export type TeamApi = {
   archiveTask: (teamId: string, taskId: string) => Promise<TeamSimpleResult>;
   restoreTask: (teamId: string, taskId: string) => Promise<TeamTaskResult>;
   deleteTask: (teamId: string, taskId: string, confirm: string) => Promise<TeamSimpleResult>;
-  reportTaskState: (
+  reportTaskState: (teamId: string, taskId: string, report: Record<string, unknown>) => Promise<TeamTaskResult>;
+  createSubtasks: (
     teamId: string,
     taskId: string,
-    report: { state?: string; report_delivered?: boolean; gates_passed?: number; gates_total?: number; verdict?: string },
-  ) => Promise<TeamTaskResult>;
+    subtasks: Array<{ title: string; kind: string; priority?: string }>,
+  ) => Promise<{ ok: true; tasks: TeamTaskInfo[] } | { ok: false; error: string }>;
+  patchTeam: (
+    teamId: string,
+    body: { share_file_paths: boolean },
+  ) => Promise<{ ok: true; team: TeamSummaryInfo } | { ok: false; error: string }>;
   sprints: (teamId: string) => Promise<TeamSprintsResult>;
   queue: () => Promise<TeamQueueResult>;
   queueSync: () => Promise<TeamQueueSyncResult>;
@@ -2699,6 +2734,8 @@ const team: TeamApi = {
   restoreTask: (teamId, taskId) => ipcRenderer.invoke("team:task-restore", teamId, taskId),
   deleteTask: (teamId, taskId, confirm) => ipcRenderer.invoke("team:task-delete", teamId, taskId, confirm),
   reportTaskState: (teamId, taskId, report) => ipcRenderer.invoke("team:task-report", teamId, taskId, report),
+  createSubtasks: (teamId, taskId, subtasks) => ipcRenderer.invoke("team:task-subtasks", teamId, taskId, subtasks),
+  patchTeam: (teamId, body) => ipcRenderer.invoke("team:patch", teamId, body),
   sprints: (teamId) => ipcRenderer.invoke("team:sprints", teamId),
   queue: () => ipcRenderer.invoke("team:queue"),
   queueSync: () => ipcRenderer.invoke("team:queue-sync"),

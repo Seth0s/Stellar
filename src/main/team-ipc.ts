@@ -27,6 +27,8 @@ import {
   createAccountTeam,
   createTeamInvite,
   createTeamTaskOp,
+  createTeamSubtasksOp,
+  patchTeamOp,
   decideTeamClaimOp,
   deleteTeamTaskOp,
   fetchTeamDetail,
@@ -385,13 +387,32 @@ export function registerTeamIpc(deps: TeamIpcDeps): void {
     if (!built.ok) return { ok: false as const, error: built.error };
     if (typeof teamId !== "string" || typeof taskId !== "string") return { ok: false as const, error: "task inválida" };
     const r = rec(report);
-    return reportTeamTaskStateOp(built.ctx, teamId, taskId, {
-      ...(asStr(r.state) ? { state: asStr(r.state) as string } : {}),
-      ...(typeof r.report_delivered === "boolean" ? { report_delivered: r.report_delivered } : {}),
-      ...(typeof r.gates_passed === "number" ? { gates_passed: r.gates_passed } : {}),
-      ...(typeof r.gates_total === "number" ? { gates_total: r.gates_total } : {}),
-      ...(asStr(r.verdict) ? { verdict: asStr(r.verdict) as string } : {}),
-    });
+    return reportTeamTaskStateOp(built.ctx, teamId, taskId, r);
+  });
+
+  ipcMain.handle("team:task-subtasks", async (_e, teamId: unknown, taskId: unknown, subtasks: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof taskId !== "string" || !Array.isArray(subtasks)) {
+      return { ok: false as const, error: "task inválida" };
+    }
+    const items = subtasks
+      .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+      .map((item) => ({
+        title: typeof item.title === "string" ? item.title : "",
+        kind: typeof item.kind === "string" ? item.kind : "implementar",
+        ...(typeof item.priority === "string" ? { priority: item.priority } : {}),
+      }));
+    return createTeamSubtasksOp(built.ctx, teamId, taskId, items);
+  });
+
+  ipcMain.handle("team:patch", async (_e, teamId: unknown, body: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
+    const b = rec(body);
+    if (typeof b.share_file_paths !== "boolean") return { ok: false as const, error: "share_file_paths inválido" };
+    return patchTeamOp(built.ctx, teamId, b.share_file_paths);
   });
 
   ipcMain.handle("team:sprints", async (_e, teamId: unknown) => {

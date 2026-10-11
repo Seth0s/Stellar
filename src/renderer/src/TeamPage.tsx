@@ -373,10 +373,10 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
     });
   }
 
-  async function handleComment(task: TeamTaskInfo) {
+  async function handleComment(task: TeamTaskInfo, mentions: string[] = []) {
     if (!selected || !teamWritable || comment.trim() === "") return;
     await run(async () => {
-      const res = await window.team.commentTask(selected, task.id, comment.trim());
+      const res = await window.team.commentTask(selected, task.id, comment.trim(), mentions);
       if (!res.ok) {
         setError(res.error);
         return;
@@ -518,17 +518,49 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
           onReturn={(task) => void handleReturn(task)}
           onAccept={(task, boardId) => void handleAccept(task, boardId)}
           onComment={setComment}
-          onSendComment={() => {
-            if (selectedTask) void handleComment(selectedTask);
+          onSendComment={(mentions) => {
+            if (selectedTask) void handleComment(selectedTask, mentions);
           }}
           onCloseDetail={closeDetail}
           onEditTask={(task) => {
             setFormEditing(task);
             setFormOpen(true);
           }}
+          sprints={sprints}
+          shareFilePaths={team?.shareFilePaths ?? false}
+          onCreateSubtasks={(task, subtasks) =>
+            void run(async () => {
+              if (!selected) return;
+              const res = await window.team.createSubtasks(selected, task.id, subtasks);
+              if (!res.ok) setError(res.error);
+              else {
+                await loadTasks(selected);
+                await openTask(task);
+              }
+            })
+          }
+          onPatchSharePaths={(enabled) =>
+            void run(async () => {
+              if (!selected) return;
+              const res = await window.team.patchTeam(selected, { share_file_paths: enabled });
+              if (!res.ok) {
+                setError(res.error);
+                return;
+              }
+              setOverview((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      teams: prev.teams.map((x) => (x.id === selected ? { ...x, shareFilePaths: enabled } : x)),
+                    }
+                  : prev,
+              );
+            })
+          }
           onDuplicateTask={(task) =>
             void run(async () => {
               if (!selected) return;
+              const depIds = (taskDetail?.task.id === task.id ? taskDetail.deps : []).map((d) => d.id);
               const res = await window.team.createTask(selected, {
                 title: `${task.title} (cópia)`,
                 kind: task.kind,
@@ -540,6 +572,8 @@ export function TeamPage({ boards }: { boards: TeamRef[] }) {
                 max_retries: task.maxRetries,
                 ...(task.provider !== "" ? { provider: task.provider } : {}),
                 ...(task.reviewerId ? { reviewer_id: task.reviewerId } : {}),
+                ...(task.sprintId ? { sprint_id: task.sprintId } : {}),
+                ...(depIds.length > 0 ? { depends_on: depIds } : {}),
               });
               if (!res.ok) setError(res.error);
               else await loadTasks(selected);
@@ -986,6 +1020,10 @@ function TeamBoard({
   onAssign,
   onAutoDispatch,
   onUpdateFields,
+  sprints,
+  shareFilePaths,
+  onCreateSubtasks,
+  onPatchSharePaths,
 }: {
   tasks: TeamTaskInfo[];
   grouped: Record<TeamColumn, TeamTaskInfo[]>;
@@ -1016,7 +1054,7 @@ function TeamBoard({
   onReturn: (task: TeamTaskInfo) => void;
   onAccept: (task: TeamTaskInfo, boardId: string) => void;
   onComment: (v: string) => void;
-  onSendComment: () => void;
+  onSendComment: (mentions?: string[]) => void;
   onCloseDetail: () => void;
   onEditTask: (task: TeamTaskInfo) => void;
   onDuplicateTask: (task: TeamTaskInfo) => void;
@@ -1027,6 +1065,10 @@ function TeamBoard({
   onAssign: (task: TeamTaskInfo, body: { assignee_id?: string; session_label?: string; unassign?: boolean }) => void;
   onAutoDispatch: (task: TeamTaskInfo, enabled: boolean) => void;
   onUpdateFields: (task: TeamTaskInfo, body: Record<string, unknown>) => void;
+  sprints: TeamSprintInfo[];
+  shareFilePaths: boolean;
+  onCreateSubtasks: (task: TeamTaskInfo, subtasks: Array<{ title: string; kind: string; priority?: string }>) => void;
+  onPatchSharePaths: (enabled: boolean) => void;
 }) {
   const [dragTask, setDragTask] = useState<string | null>(null);
   const [panel, setPanel] = useState<"distribute" | "detail">(isAdmin ? "distribute" : "detail");
@@ -1260,10 +1302,12 @@ function TeamBoard({
               task={selected}
               detail={detail}
               members={members}
+              sprints={sprints}
               sprintName={sprintName}
               isAdmin={isAdmin}
               busy={busy}
               comment={comment}
+              shareFilePaths={shareFilePaths}
               onComment={onComment}
               onSend={onSendComment}
               onClose={onCloseDetail}
@@ -1274,6 +1318,10 @@ function TeamBoard({
               onPause={() => onPauseTask(selected)}
               onArchive={onArchive}
               onDelete={onDelete}
+              onAssign={(body) => onAssign(selected, body)}
+              onUpdateFields={(body) => onUpdateFields(selected, body)}
+              onCreateSubtasks={(subtasks) => onCreateSubtasks(selected, subtasks)}
+              onPatchSharePaths={onPatchSharePaths}
             />
           </aside>
         ) : (
@@ -1523,15 +1571,28 @@ function MemberAside({
 }
 
 type DetailTab = "activity" | "contract" | "gates" | "diff" | "reports";
+type ActionMode = null | "reassign" | "reviewer" | "sprint" | "subtasks";
+
+function mentionQueryAt(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const at = before.lastIndexOf("@");
+  if (at < 0) return null;
+  if (at > 0 && !/\s/.test(before[at - 1]!)) return null;
+  const query = before.slice(at + 1);
+  if (query.includes(" ") || query.includes("\n")) return null;
+  return { start: at, query };
+}
 
 function TaskInsight({
   task,
   detail,
   members,
+  sprints,
   sprintName,
   isAdmin,
   busy,
   comment,
+  shareFilePaths,
   onComment,
   onSend,
   onClose,
@@ -1542,16 +1603,22 @@ function TaskInsight({
   onDuplicate,
   onCopyLink,
   onPause,
+  onAssign,
+  onUpdateFields,
+  onCreateSubtasks,
+  onPatchSharePaths,
 }: {
   task: TeamTaskInfo;
   detail: TeamTaskDetailInfo | null;
   members: TeamMemberInfo[];
+  sprints: TeamSprintInfo[];
   sprintName: string;
   isAdmin: boolean;
   busy: boolean;
   comment: string;
+  shareFilePaths: boolean;
   onComment: (v: string) => void;
-  onSend: () => void;
+  onSend: (mentions?: string[]) => void;
   onClose: () => void;
   onBack?: () => void;
   onEdit?: () => void;
@@ -1560,12 +1627,36 @@ function TaskInsight({
   onDuplicate?: () => void;
   onCopyLink?: () => void;
   onPause?: () => void;
+  onAssign: (body: { assignee_id?: string; session_label?: string; unassign?: boolean }) => void;
+  onUpdateFields: (body: Record<string, unknown>) => void;
+  onCreateSubtasks: (subtasks: Array<{ title: string; kind: string; priority?: string }>) => void;
+  onPatchSharePaths: (enabled: boolean) => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("activity");
   const [menu, setMenu] = useState(false);
+  const [action, setAction] = useState<ActionMode>(null);
+  const [pickMember, setPickMember] = useState("");
+  const [pickSprint, setPickSprint] = useState(task.sprintId ?? "");
+  const [subtaskText, setSubtaskText] = useState("");
+  const [caret, setCaret] = useState(0);
+  const [mentionIds, setMentionIds] = useState<string[]>([]);
+  const [mentionIdx, setMentionIdx] = useState(0);
   const deps = detail?.deps ?? [];
+  const dependents = detail?.dependents ?? [];
+  const changes = detail?.changes;
+  const reports = detail?.reports ?? [];
   const gateCmd = (g: TeamTaskInfo["gates"][number]) => (typeof g === "string" ? g : g.cmd);
   const gateExclusive = (g: TeamTaskInfo["gates"][number]) => (typeof g === "string" ? false : g.exclusive !== undefined);
+  const reviewers = members.filter((m) => canReviewRole(m.role));
+  const mentionHit = mentionQueryAt(comment, caret);
+  const mentionMatches = mentionHit
+    ? members.filter((m) => {
+        const name = memberDisplayName(members, m.accountId).toLowerCase();
+        const q = mentionHit.query.toLowerCase();
+        return name.includes(q) || m.avatarInitials.toLowerCase().includes(q);
+      }).slice(0, 8)
+    : [];
+
   const tabs: { id: DetailTab; key: MessageKey }[] = [
     { id: "activity", key: "teamTask.detail.tab.activity" },
     { id: "contract", key: "teamTask.detail.tab.contract" },
@@ -1573,6 +1664,43 @@ function TaskInsight({
     { id: "diff", key: "teamTask.detail.tab.diff" },
     { id: "reports", key: "teamTask.detail.tab.reports" },
   ];
+
+  function openAction(mode: ActionMode) {
+    setMenu(false);
+    setAction(mode);
+    setPickMember(mode === "reviewer" ? (task.reviewerId ?? "") : (task.assigneeId ?? ""));
+    setPickSprint(task.sprintId ?? "");
+    setSubtaskText("");
+  }
+
+  function applyMention(member: TeamMemberInfo) {
+    if (!mentionHit) return;
+    const label = memberDisplayName(members, member.accountId);
+    const next = `${comment.slice(0, mentionHit.start)}@${label} ${comment.slice(caret)}`;
+    onComment(next);
+    setMentionIds((ids) => (ids.includes(member.accountId) ? ids : [...ids, member.accountId]));
+    setCaret(mentionHit.start + label.length + 2);
+    setMentionIdx(0);
+  }
+
+  function submitComment() {
+    onSend(mentionIds);
+    setMentionIds([]);
+  }
+
+  const depFoot =
+    deps.length > 0 || dependents.length > 0
+      ? [
+          deps.length > 0 ? t("teamTask.detail.deps", { deps: deps.map((d) => `#${d.shortId}`).join(", ") }) : "",
+          dependents.length > 0 ? t("teamTask.detail.blocks", { deps: dependents.map((d) => `#${d.shortId}`).join(", ") }) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : t("teamTask.detail.noDeps");
+
+  const allInTerritory = changes ? changes.files.length > 0 && changes.files.every((f) => f.inTerritory) : false;
+  const pathsHidden = Boolean(changes && changes.totalFiles > 0 && changes.files.length === 0 && !shareFilePaths);
+
   return (
     <div className={styles.detail}>
       <div className={styles.detailTop}>
@@ -1605,22 +1733,34 @@ function TaskInsight({
                     {t("teamTask.detail.action.editContract")}
                   </button>
                 ) : null}
+                <button type="button" className={styles.menuItem} role="menuitem" onClick={() => openAction("reassign")}>
+                  {t("teamTask.detail.action.reassign")}
+                </button>
+                <button type="button" className={styles.menuItem} role="menuitem" onClick={() => openAction("reviewer")}>
+                  {t("teamTask.detail.action.changeReviewer")}
+                </button>
+                <button type="button" className={styles.menuItem} role="menuitem" onClick={() => openAction("sprint")}>
+                  {t("teamTask.detail.action.moveSprint")}
+                </button>
                 {onDuplicate ? (
                   <button type="button" className={styles.menuItem} role="menuitem" onClick={() => { setMenu(false); onDuplicate(); }}>
                     {t("teamTask.detail.action.duplicate")}
                   </button>
                 ) : null}
+                <button type="button" className={styles.menuItem} role="menuitem" onClick={() => openAction("subtasks")}>
+                  {t("teamTask.detail.action.splitSubtasks")}
+                </button>
                 {onCopyLink ? (
                   <button type="button" className={styles.menuItem} role="menuitem" onClick={() => { setMenu(false); onCopyLink(); }}>
                     {t("teamTask.detail.action.copyLink")}
                   </button>
                 ) : null}
+                <div className={styles.menuSep} />
                 {onPause ? (
                   <button type="button" className={styles.menuItem} role="menuitem" onClick={() => { setMenu(false); onPause(); }}>
                     {t("teamTask.detail.action.pause")}
                   </button>
                 ) : null}
-                <div className={styles.menuSep} />
                 <button type="button" className={styles.menuItem} role="menuitem" data-part="task-archive" onClick={() => { setMenu(false); onArchive(); }}>
                   {t("teamTask.detail.archive")}
                 </button>
@@ -1649,6 +1789,93 @@ function TaskInsight({
         ) : null}
         <span>{t("teamTask.detail.createdBy")} <b>{memberDisplayName(members, task.createdBy)}</b></span>
       </div>
+
+      {action ? (
+        <div className={styles.actionPanel}>
+          {action === "reassign" || action === "reviewer" ? (
+            <>
+              <select className={styles.select} value={pickMember} onChange={(e) => setPickMember(e.target.value)} style={{ width: "100%" }}>
+                <option value="">{action === "reviewer" ? t("teamTask.distribute.reviewerNone") : t("teamTask.board.idle")}</option>
+                {(action === "reviewer" ? reviewers : members).map((m) => (
+                  <option key={m.accountId} value={m.accountId}>
+                    {memberDisplayName(members, m.accountId)}
+                  </option>
+                ))}
+              </select>
+              <div className={styles.rowEnd}>
+                <button type="button" className={styles.btn} onClick={() => setAction(null)}>{t("teamTask.detail.close")}</button>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary}`}
+                  disabled={busy}
+                  onClick={() => {
+                    if (action === "reassign") {
+                      if (pickMember) onAssign({ assignee_id: pickMember });
+                      else onAssign({ unassign: true });
+                    } else {
+                      onUpdateFields({ reviewer_id: pickMember || null });
+                    }
+                    setAction(null);
+                  }}
+                >
+                  {t("teamTask.detail.actionApply")}
+                </button>
+              </div>
+            </>
+          ) : null}
+          {action === "sprint" ? (
+            <>
+              <select className={styles.select} value={pickSprint} onChange={(e) => setPickSprint(e.target.value)} style={{ width: "100%" }}>
+                <option value="">{t("teamTask.detail.sprintNone")}</option>
+                {sprints.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <div className={styles.rowEnd}>
+                <button type="button" className={styles.btn} onClick={() => setAction(null)}>{t("teamTask.detail.close")}</button>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary}`}
+                  disabled={busy}
+                  onClick={() => {
+                    onUpdateFields({ sprint_id: pickSprint || null });
+                    setAction(null);
+                  }}
+                >
+                  {t("teamTask.detail.actionApply")}
+                </button>
+              </div>
+            </>
+          ) : null}
+          {action === "subtasks" ? (
+            <>
+              <div className={styles.fieldLabel}>{t("teamTask.detail.subtasksLabel")}</div>
+              <textarea className={styles.commentArea} value={subtaskText} onChange={(e) => setSubtaskText(e.target.value)} />
+              <div className={styles.rowEnd}>
+                <button type="button" className={styles.btn} onClick={() => setAction(null)}>{t("teamTask.detail.close")}</button>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary}`}
+                  disabled={busy || subtaskText.trim() === ""}
+                  onClick={() => {
+                    const lines = subtaskText
+                      .split("\n")
+                      .map((l) => l.trim())
+                      .filter(Boolean);
+                    if (lines.length === 0) return;
+                    onCreateSubtasks(lines.map((title) => ({ title, kind: task.kind, priority: task.priority })));
+                    setAction(null);
+                  }}
+                >
+                  {t("teamTask.detail.subtasksSubmit")}
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className={styles.tabs} role="tablist" aria-label={t("teamTask.detail.actions")}>
         {tabs.map((x) => (
@@ -1690,14 +1917,56 @@ function TaskInsight({
             </div>
             <div className={styles.field}>
               <div className={styles.fieldLabel}>{t("teamTask.detail.commentLabel")}</div>
-              <textarea
-                className={styles.commentArea}
-                placeholder={t("teamTask.detail.commentPlaceholder")}
-                value={comment}
-                onChange={(e) => onComment(e.target.value)}
-              />
+              <div className={styles.commentWrap}>
+                {mentionMatches.length > 0 ? (
+                  <div className={styles.mentionMenu} role="listbox">
+                    {mentionMatches.map((m, i) => (
+                      <button
+                        key={m.accountId}
+                        type="button"
+                        role="option"
+                        aria-selected={i === mentionIdx}
+                        className={`${styles.mentionItem}${i === mentionIdx ? ` ${styles.mentionItemOn}` : ""}`}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyMention(m);
+                        }}
+                      >
+                        @{memberDisplayName(members, m.accountId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <textarea
+                  className={styles.commentArea}
+                  placeholder={t("teamTask.detail.commentPlaceholder")}
+                  value={comment}
+                  onChange={(e) => {
+                    onComment(e.target.value);
+                    setCaret(e.target.selectionStart);
+                  }}
+                  onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart)}
+                  onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart)}
+                  onKeyDown={(e) => {
+                    if (mentionMatches.length === 0) return;
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setMentionIdx((i) => (i + 1) % mentionMatches.length);
+                    } else if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setMentionIdx((i) => (i - 1 + mentionMatches.length) % mentionMatches.length);
+                    } else if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      const m = mentionMatches[mentionIdx];
+                      if (m) applyMention(m);
+                    } else if (e.key === "Escape") {
+                      setCaret(0);
+                    }
+                  }}
+                />
+              </div>
               <div className={styles.rowEnd}>
-                <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={busy || comment.trim() === ""} onClick={onSend}>
+                <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={busy || comment.trim() === ""} onClick={submitComment}>
                   {t("teamTask.detail.commentSubmit")}
                 </button>
               </div>
@@ -1742,19 +2011,113 @@ function TaskInsight({
         ) : null}
 
         {tab === "diff" ? (
-          <div className={styles.placeholder}>
-            {t("teamTask.detail.diffHint")} · {t("teamTask.detail.diffEmpty")}
+          <div className={styles.diffTab}>
+            {isAdmin ? (
+              <label className={styles.sharePathsRow} data-part="share-file-paths">
+                <input
+                  className={styles.switch}
+                  type="checkbox"
+                  checked={shareFilePaths}
+                  disabled={busy}
+                  aria-label={t("teamTask.detail.sharePaths")}
+                  onChange={(e) => onPatchSharePaths(e.target.checked)}
+                />
+                <span className={styles.sharePathsText}>
+                  <span>{t("teamTask.detail.sharePaths")}</span>
+                  <span className={styles.sharePathsHint} data-part="share-file-paths-hint">
+                    {t("teamTask.detail.sharePathsHint")}
+                  </span>
+                </span>
+              </label>
+            ) : null}
+            {!changes || (changes.totalFiles === 0 && changes.files.length === 0) ? (
+              <div className={styles.placeholder}>
+                {t("teamTask.detail.diffHint")} · {t("teamTask.detail.diffEmpty")}
+              </div>
+            ) : (
+              <div className={styles.diffList}>
+                <div className={styles.diffSummary}>
+                  {t("teamTask.detail.diffHint")} ·{" "}
+                  {t("teamTask.detail.diffSummary", {
+                    n: String(changes.totalFiles),
+                    extra: allInTerritory ? t("teamTask.detail.diffInTerritory") : "",
+                  })}
+                  {` · +${changes.additions} / −${changes.deletions}`}
+                </div>
+                {pathsHidden ? <div className={styles.placeholder}>{t("teamTask.detail.diffPathsHidden")}</div> : null}
+                {changes.files.map((f) => (
+                  <div key={`${f.status}:${f.path}`} className={styles.diffFile} data-part="diff-file" data-status={f.status}>
+                    <span>
+                      {f.status} {f.path || "—"}
+                    </span>
+                    <span>
+                      {f.additions > 0 ? <span className={styles.diffAdd}>+{f.additions}</span> : null}{" "}
+                      {f.deletions > 0 ? <span className={styles.diffDel}>-{f.deletions}</span> : null}
+                    </span>
+                  </div>
+                ))}
+                {changes.truncated ? (
+                  <div className={styles.diffSummary}>
+                    {t("teamTask.detail.diffTruncated", { total: String(changes.totalFiles) })}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         ) : null}
-        {tab === "reports" ? <div className={styles.placeholder}>{t("teamTask.detail.reportsEmpty")}</div> : null}
+
+        {tab === "reports" ? (
+          reports.length === 0 ? (
+            <div className={styles.placeholder}>{t("teamTask.detail.reportsEmpty")}</div>
+          ) : (
+            <div className={styles.diffList} style={{ fontFamily: "inherit" }}>
+              {reports.map((r) => (
+                <div key={r.id} className={styles.reportCard}>
+                  <div className={styles.reportHead}>
+                    <span>
+                      {t("teamTask.detail.reportRound", {
+                        n: String(r.round),
+                        role: t(r.role === "reviewer" ? "teamTask.detail.reportRole.reviewer" : "teamTask.detail.reportRole.implementer"),
+                      })}
+                    </span>
+                    <span className={styles.headerSpacer} />
+                    {r.gatesTotal !== null ? (
+                      <span>{t("teamTask.detail.reportGates", { passed: String(r.gatesPassed ?? 0), total: String(r.gatesTotal) })}</span>
+                    ) : null}
+                    {r.verdict ? (
+                      <span>
+                        {t(r.verdict === "aprovado" ? "teamTask.detail.reportVerdict.aprovado" : "teamTask.detail.reportVerdict.reprovado")}
+                      </span>
+                    ) : null}
+                    <span>{ageLabel(r.createdAt)}</span>
+                  </div>
+                  {r.summary.decisao ? (
+                    <>
+                      <div className={styles.reportLabel}>{t("teamTask.detail.reportDecisao")}</div>
+                      <div>{r.summary.decisao}</div>
+                    </>
+                  ) : null}
+                  {r.summary.evidencia ? (
+                    <>
+                      <div className={styles.reportLabel}>{t("teamTask.detail.reportEvidencia")}</div>
+                      <div>{r.summary.evidencia}</div>
+                    </>
+                  ) : null}
+                  {r.summary.oQueNaoFez ? (
+                    <>
+                      <div className={styles.reportLabel}>{t("teamTask.detail.reportOQueNaoFez")}</div>
+                      <div>{r.summary.oQueNaoFez}</div>
+                    </>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )
+        ) : null}
       </div>
 
       <div className={styles.detailFoot}>
-        <span className={styles.muted}>
-          {deps.length > 0
-            ? t("teamTask.detail.deps", { deps: deps.map((d) => `#${d.shortId}`).join(", ") })
-            : t("teamTask.detail.noDeps")}
-        </span>
+        <span className={styles.muted}>{depFoot}</span>
         <span className={styles.headerSpacer} />
         <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled>
           {t("teamTask.detail.approve")}

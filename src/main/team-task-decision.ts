@@ -197,6 +197,8 @@ export type TeamTaskView = {
   archivedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  parentId: string | null;
+  changesUpdatedAt: string | null;
 };
 
 export type TeamTaskDependency = { id: string; shortId: number; title: string; state: TeamTaskState };
@@ -204,6 +206,32 @@ export type TeamTaskEvent = { id: number; kind: string; actorId: string | null; 
 export type TeamTaskComment = { id: string; authorId: string | null; authorName: string; body: string; mentions: string[]; createdAt: string | null };
 export type TeamTaskClaim = { id: string; accountId: string; accountName: string; status: string; createdAt: string | null };
 export type TeamTaskContract = { version: number; markdown: string; authorId: string | null; createdAt: string | null };
+export type TeamFileChange = {
+  path: string;
+  status: "A" | "M" | "D" | "R";
+  additions: number;
+  deletions: number;
+  inTerritory: boolean;
+};
+export type TeamTaskChanges = {
+  files: TeamFileChange[];
+  truncated: boolean;
+  totalFiles: number;
+  additions: number;
+  deletions: number;
+};
+export type TeamRoundReport = {
+  id: string;
+  taskId: string;
+  round: number;
+  actorId: string | null;
+  role: "implementer" | "reviewer";
+  summary: { decisao: string; evidencia: string; oQueNaoFez: string };
+  gatesPassed: number | null;
+  gatesTotal: number | null;
+  verdict: TeamTaskVerdict | null;
+  createdAt: string | null;
+};
 export type TeamTaskDetail = {
   task: TeamTaskView;
   contract: TeamTaskContract | null;
@@ -213,6 +241,8 @@ export type TeamTaskDetail = {
   events: TeamTaskEvent[];
   comments: TeamTaskComment[];
   claims: TeamTaskClaim[];
+  changes: TeamTaskChanges;
+  reports: TeamRoundReport[];
 };
 export type TeamTaskList = { tasks: TeamTaskView[]; total: number; limit: number; offset: number };
 
@@ -306,6 +336,8 @@ function parseTask(raw: unknown): TeamTaskView | null {
     archivedAt: asString(rec.archived_at),
     createdAt: asString(rec.created_at),
     updatedAt: asString(rec.updated_at),
+    parentId: isOpaqueId(rec.parent_id) ? rec.parent_id : null,
+    changesUpdatedAt: asString(rec.changes_updated_at),
   };
 }
 
@@ -406,7 +438,84 @@ export function parseTeamTaskDetail(raw: unknown): TeamTaskDetail | null {
       });
     }
   }
-  return { task, contract: parseContract(rec.contract), versions, deps, dependents, events, comments, claims };
+  const changes = parseChanges(rec.changes);
+  const reports: TeamRoundReport[] = [];
+  if (Array.isArray(rec.reports)) {
+    for (const item of rec.reports) {
+      const parsed = parseRoundReport(item);
+      if (parsed) reports.push(parsed);
+    }
+  }
+  return {
+    task,
+    contract: parseContract(rec.contract),
+    versions,
+    deps,
+    dependents,
+    events,
+    comments,
+    claims,
+    changes,
+    reports,
+  };
+}
+
+function parseChanges(raw: unknown): TeamTaskChanges {
+  const empty: TeamTaskChanges = { files: [], truncated: false, totalFiles: 0, additions: 0, deletions: 0 };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return empty;
+  const rec = raw as Record<string, unknown>;
+  const files: TeamFileChange[] = [];
+  if (Array.isArray(rec.files)) {
+    for (const item of rec.files) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+      const f = item as Record<string, unknown>;
+      if (typeof f.path !== "string" || f.path === "") continue;
+      const status = f.status === "A" || f.status === "M" || f.status === "D" || f.status === "R" ? f.status : "M";
+      files.push({
+        path: f.path,
+        status,
+        additions: asInt(f.additions) ?? 0,
+        deletions: asInt(f.deletions) ?? 0,
+        inTerritory: f.in_territory === true,
+      });
+    }
+  }
+  return {
+    files,
+    truncated: rec.truncated === true,
+    totalFiles: asInt(rec.total_files) ?? files.length,
+    additions: asInt(rec.additions) ?? 0,
+    deletions: asInt(rec.deletions) ?? 0,
+  };
+}
+
+function parseRoundReport(raw: unknown): TeamRoundReport | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (!isOpaqueId(rec.id) || !isOpaqueId(rec.task_id)) return null;
+  const round = asInt(rec.round);
+  if (round === null) return null;
+  const role = rec.role === "reviewer" ? "reviewer" : "implementer";
+  const summaryRaw =
+    typeof rec.summary === "object" && rec.summary !== null && !Array.isArray(rec.summary)
+      ? (rec.summary as Record<string, unknown>)
+      : {};
+  return {
+    id: rec.id,
+    taskId: rec.task_id,
+    round,
+    actorId: isOpaqueId(rec.actor_id) ? rec.actor_id : null,
+    role,
+    summary: {
+      decisao: typeof summaryRaw.decisao === "string" ? summaryRaw.decisao : "",
+      evidencia: typeof summaryRaw.evidencia === "string" ? summaryRaw.evidencia : "",
+      oQueNaoFez: typeof summaryRaw.o_que_nao_fez === "string" ? summaryRaw.o_que_nao_fez : "",
+    },
+    gatesPassed: asInt(rec.gates_passed),
+    gatesTotal: asInt(rec.gates_total),
+    verdict: isTeamVerdict(rec.verdict) ? rec.verdict : null,
+    createdAt: asString(rec.created_at),
+  };
 }
 
 export function parseTeamSprint(raw: unknown): TeamSprintView | null {

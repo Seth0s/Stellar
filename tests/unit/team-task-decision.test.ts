@@ -126,6 +126,51 @@ describe("team-task-decision: parsing", () => {
     expect(detail!.contract?.markdown).toBe("# contrato");
     expect(detail!.deps[0]?.shortId).toBe(40);
     expect(detail!.events[0]?.kind).toBe("created");
+    expect(detail!.changes).toEqual({ files: [], truncated: false, totalFiles: 0, additions: 0, deletions: 0 });
+    expect(detail!.reports).toEqual([]);
+  });
+
+  it("parses changes and round reports on the detail", () => {
+    const detail = parseTeamTaskDetail({
+      task: rawTask({ parent_id: UUID.s, changes_updated_at: "2026-10-11T12:00:00Z" }),
+      contract: null,
+      versions: [],
+      deps: [],
+      dependents: [],
+      events: [],
+      comments: [],
+      claims: [],
+      changes: {
+        files: [{ path: "src/queue/retry.ts", status: "M", additions: 48, deletions: 6, in_territory: true }],
+        truncated: false,
+        total_files: 1,
+        additions: 48,
+        deletions: 6,
+      },
+      reports: [
+        {
+          id: UUID.s,
+          task_id: UUID.a,
+          round: 1,
+          actor_id: UUID.b,
+          role: "implementer",
+          summary: { decisao: "ok", evidencia: "gates", o_que_nao_fez: "nada" },
+          gates_passed: 2,
+          gates_total: 2,
+          verdict: null,
+          created_at: "2026-10-11T12:01:00Z",
+        },
+      ],
+    });
+    expect(detail!.task.parentId).toBe(UUID.s);
+    expect(detail!.changes.files[0]).toMatchObject({ path: "src/queue/retry.ts", status: "M", additions: 48, inTerritory: true });
+    expect(detail!.reports[0]).toMatchObject({
+      round: 1,
+      role: "implementer",
+      summary: { decisao: "ok", evidencia: "gates", oQueNaoFez: "nada" },
+      gatesPassed: 2,
+      gatesTotal: 2,
+    });
   });
 
   it("parses sprints", () => {

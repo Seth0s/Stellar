@@ -195,7 +195,12 @@ describe("leitura do backend", () => {
       teams: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Acme", slug: "acme" }],
     });
     expect(view?.accountId).toBe("11111111-1111-4111-8111-111111111111");
-    expect(view?.teams[0]).toEqual({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Acme", slug: "acme" });
+    expect(view?.teams[0]).toEqual({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      name: "Acme",
+      slug: "acme",
+      shareFilePaths: false,
+    });
     expect(view?.profiles[0].teamId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     expect(view?.identitySubjects).toEqual(["42", "seth"]);
   });

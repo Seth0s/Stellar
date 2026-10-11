@@ -100,7 +100,7 @@ export function teamErrorMeansDetached(status: number, code: string): boolean {
 // Reading the backend replies
 // ---------------------------------------------------------------------------
 
-export type TeamSummary = { id: string; name: string; slug: string };
+export type TeamSummary = { id: string; name: string; slug: string; shareFilePaths: boolean };
 export type TeamMemberView = {
   accountId: string;
   role: TeamRole;
@@ -133,7 +133,12 @@ function parseTeamSummary(value: unknown): TeamSummary | null {
   const rec = value as Record<string, unknown>;
   if (!isOpaqueId(rec.id)) return null;
   if (typeof rec.name !== "string" || typeof rec.slug !== "string" || rec.slug === "") return null;
-  return { id: rec.id, name: rec.name, slug: rec.slug };
+  return {
+    id: rec.id,
+    name: rec.name,
+    slug: rec.slug,
+    shareFilePaths: rec.share_file_paths === true,
+  };
 }
 
 /**

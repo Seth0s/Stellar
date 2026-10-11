@@ -675,9 +675,43 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
       token: string,
       teamId: string,
       taskId: string,
-      report: { state?: string; report_delivered?: boolean; gates_passed?: number; gates_total?: number; verdict?: string },
+      report: Record<string, unknown>,
     ): Promise<ApiResult<TeamTaskView>> {
       return teamTaskAction(token, teamId, taskId, "report", report);
+    },
+
+    /** POST …/subtasks — owner/admin splits a task into children. */
+    async createTeamSubtasks(
+      token: string,
+      teamId: string,
+      taskId: string,
+      subtasks: Array<{ title: string; kind: string; priority?: string }>,
+    ): Promise<ApiResult<TeamTaskView[]>> {
+      const res = await request("POST", `/v1/teams/${encodeURIComponent(teamId)}/tasks/${encodeURIComponent(taskId)}/subtasks`, {
+        token,
+        body: { subtasks },
+      });
+      if (!res.ok) return res;
+      const list = parseTeamTaskList(res.value);
+      return { ok: true, value: list?.tasks ?? [] };
+    },
+
+    /** PATCH /v1/teams/{id} — owner/admin settings (share_file_paths). */
+    async patchTeam(
+      token: string,
+      teamId: string,
+      body: { share_file_paths: boolean },
+    ): Promise<ApiResult<{ id: string; name: string; slug: string; shareFilePaths: boolean }>> {
+      const res = await request("PATCH", `/v1/teams/${encodeURIComponent(teamId)}`, { token, body });
+      if (!res.ok) return res;
+      const rec = (res.value ?? {}) as Record<string, unknown>;
+      if (typeof rec.id !== "string" || typeof rec.name !== "string" || typeof rec.slug !== "string") {
+        return { ok: false, error: { status: 0, code: "invalid_response", message: "patch team response incomplete" } };
+      }
+      return {
+        ok: true,
+        value: { id: rec.id, name: rec.name, slug: rec.slug, shareFilePaths: rec.share_file_paths === true },
+      };
     },
 
     // ---- TEAM SPRINTS -------------------------------------------------------

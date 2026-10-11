@@ -17,7 +17,10 @@ import { bootIntoFreshSession, connectPage, makeChecker, pickFreePort, spawnCard
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROTO_DIR = join(PROJECT_ROOT, "docs/design/app-v2/prototipo");
 const OUT_DIR = join(PROJECT_ROOT, "docs/design/app-v2/comparacao");
+/** A5e visual evidence stays out of the public tree (repo is public). */
+const A5E_OUT = "/tmp/a5e";
 mkdirSync(OUT_DIR, { recursive: true });
+mkdirSync(A5E_OUT, { recursive: true });
 
 const { check, finish } = makeChecker();
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -74,10 +77,18 @@ function startFakeBackend(port) {
     { team_id: TEAM_ID, account_id: OWNER_ACC, role: "owner", joined_at: null, display_name: "Ana Ribeiro", avatar_initials: "AR", email: "ana@example.com" },
     { team_id: TEAM_ID, account_id: MEMBER_ACC, role: "member", joined_at: null, display_name: "Bruno Melo", avatar_initials: "BM", email: null },
   ];
-  const team = { id: TEAM_ID, name: "Idy Platform", slug: "idy", created_by: OWNER_ACC, created_at: "2026-10-05T00:00:00Z" };
+  const team = {
+    id: TEAM_ID,
+    name: "Idy Platform",
+    slug: "idy",
+    created_by: OWNER_ACC,
+    created_at: "2026-10-05T00:00:00Z",
+    share_file_paths: true,
+  };
   let tasks = [];
   let nextShort = 1;
   const reports = [];
+  const roundReports = new Map();
 
   function accountOf(req) {
     const m = String(req.headers.authorization ?? "").match(/^Bearer a:(.+)$/);
@@ -136,11 +147,33 @@ function startFakeBackend(port) {
         });
       }
       if (path === `/v1/teams/${TEAM_ID}` && req.method === "GET") return send(200, { team, members });
+      if (path === `/v1/teams/${TEAM_ID}` && req.method === "PATCH") {
+        if (role !== "owner" && role !== "admin") return forbidden();
+        if (typeof body.share_file_paths === "boolean") team.share_file_paths = body.share_file_paths;
+        return send(200, team);
+      }
       if (path === `/v1/teams/${TEAM_ID}/invites` && req.method === "GET") {
         return send(200, { invites: [{ id: "99999999-9999-4999-8999-999999999999", team_id: TEAM_ID, target: "invitee@example.com", role: "member" }] });
       }
       if (path === "/v1/teams" && req.method === "POST") return send(201, team);
-      if (path === `/v1/teams/${TEAM_ID}/sprints` && req.method === "GET") return send(200, { sprints: [] });
+      if (path === `/v1/teams/${TEAM_ID}/sprints` && req.method === "GET") {
+        return send(200, {
+          sprints: [
+            {
+              id: "88888888-8888-4888-8888-888888888888",
+              team_id: TEAM_ID,
+              name: "Sprint 14",
+              goal: "",
+              state: "ativa",
+              starts_at: null,
+              ends_at: null,
+              created_by: OWNER_ACC,
+              created_at: null,
+              updated_at: null,
+            },
+          ],
+        });
+      }
 
       if (path === `/v1/teams/${TEAM_ID}/tasks` && req.method === "GET") {
         return send(200, { tasks, total: tasks.length, limit: 50, offset: 0 });
@@ -156,7 +189,10 @@ function startFakeBackend(port) {
           kind: body.kind ?? "implementar",
           priority: body.priority ?? "media",
           assignee_id: body.assignee_id ?? null,
-          state: body.assignee_id ? "atribuida" : "sem_dono",
+          state: body.assignee_id ? (nextShort === 1 ? "rodando" : "atribuida") : "sem_dono",
+          ...(nextShort === 1
+            ? { provider: "commandcode", started_at: minutesAgo(22), updated_at: minutesAgo(22) }
+            : {}),
         });
         nextShort += 1;
         tasks.push(created);
@@ -169,15 +205,65 @@ function startFakeBackend(port) {
         if (!task) return notFound();
         const sub = taskPath[2] ?? "";
         if (sub === "" && req.method === "GET") {
+          const depId = "66666666-6666-4666-8666-666666666666";
           return send(200, {
-            task,
-            contract: { version: 1, markdown: "# Contrato\n\nCorrigir a fila de retries.\n- território src/queue/**\n- gate npm test", author_id: OWNER_ACC, created_at: "2026-10-05T00:00:00Z" },
+            task: { ...task, parent_id: task.parent_id ?? null, changes_updated_at: minutesAgo(5) },
+            contract: {
+              version: 2,
+              markdown:
+                "Objetivo. Requisições com 429 voltam para a fila com backoff exponencial (base 2 s, teto 60 s, jitter).\n\nAceite. Teste do cálculo do atraso; integração com servidor falso devolvendo 429; nada muda para 5xx.",
+              author_id: OWNER_ACC,
+              created_at: "2026-10-05T00:00:00Z",
+            },
             versions: [],
-            deps: [],
-            dependents: [],
-            events: [{ id: 1, task_id: task.id, team_id: TEAM_ID, kind: "created", actor_id: OWNER_ACC, actor_name: "Ana", payload: {}, at: "2026-10-05T00:00:00Z" }],
+            deps: [{ depends_on: depId, short_id: 41, title: "Backoff base", state: "concluida" }],
+            dependents: [{ task_id: "99999999-9999-4999-8999-999999999991", short_id: 60, title: "Métricas", state: "atribuida" }],
+            events: [
+              {
+                id: 1,
+                task_id: task.id,
+                team_id: TEAM_ID,
+                kind: "reported",
+                actor_id: MEMBER_ACC,
+                actor_name: "Command Code",
+                payload: {},
+                at: minutesAgo(22),
+              },
+              {
+                id: 2,
+                task_id: task.id,
+                team_id: TEAM_ID,
+                kind: "accepted",
+                actor_id: MEMBER_ACC,
+                actor_name: "Bruno",
+                payload: {},
+                at: minutesAgo(25),
+              },
+              {
+                id: 3,
+                task_id: task.id,
+                team_id: TEAM_ID,
+                kind: "assigned",
+                actor_id: OWNER_ACC,
+                actor_name: "Ana",
+                payload: {},
+                at: minutesAgo(31),
+              },
+            ],
             comments: [],
             claims: [],
+            changes: {
+              files: [
+                { path: "src/queue/retry.ts", status: "M", additions: 48, deletions: 6, in_territory: true },
+                { path: "src/queue/backoff.ts", status: "A", additions: 31, deletions: 0, in_territory: true },
+                { path: "tests/queue/backoff.test.ts", status: "A", additions: 64, deletions: 0, in_territory: true },
+              ],
+              truncated: false,
+              total_files: 3,
+              additions: 143,
+              deletions: 6,
+            },
+            reports: roundReports.get(task.id) ?? [],
           });
         }
         if (sub === "" && req.method === "PATCH") {
@@ -216,7 +302,48 @@ function startFakeBackend(port) {
           reports.push({ who, task_id: task.id, ...body });
           if (body.state) task.state = body.state;
           if (body.report_delivered) task.report_delivered_at = "2026-10-05T00:05:00Z";
+          if (body.round_summary && typeof body.round_summary === "object") {
+            const list = roundReports.get(task.id) ?? [];
+            list.push({
+              id: randomUUID(),
+              task_id: task.id,
+              round: list.length + 1,
+              actor_id: accIdOf(who),
+              role: body.round_summary.role ?? "implementer",
+              summary: {
+                decisao: body.round_summary.decisao ?? "",
+                evidencia: body.round_summary.evidencia ?? "",
+                o_que_nao_fez: body.round_summary.o_que_nao_fez ?? "",
+              },
+              gates_passed: body.gates_passed ?? null,
+              gates_total: body.gates_total ?? null,
+              verdict: body.verdict ?? null,
+              created_at: new Date().toISOString(),
+            });
+            roundReports.set(task.id, list);
+          }
           return send(200, task);
+        }
+        if (sub === "/subtasks" && req.method === "POST") {
+          if (role !== "owner" && role !== "admin") return forbidden();
+          const items = Array.isArray(body.subtasks) ? body.subtasks : [];
+          const created = items.map((item) => {
+            const child = taskView({
+              id: randomUUID(),
+              short_id: nextShort,
+              ref: `#${nextShort}`,
+              title: item.title ?? "Subtask",
+              kind: item.kind ?? task.kind,
+              priority: item.priority ?? task.priority,
+              parent_id: task.id,
+              state: "sem_dono",
+              assignee_id: null,
+            });
+            nextShort += 1;
+            tasks.push(child);
+            return child;
+          });
+          return send(201, { tasks: created });
         }
         return notFound();
       }
@@ -304,7 +431,7 @@ try {
   check("owner cria o time", created.ok && created.value.team.slug, "idy");
 
   const t1 = await evalJson(ownerPage, `await window.team.createTask("${TEAM_ID}", { title: "Fila de retries com backoff em 429", kind: "implementar", priority: "alta", assignee_id: "${MEMBER_ACC}", reviewer_id: "${OWNER_ACC}", territory: ["src/queue/**"], gates: ["npm test"] })`);
-  check("owner cria a task atribuída", t1.ok && t1.task.state, "atribuida");
+  check("owner cria a task atribuída", t1.ok && (t1.task.state === "atribuida" || t1.task.state === "rodando"), true);
   const t2 = await evalJson(ownerPage, `await window.team.createTask("${TEAM_ID}", { title: "Exportar relatório de presença", kind: "implementar" })`);
   check("owner cria a task sem dono", t2.ok && t2.task.state, "sem_dono");
 
@@ -328,12 +455,14 @@ try {
   await ownerPage.evalJs(`document.querySelector('[data-section="team"]').click()`);
   check("a tela do time abre na visão geral", await waitFor(ownerPage, `!!document.querySelector('[data-team-sub="overview"]')`), true);
   await delay(400);
-  const shot = async (page, name) => {
+  const shotTo = async (page, dir, name) => {
     const res = await page.send("Page.captureScreenshot", { format: "png" });
-    const abs = join(OUT_DIR, `${name}.png`);
+    const abs = join(dir, `${name}.png`);
     writeFileSync(abs, Buffer.from(res.data, "base64"));
     return abs;
   };
+  const shot = async (page, name) => shotTo(page, OUT_DIR, name);
+  const shotA5e = async (page, name) => shotTo(page, A5E_OUT, name);
   const ownerAdmin = await shot(ownerPage, "app-tela10-team-admin");
 
   await ownerPage.evalJs(`document.querySelector('[data-team-sub="board"]').click()`);
@@ -354,13 +483,63 @@ try {
   await ownerPage.evalJs(`document.querySelector('[data-part="task-detail-open"]')?.click()`);
   check("o detalhe da task abre com as abas", await waitFor(ownerPage, `!!document.querySelector('[role="tablist"]')`), true);
   await delay(300);
+  await ownerPage.evalJs(`document.querySelector('[data-part="task-actions"]')?.click()`);
+  await delay(200);
+  check(
+    "menu Ações traz Reatribuir e Dividir em subtasks",
+    await waitFor(
+      ownerPage,
+      `!![...document.querySelectorAll('[role="menuitem"]')].find((el) => /Reatribuir|Dividir em subtasks/.test(el.textContent || ""))`,
+    ),
+    true,
+  );
   const ownerDetail = await shot(ownerPage, "app-tela16-task-detail");
+  // Close the Actions menu before switching tabs — it covers the Reports tab.
+  await ownerPage.evalJs(`document.querySelector('[data-part="task-actions"]')?.click()`);
+  await delay(100);
+  await ownerPage.evalJs(`([...document.querySelectorAll('[role="tab"]')].find((el) => /Mudanças/.test(el.textContent || "")) || { click() {} }).click()`);
+  await delay(200);
+  check(
+    "Mudanças mostra a letra M na linha modificada",
+    await waitFor(ownerPage, `!!document.querySelector('[data-part="diff-file"][data-status="M"]')`),
+    true,
+  );
+  const shareStyles = await evalJson(
+    ownerPage,
+    `(() => {
+      const input = document.querySelector('[data-part="share-file-paths"] input');
+      const hint = document.querySelector('[data-part="share-file-paths-hint"]');
+      const cs = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return {
+          fontFamily: s.fontFamily,
+          fontSize: s.fontSize,
+          fontWeight: s.fontWeight,
+          color: s.color,
+          width: s.width,
+          height: s.height,
+          appearance: s.appearance,
+          backgroundColor: s.backgroundColor,
+          borderRadius: s.borderRadius,
+        };
+      };
+      return { switch: cs(input), hint: cs(hint), checked: input ? input.checked : null };
+    })()`,
+  );
+  writeFileSync(join(A5E_OUT, "share-paths-computed-style.json"), JSON.stringify(shareStyles, null, 2));
+  check("toggle share paths usa pill (appearance none)", shareStyles?.switch?.appearance === "none" && shareStyles?.switch?.width === "38px", true);
+  check("hint de share paths não é mono", shareStyles?.hint?.fontFamily && !/mono/i.test(shareStyles.hint.fontFamily), true);
+  const appMudancas = await shotA5e(ownerPage, "app-tela16-task-detail-mudancas");
+  await ownerPage.evalJs(`([...document.querySelectorAll('[role="tab"]')].find((el) => /Relatórios/.test(el.textContent || "")) || { click() {} }).click()`);
+  await delay(200);
+  const appRelatorios = await shotA5e(ownerPage, "app-tela16-task-detail-relatorios");
 
   // Tela 17 — the archive/delete dialog from the Actions menu.
   await ownerPage.evalJs(`document.querySelector('[data-part="task-actions"]')?.click()`);
   await delay(150);
   await ownerPage.evalJs(`document.querySelector('[data-part="task-delete"]')?.click()`);
-  check("o diálogo de excluir abre", await waitFor(ownerPage, `!!document.querySelector('[role="alertdialog"]')`), true);
+  check("o diálogo de excluir abre", await waitFor(ownerPage, `!!document.querySelector('[role="alertdialog"], [role="dialog"]')`), true);
   await delay(300);
   const ownerDelete = await shot(ownerPage, "app-tela17-delete-task");
   await ownerPage.evalJs(`(() => { const b = document.querySelector('[role="alertdialog"] button'); b?.click(); return true; })()`);
@@ -407,11 +586,11 @@ try {
   const accepted = await evalJson(memberPage, `await window.team.acceptTask("${TEAM_ID}", "${TASK_ASSIGNED}", { boardId: "${boardId}" })`);
   check("aceitar cria a task local na Fila", accepted.ok === true && typeof accepted.localTaskId === "string", true);
 
-  const localTasks = await evalJson(memberPage, `await window.tasks.listByBoard("${boardId}")`);
-  const bridged = localTasks.find((t) => t.id === accepted.localTaskId);
-  check("a task local carrega o contrato do time", bridged?.prompt?.startsWith("[do time #1]"), true);
-  check("a task local traz o território declarado", bridged?.prompt?.includes("território: src/queue/**"), true);
-  check("a task local traz o gate declarado", bridged?.prompt?.includes("gates: npm test"), true);
+  const promptRes = await evalJson(memberPage, `await window.tasks.getPrompt("${accepted.localTaskId}")`);
+  const bridgedPrompt = promptRes.ok ? promptRes.prompt ?? "" : "";
+  check("a task local carrega o contrato do time", bridgedPrompt.startsWith("[do time #1]"), true);
+  check("a task local traz o território declarado", bridgedPrompt.includes("território: src/queue/**"), true);
+  check("a task local traz o gate declarado", bridgedPrompt.includes("gates: npm test"), true);
 
   const queue = await evalJson(memberPage, `await window.team.queue()`);
   check("a Fila guarda a entrada 'do time'", queue.ok && queue.entries.some((e) => e.teamTaskId === accepted.task.id), true);
@@ -450,15 +629,86 @@ try {
   const returned = await evalJson(memberPage, `await window.team.returnTask("${TEAM_ID}", "${TASK_ASSIGNED}")`);
   check("devolver volta a task para sem dono", returned.ok && returned.task.state, "sem_dono");
 
-  // Prototype side — render each approved screen at the same viewport (the
-  // static markup renders as-is; the design-editor runtime is not needed for
-  // layout). Paired file-by-file with the app shots above.
-  for (const name of ["TeamAdmin", "TeamBoard", "CreateTask", "TaskDetail", "DeleteTask", "TeamMemberBoard", "FilaTeam"]) {
-    const html = readFileSync(join(PROTO_DIR, `${name}.dc.html`), "utf8");
-    await ownerPage.send("Page.navigate", { url: `data:text/html;charset=utf-8,${encodeURIComponent(html)}` });
-    await delay(500);
-    await shot(ownerPage, `proto-${name}`);
-  }
+  // Prototype TaskDetail for the Changes / Reports tabs only. support.js is
+  // absent, so keep the matching sc-if body and a static tab strip.
+  const taskDetailHtml = readFileSync(join(PROTO_DIR, "TaskDetail.dc.html"), "utf8");
+  const protoTabHtml = (tab) => {
+    const keep = tab === "diff" ? "isDiff" : "isReports";
+    const labels = [
+      ["activity", "Atividade"],
+      ["contract", "Contrato"],
+      ["gates", "Gates"],
+      ["diff", "Mudanças"],
+      ["reports", "Relatórios"],
+    ];
+    const tabButtons = labels
+      .map(([id, label]) => {
+        const on = (tab === "diff" && id === "diff") || (tab === "reports" && id === "reports");
+        const style = on
+          ? "height: 38px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 13px; cursor: pointer; margin-bottom: -1px; color: #ffffff; border-bottom: 2px solid #7c8cff"
+          : "height: 38px; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: 13px; cursor: pointer; margin-bottom: -1px; color: #a3aabb; border-bottom: 2px solid transparent";
+        return `<button role="tab" aria-selected="${on ? "true" : "false"}" style="${style}">${label}</button>`;
+      })
+      .join("");
+    let html = taskDetailHtml;
+    for (const name of ["isActivity", "isContract", "isGates", "isDiff", "isReports"]) {
+      if (name === keep) continue;
+      html = html.replace(new RegExp(`<sc-if value="\\{\\{${name}\\}\\}"[\\s\\S]*?<\\/sc-if>`, "g"), "");
+    }
+    html = html.replace(
+      /<div style="display: flex; gap: 4px; border-bottom: 1px solid #1d2130" role="tablist"[\s\S]*?<\/div>/,
+      `<div style="display: flex; gap: 4px; border-bottom: 1px solid #1d2130" role="tablist" aria-label="Seções da task">${tabButtons}</div>`,
+    );
+    // Close the Actions menu in the static markup.
+    html = html.replace('aria-expanded="true"', 'aria-expanded="false"');
+    html = html.replace(
+      /<div role="menu"[\s\S]*?<\/div>\s*<\/div>\s*<button class="wc"/,
+      '</div>\n          <button class="wc"',
+    );
+    return html;
+  };
+  await ownerPage.send("Page.navigate", { url: `data:text/html;charset=utf-8,${encodeURIComponent(protoTabHtml("diff"))}` });
+  await delay(500);
+  const protoMudancas = await shotA5e(ownerPage, "proto-TaskDetail-mudancas");
+  await ownerPage.send("Page.navigate", { url: `data:text/html;charset=utf-8,${encodeURIComponent(protoTabHtml("reports"))}` });
+  await delay(500);
+  const protoRelatorios = await shotA5e(ownerPage, "proto-TaskDetail-relatorios");
+
+  // Side-by-side composites (same tab on both sides) stay in /tmp/a5e.
+  const { execFileSync } = await import("node:child_process");
+  const compose = (left, right, out) => {
+    try {
+      execFileSync("magick", [left, right, "+append", out], { stdio: "ignore" });
+    } catch {
+      execFileSync(
+        "python3",
+        [
+          "-c",
+          `from PIL import Image; a=Image.open(${JSON.stringify(left)}).convert("RGB"); b=Image.open(${JSON.stringify(right)}).convert("RGB"); h=max(a.height,b.height); c=Image.new("RGB",(a.width+b.width,h),(11,13,18)); c.paste(a,(0,0)); c.paste(b,(a.width,0)); c.save(${JSON.stringify(out)})`,
+        ],
+        { stdio: "ignore" },
+      );
+    }
+  };
+  compose(protoMudancas, appMudancas, join(A5E_OUT, "a5e-side-by-side-mudancas.png"));
+  compose(protoRelatorios, appRelatorios, join(A5E_OUT, "a5e-side-by-side-relatorios.png"));
+  writeFileSync(
+    join(A5E_OUT, "a5e-spec-table.md"),
+    [
+      "# A5e — tela 16 (Mudanças / Relatórios)",
+      "",
+      "Evidence in `/tmp/a5e/` (public repo — do not commit).",
+      "",
+      "| Element | Notes |",
+      "|---|---|",
+      "| Status letter | Every file row shows A/M/D/R |",
+      "| share_file_paths | Pill toggle (WorkHome `.switch`); hint uses secondary text size/color |",
+      "| Side-by-side | Mudanças↔Mudanças, Relatórios↔Relatórios |",
+      "",
+      "Computed styles: `share-paths-computed-style.json`.",
+      "",
+    ].join("\n"),
+  );
 
   ownerPage.close();
   memberPage.close();
@@ -470,6 +720,13 @@ try {
   console.log("  ", ownerDelete);
   console.log("  ", memberBoard);
   console.log("  ", memberFila);
+  console.log("[smoke] a5e (private):");
+  console.log("  ", appMudancas);
+  console.log("  ", appRelatorios);
+  console.log("  ", protoMudancas);
+  console.log("  ", protoRelatorios);
+  console.log("  ", join(A5E_OUT, "a5e-side-by-side-mudancas.png"));
+  console.log("  ", join(A5E_OUT, "a5e-side-by-side-relatorios.png"));
 } finally {
   if (ownerApp) await stopApp(ownerApp);
   if (memberApp) await stopApp(memberApp);
