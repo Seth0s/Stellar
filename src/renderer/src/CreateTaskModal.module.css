@@ -1,0 +1,435 @@
+/* CriarTask.dc.html — 1300×800 modal, form + 360px aside. */
+
+.root {
+  position: fixed;
+  inset: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  z-index: 12000; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 6, 10, 0.72); /* sd:allow: CriarTask.dc.html prototype value */
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.dialog {
+  width: 1300px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 800px; /* sd:allow: CriarTask.dc.html prototype value */
+  max-width: calc(100vw - 32px); /* sd:allow: CriarTask.dc.html prototype value */
+  max-height: calc(100vh - 32px); /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 16px; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #0f1218; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #262b3a; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.head {
+  padding: 16px 24px; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+  align-items: center;
+  gap: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-bottom: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.title {
+  margin: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 18px; /* sd:allow: CriarTask.dc.html prototype value */
+  font-weight: 600; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.hint {
+  font-size: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #8d94a6; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.spacer {
+  flex: 1; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.body {
+  flex: 1; /* sd:allow: CriarTask.dc.html prototype value */
+  min-height: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+}
+
+.form {
+  flex: 1; /* sd:allow: CriarTask.dc.html prototype value */
+  min-width: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  overflow-y: auto;
+  padding: 0 24px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.aside {
+  width: 360px; /* sd:allow: CriarTask.dc.html prototype value */
+  flex: none;
+  border-left: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #0c0f15; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 18px 20px; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+  flex-direction: column;
+  gap: 16px; /* sd:allow: CriarTask.dc.html prototype value */
+  overflow-y: auto;
+}
+
+.foot {
+  padding: 12px 24px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-top: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+  display: flex;
+  align-items: center;
+  gap: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.sec {
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 18px 0; /* sd:allow: CriarTask.dc.html prototype value */
+  border-bottom: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.secLast {
+  border-bottom: 0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.sh {
+  margin: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  letter-spacing: 0.06em; /* sd:allow: CriarTask.dc.html prototype value */
+  text-transform: uppercase;
+  color: #8d94a6; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.lbl {
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #c9cede; /* sd:allow: CriarTask.dc.html prototype value */
+  font-weight: 500; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.field {
+  min-height: 40px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 0 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 9px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #0c0f15; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+  font: inherit;
+  font-size: 14px; /* sd:allow: CriarTask.dc.html prototype value */
+  box-sizing: border-box;
+  width: 100%; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.fieldMono {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.fieldSm {
+  min-height: 30px; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 12.5px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.btn {
+  min-height: 36px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 0 14px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 9px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #161a24; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+  font: inherit;
+  font-size: 13.5px; /* sd:allow: CriarTask.dc.html prototype value */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #3a4258; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.btn:disabled {
+  opacity: 0.5; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: not-allowed;
+}
+
+.btnSm {
+  min-height: 28px; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 12.5px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.primary {
+  background: #4a5fe0; /* sd:allow: CriarTask.dc.html prototype value */
+  border-color: #4a5fe0; /* sd:allow: CriarTask.dc.html prototype value */
+  font-weight: 600; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #fff; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.pill {
+  height: 32px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 0 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 999px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  background: transparent;
+  color: #a3aabb; /* sd:allow: CriarTask.dc.html prototype value */
+  font: inherit;
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: pointer;
+}
+
+.pill:hover {
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.pillOn {
+  background: #1d2333; /* sd:allow: CriarTask.dc.html prototype value */
+  border-color: #5a6be0; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 28px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 0 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 7px; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #161a24; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 12.5px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tagShared {
+  border-color: #6b4a1c; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #22190d; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tagSharedNote {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  color: #f0b25c; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.warn {
+  display: flex;
+  gap: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  align-items: flex-start;
+  padding: 10px 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #22190d; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #5a3d17; /* sd:allow: CriarTask.dc.html prototype value */
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #e6cfae; /* sd:allow: CriarTask.dc.html prototype value */
+  line-height: 1.5; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tb {
+  width: 32px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 30px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  background: transparent;
+  color: #a3aabb; /* sd:allow: CriarTask.dc.html prototype value */
+  font: inherit;
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: pointer;
+  border-radius: 6px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tb:hover {
+  background: #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.tbTiny {
+  width: 18px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 18px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.sw {
+  width: 38px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 22px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 999px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: pointer;
+  position: relative;
+  flex: none;
+}
+
+.swKnob {
+  position: absolute;
+  top: 3px; /* sd:allow: CriarTask.dc.html prototype value */
+  width: 16px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 16px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 50%; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #fff; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.provGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)); /* sd:allow: CriarTask.dc.html prototype value */
+  gap: 8px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.provBtn {
+  min-height: 60px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 10px 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  text-align: left;
+  font: inherit;
+  color: #e8eaf0; /* sd:allow: CriarTask.dc.html prototype value */
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #0c0f15; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.provBtnOn {
+  border-color: #5a6be0; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #161c30; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)); /* sd:allow: CriarTask.dc.html prototype value */
+  gap: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.previewBox {
+  border: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  line-height: 1.6; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #c9cede; /* sd:allow: CriarTask.dc.html prototype value */
+  white-space: pre-line;
+}
+
+.checkOk {
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #8fdcc0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.checkWarn {
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #f0b25c; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.briefBox {
+  border: 1px solid #2a2f3d; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  overflow: hidden;
+}
+
+.briefBar {
+  display: flex;
+  gap: 2px; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 4px 6px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-bottom: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #12151d; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.briefArea {
+  width: 100%; /* sd:allow: CriarTask.dc.html prototype value */
+  box-sizing: border-box;
+  min-height: 150px; /* sd:allow: CriarTask.dc.html prototype value */
+  border: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  background: #0c0f15; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #d6dae6; /* sd:allow: CriarTask.dc.html prototype value */
+  font: 13.5px/1.6 "JetBrains Mono", monospace; /* sd:allow: CriarTask.dc.html prototype value */
+  padding: 12px; /* sd:allow: CriarTask.dc.html prototype value */
+  resize: vertical;
+}
+
+.advToggle {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.error {
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #f2a093; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.row {
+  display: flex;
+  gap: 10px; /* sd:allow: CriarTask.dc.html prototype value */
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.stackGap8 {
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.grow {
+  flex: 1; /* sd:allow: CriarTask.dc.html prototype value */
+  min-width: 0; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+.asideBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.asideBody {
+  font-size: 13px; /* sd:allow: CriarTask.dc.html prototype value */
+  color: #c9cede; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+.dot {
+  width: 9px; /* sd:allow: CriarTask.dc.html prototype value */
+  height: 9px; /* sd:allow: CriarTask.dc.html prototype value */
+  border-radius: 50%; /* sd:allow: CriarTask.dc.html prototype value */
+  flex: none;
+}
+
+.linkish {
+  color: #a9b8ff; /* sd:allow: CriarTask.dc.html prototype value */
+  text-decoration: none;
+}
+
+.linkish:hover {
+  color: #d3dbff; /* sd:allow: CriarTask.dc.html prototype value */
+}
+
+@media (max-width: 1100px) {
+  .dialog {
+    width: 100%; /* sd:allow: CriarTask.dc.html prototype value */
+    height: 100%; /* sd:allow: CriarTask.dc.html prototype value */
+    border-radius: 0; /* sd:allow: CriarTask.dc.html prototype value */
+  }
+
+  .body {
+    flex-direction: column;
+  }
+
+  .aside {
+    width: 100%; /* sd:allow: CriarTask.dc.html prototype value */
+    border-left: 0; /* sd:allow: CriarTask.dc.html prototype value */
+    border-top: 1px solid #1d2230; /* sd:allow: CriarTask.dc.html prototype value */
+    max-height: 40%; /* sd:allow: CriarTask.dc.html prototype value */
+  }
+
+  .provGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)); /* sd:allow: CriarTask.dc.html prototype value */
+  }
+}

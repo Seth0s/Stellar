@@ -1387,6 +1387,11 @@ const tasks = {
    * no main — ver `store:tasks:create` em index.ts. */
   create: (boardId: string, prompt: string): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:create", boardId, prompt),
+  /** Full create_task contract from the CreateTask modal (local boards). */
+  createFull: (
+    input: import("../main/create-task-ipc").CreateTaskFullInput,
+  ): Promise<import("../main/create-task-ipc").CreateTaskFullResult> =>
+    ipcRenderer.invoke("store:tasks:create-full", input),
   /** Fila modal — same append-default / explicit-replace contract as
    * MCP `update_task`. `actor: "human"` on the main side. Does not type
    * into a running card. */

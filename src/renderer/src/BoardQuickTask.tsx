@@ -1,6 +1,6 @@
 /**
  * Screen 15 — quick task create on the board (BoardQuickTask.dc.html).
- * "Detalhar contrato…" opens the existing full TeamTaskForm (screen 14).
+ * Local "mais opções" / detail opens CreateTask (app-v3); team keeps TeamTaskForm.
  */
 
 import { useEffect, useState } from "react";
@@ -13,6 +13,11 @@ import {
   type QuickTaskKind,
   type QuickTaskState,
 } from "./board-quick-task-decisions";
+import { CreateTaskModal } from "./CreateTaskModal";
+import {
+  seedFromQuick,
+  type ActiveTerritoryTask,
+} from "./create-task-form-decisions";
 import type { TaskDestination } from "./team-task-form-decisions";
 import styles from "./BoardQuickTask.module.css";
 
@@ -24,32 +29,40 @@ const KIND_LABEL: Record<QuickTaskKind, string> = {
 };
 
 export type BoardQuickTaskProps = {
+  boardId?: string;
   boardName: string;
   teamName: string | null;
   teamAvailable: boolean;
   initial: Partial<QuickTaskState>;
   busy?: boolean;
   error?: string | null;
+  activeTasks?: readonly ActiveTerritoryTask[];
   onClose: () => void;
   onCreate: (state: QuickTaskState) => void;
+  /** Team destination (or when boardId is absent) — opens TeamTaskForm. */
   onDetail: (state: QuickTaskState) => void;
+  onLocalCreated?: (taskId: string) => void;
 };
 
 export function BoardQuickTask({
+  boardId,
   boardName,
   teamName,
   teamAvailable,
   initial,
   busy = false,
   error = null,
+  activeTasks = [],
   onClose,
   onCreate,
   onDetail,
+  onLocalCreated,
 }: BoardQuickTaskProps) {
   const [state, setState] = useState<QuickTaskState>(() => ({
     ...emptyQuickTask(initial.destination ?? "board"),
     ...initial,
   }));
+  const [localCreateOpen, setLocalCreateOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -69,6 +82,40 @@ export function BoardQuickTask({
   function submit() {
     if (!canSubmitQuick(state) || busy) return;
     onCreate(state);
+  }
+
+  function openDetail() {
+    if (state.destination === "board" && boardId) {
+      setLocalCreateOpen(true);
+      return;
+    }
+    onDetail(state);
+  }
+
+  if (localCreateOpen && boardId) {
+    return (
+      <CreateTaskModal
+        open
+        boardId={boardId}
+        boardName={boardName}
+        seed={seedFromQuick({
+          title: state.title,
+          kind: state.kind,
+          contract: state.contract,
+          territory: state.territory,
+        })}
+        activeTasks={activeTasks}
+        onClose={() => {
+          setLocalCreateOpen(false);
+          onClose();
+        }}
+        onCreated={(taskId) => {
+          onLocalCreated?.(taskId);
+          setLocalCreateOpen(false);
+          onClose();
+        }}
+      />
+    );
   }
 
   return createPortal(
@@ -154,8 +201,8 @@ export function BoardQuickTask({
         ) : null}
         {error ? <div className={styles.error}>{error}</div> : null}
         <div className={styles.actions}>
-          <button type="button" className={styles.detailLink} data-part="board-quick-detail" disabled={busy} onClick={() => onDetail(state)}>
-            {t("boardQuick.detail")}
+          <button type="button" className={styles.detailLink} data-part="board-quick-detail" disabled={busy} onClick={openDetail}>
+            {t("boardQuick.moreOptions")}
           </button>
           <button type="button" className={styles.ghost} data-part="board-quick-cancel" disabled={busy} onClick={onClose}>
             {t("boardQuick.cancel")}

@@ -58,6 +58,7 @@ import { readSpawnProfiles } from "./spawn-profiles";
 import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
+import { registerCreateTaskIpc } from "./create-task-ipc";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { projectTaskPrompt } from "../task-prompt-projection";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
@@ -3816,6 +3817,12 @@ function createWindow() {
       actor: "human",
     });
     return { ok: true, taskId: id };
+  });
+  registerCreateTaskIpc(ipcMain, {
+    boardExists: (id) => !!store.getBoard(id),
+    upsertTask: (row) => {
+      persistTask(row);
+    },
   });
   // Human edit of the stored briefing (Fila modal). Same append-default
   // / explicit-replace contract as MCP `update_task`, but `actor: "human"`

@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CardFrame } from "./CardFrame";
 import { decideTaskFooter } from "./card-footer-decision";
@@ -8,6 +8,8 @@ import { useModal } from "./useModal";
 import type { Rect } from "./board-model";
 import type { TaskBoardItem } from "../../preload/index";
 import { parseTaskPrompt } from "../../task-prompt-decision";
+import { CreateTaskModal } from "./CreateTaskModal";
+import type { ActiveTerritoryTask } from "./create-task-form-decisions";
 import {
   columnForStatus,
   groupTasksByColumn,
@@ -925,18 +927,21 @@ export function TaskDetailModal({
   );
 }
 
-/** Title + Enter quick create on the Fila card; "more options" opens the full form. */
+/** Title + Enter quick create on the Fila card; "more options" opens CreateTask modal. */
 function CreateTaskForm({
   boardId,
+  boardName,
+  activeTasks,
   onCreated,
-  onMoreOptions,
 }: {
   boardId: string;
+  boardName: string;
+  activeTasks: readonly ActiveTerritoryTask[];
   onCreated: (taskId: string) => void;
-  onMoreOptions?: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = prompt.trim();
@@ -953,26 +958,46 @@ function CreateTaskForm({
     }
   }
   return (
-    <form data-part="create-task-form" className={styles.createTaskForm} onSubmit={submit} onPointerDown={(e) => e.stopPropagation()}>
-      <input
-        data-part="create-task-input"
-        data-no-drag
-        className={styles.createTaskInput}
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder={t("task.createPlaceholder")}
-        disabled={busy}
-        aria-label={t("task.create")}
-      />
-      {onMoreOptions ? (
-        <button type="button" data-no-drag data-part="create-task-more" className={styles.createTaskSubmit} disabled={busy} onClick={onMoreOptions}>
+    <>
+      <form data-part="create-task-form" className={styles.createTaskForm} onSubmit={submit} onPointerDown={(e) => e.stopPropagation()}>
+        <input
+          data-part="create-task-input"
+          data-no-drag
+          className={styles.createTaskInput}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder={t("task.createPlaceholder")}
+          disabled={busy}
+          aria-label={t("task.create")}
+        />
+        <button
+          type="button"
+          data-no-drag
+          data-part="create-task-more"
+          className={styles.createTaskSubmit}
+          disabled={busy}
+          onClick={() => setModalOpen(true)}
+        >
           {t("boardQuick.moreOptions")}
         </button>
-      ) : null}
-      <button type="submit" data-no-drag data-part="create-task-submit" className={styles.createTaskSubmit} disabled={busy || !prompt.trim()}>
-        {t("common.create").toLowerCase()}
-      </button>
-    </form>
+        <button type="submit" data-no-drag data-part="create-task-submit" className={styles.createTaskSubmit} disabled={busy || !prompt.trim()}>
+          {t("common.create").toLowerCase()}
+        </button>
+      </form>
+      <CreateTaskModal
+        open={modalOpen}
+        boardId={boardId}
+        boardName={boardName}
+        seed={prompt.trim() ? { title: prompt.trim() } : null}
+        activeTasks={activeTasks}
+        onClose={() => setModalOpen(false)}
+        onCreated={(taskId) => {
+          setPrompt("");
+          setModalOpen(false);
+          onCreated(taskId);
+        }}
+      />
+    </>
   );
 }
 
@@ -1002,7 +1027,7 @@ function TaskCardInner({
   onApproveCompletion: _onApproveCompletion,
   openTaskRequestId,
   onOpenTaskHandled,
-  onRequestFullTaskForm,
+  onRequestFullTaskForm: _onRequestFullTaskForm,
   onRequestQuickTask,
   screenProjected,
   panX,
@@ -1079,6 +1104,19 @@ function TaskCardInner({
 
   const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
   const boardTasks = viewingFrozen ? frozenTasks : tasks;
+  const activeTerritoryTasks = useMemo<ActiveTerritoryTask[]>(
+    () =>
+      boardTasks.map((item) => {
+        const firstLine = (item.promptPreview ?? "").split("\n")[0]?.trim() ?? "";
+        return {
+          id: item.id,
+          title: firstLine || item.id.slice(0, 8),
+          territory: item.territory ?? [],
+          phase: item.phase ?? "ready",
+        };
+      }),
+    [boardTasks],
+  );
   const openTask = openTaskId ? (boardTasks.find((item) => item.id === openTaskId) ?? null) : null;
   useEffect(() => {
     if (openTaskId && !openTask) setOpenTaskId(null);
@@ -1524,17 +1562,11 @@ function TaskCardInner({
         <div data-part="create-task-inline" style={{ padding: "8px 18px" }}>
           <CreateTaskForm
             boardId={activeBoardId}
+            boardName={boardNames[activeBoardId] ?? activeBoardId}
+            activeTasks={activeTerritoryTasks}
             onCreated={() => {
               setCreatingTask(false);
             }}
-            onMoreOptions={
-              onRequestFullTaskForm
-                ? () => {
-                    setCreatingTask(false);
-                    onRequestFullTaskForm();
-                  }
-                : undefined
-            }
           />
         </div>
       )}

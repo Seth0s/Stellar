@@ -4588,6 +4588,7 @@ export function App() {
       ) : null}
       {quickTaskOpen ? (
         <BoardQuickTask
+          boardId={activeBoardId ?? undefined}
           boardName={boards.find((b) => b.id === activeBoardId)?.name ?? ""}
           teamName={teamCtx?.teamName ?? null}
           teamAvailable={teamCtx != null}
