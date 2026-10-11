@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { setLocale } from "../../src/shared/i18n";
 import type { CloudStatusInfo } from "../../src/preload/index";
 import { PlanNotice, PlanSeatsNotice } from "@renderer/PlanGate";
 import { WorkHomePage } from "@renderer/WorkHomePage";
 import { TeamPage } from "@renderer/TeamPage";
+import { setTeamSub } from "@renderer/team-nav";
 
 /**
  * The visible side of the plan gate: the upgrade call-to-action, the read-only
@@ -137,9 +138,8 @@ describe("TeamPage with an UNKNOWN plan (server sent no plan block)", () => {
     render(<TeamPage boards={[]} />);
     await screen.findByText("Idy Platform");
     expect(screen.queryByText(/Faça upgrade para o Team/)).toBeNull();
-    const boardTab = document.querySelector('[data-team-sub="board"]') as HTMLButtonElement | null;
-    expect(boardTab).toBeTruthy();
-    fireEvent.click(boardTab!);
+    // The sections are nested under "Time" in the sidebar; the page reads the open one from the shared store.
+    act(() => setTeamSub("board"));
     await waitFor(() => expect(document.querySelector('[data-column="sem_dono"]')).toBeTruthy());
   });
 });

@@ -232,7 +232,10 @@ try {
     const detail = await evalJson(page, `await window.team.detail("${TEAM_ID}")`);
     check("free: uma rota do time é recusada pelo servidor (402)", detail.ok, false);
     await gotoSection(page, "team");
-    check("free: a seção Time explica o plano Team", await waitFor(page, `document.body.textContent.includes("Faça upgrade para o Team")`), true);
+    // Closed beta: no plan means the team screen says teams are opened by the operator — no upsell.
+    check("free: a seção Time mostra o aviso do beta", await waitFor(page, `!!document.querySelector('[data-part="beta-notice"]')`), true);
+    check("free: a seção Time não oferece upgrade", await page.evalJs(`!document.body.textContent.includes("Faça upgrade para o Team")`), true);
+    check("free: criar time fica travado", await page.evalJs(`!!document.querySelector('[data-part="create-submit"]')?.disabled`), true);
     await shot(page, "app-a9-free-team");
   });
 

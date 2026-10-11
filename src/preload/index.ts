@@ -2506,7 +2506,7 @@ export type TeamMemberInfo = {
 };
 export type TeamProfileRef = { id: string; name: string; kind: ProfileKind };
 export type TeamProfileAccountRef = { id: string; kind: string; teamId: string | null; name: string };
-export type TeamInviteInfo = { id: string; teamId: string; target: string; role: TeamRole };
+export type TeamInviteInfo = { id: string; teamId: string; target: string; role: TeamRole; expiresAt: string | null };
 export type TeamOverviewInfo = {
   accountId: string | null;
   displayName: string;
@@ -2514,7 +2514,9 @@ export type TeamOverviewInfo = {
   profiles: TeamProfileAccountRef[];
   identitySubjects: string[];
 };
-export type TeamDetailInfo = { team: TeamSummaryInfo; members: TeamMemberInfo[] };
+/** Plan seats of a team; `null` on the detail means no plan (no seat limit). */
+export type TeamSeatsInfo = { used: number; total: number; expiresAt: string | null };
+export type TeamDetailInfo = { team: TeamSummaryInfo; members: TeamMemberInfo[]; seats: TeamSeatsInfo | null };
 export type TeamAcceptReason =
   | "identity-mismatch"
   | "expired"
@@ -2530,9 +2532,24 @@ export type TeamCreateResult =
   | { ok: true; value: { team: TeamSummaryInfo; profile: TeamProfileRef; profileCreated: boolean } }
   | { ok: false; error: string };
 export type TeamDetailResult = { ok: true; detail: TeamDetailInfo } | { ok: false; error: string };
+/** `link` sends nothing and hands the nominal link back once; `email` mails it. */
+export type TeamInviteDelivery = "email" | "link";
+export type TeamInviteCreatedInfo = TeamInviteInfo & { delivery: TeamInviteDelivery; inviteUrl: string | null };
 export type TeamInviteResult =
-  | { ok: true; invite: TeamInviteInfo }
-  | { ok: false; reason: "invalid-target" | "forbidden" | "seats-exceeded" | "error"; error: string };
+  | { ok: true; invite: TeamInviteCreatedInfo }
+  | { ok: false; reason: "invalid-target" | "forbidden" | "seats-exceeded" | "email-unavailable" | "error"; error: string };
+/** Public preview of an invite (no login): the target is masked server-side. */
+export type TeamInvitePreviewInfo = {
+  teamName: string;
+  invitedByName: string;
+  role: TeamRole;
+  targetMasked: string;
+  expiresAt: string | null;
+};
+export type TeamInvitePreviewResult =
+  | { ok: true; preview: TeamInvitePreviewInfo }
+  | { ok: false; reason: "not-found" | "error"; error: string };
+export type TeamRenameResult = { ok: true; team: { id: string; name: string; slug: string } } | { ok: false; error: string };
 export type TeamMemberResult = { ok: true; member: TeamMemberInfo } | { ok: false; error: string };
 export type TeamSimpleResult = { ok: true } | { ok: false; error: string };
 export type TeamInvitesResult = { ok: true; invites: TeamInviteInfo[] } | { ok: false; error: string };
@@ -2687,7 +2704,12 @@ export type TeamApi = {
   overview: () => Promise<TeamOverviewResult>;
   create: (input: { name: string; slug?: string }) => Promise<TeamCreateResult>;
   detail: (teamId: string) => Promise<TeamDetailResult>;
-  invite: (teamId: string, input: { target: string; role: TeamRole }) => Promise<TeamInviteResult>;
+  invite: (teamId: string, input: { target: string; role: TeamRole; delivery?: TeamInviteDelivery }) => Promise<TeamInviteResult>;
+  /** Public preview by raw token or pasted invite link; works signed out. */
+  previewInvite: (tokenOrLink: string) => Promise<TeamInvitePreviewResult>;
+  renameTeam: (teamId: string, name: string) => Promise<TeamRenameResult>;
+  /** Owner only; `confirm` must be the team slug. */
+  deleteTeam: (teamId: string, confirm: string) => Promise<TeamSimpleResult>;
   revokeInvite: (teamId: string, inviteId: string) => Promise<TeamSimpleResult>;
   listInvites: (teamId: string) => Promise<TeamInvitesResult>;
   changeRole: (teamId: string, accountId: string, role: TeamRole) => Promise<TeamMemberResult>;
@@ -2919,6 +2941,9 @@ const team: TeamApi = {
   create: (input) => ipcRenderer.invoke("team:create", input),
   detail: (teamId) => ipcRenderer.invoke("team:detail", teamId),
   invite: (teamId, input) => ipcRenderer.invoke("team:invite", teamId, input),
+  previewInvite: (tokenOrLink) => ipcRenderer.invoke("team:invite-preview", tokenOrLink),
+  renameTeam: (teamId, name) => ipcRenderer.invoke("team:rename", teamId, name),
+  deleteTeam: (teamId, confirm) => ipcRenderer.invoke("team:delete", teamId, confirm),
   revokeInvite: (teamId, inviteId) => ipcRenderer.invoke("team:revoke-invite", teamId, inviteId),
   listInvites: (teamId) => ipcRenderer.invoke("team:invites", teamId),
   changeRole: (teamId, accountId, role) => ipcRenderer.invoke("team:change-role", teamId, accountId, role),

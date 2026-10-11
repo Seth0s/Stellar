@@ -3,6 +3,8 @@ import { t } from "../../shared/i18n";
 import type { MessageKey } from "../../shared/i18n";
 import type {
   TeamDetailInfo,
+  TeamInviteCreatedInfo,
+  TeamInviteInfo,
   TeamMemberInfo,
   TeamOverviewInfo,
   TeamRole,
@@ -35,18 +37,32 @@ import {
   teamEventTone,
   type TeamColumn,
 } from "./team-board-decisions";
+import {
+  INVITE_ROLES,
+  canDeleteTeam,
+  canManageMembers,
+  canRenameTeam,
+  consumeTeamSub,
+  inviteDaysLeft,
+  memberRowState,
+  ownerCount,
+  seatsView,
+  slugMatches,
+  type SeatsView,
+} from "./team-admin-decisions";
+import { Rich } from "./InviteDialog";
+import { isTeamSub, publishTeamSubs, setTeamSub, useTeamNav, type TeamSub } from "./team-nav";
 import { TeamPanel } from "./TeamPanel";
 import { TeamTaskForm } from "./TeamTaskForm";
 import { TeamTaskDeleteDialog } from "./TeamTaskDeleteDialog";
 import type { DeleteMode } from "./team-task-delete-decisions";
-import { canWrite, decidePlanAccess, describePlanFailure } from "./PlanAccess";
-import { PlanNotice, PlanSeatsNotice } from "./PlanGate";
+import { canWrite, decidePlanAccess, describePlanFailure, type PlanAccess } from "./PlanAccess";
+import { PlanNotice } from "./PlanGate";
 import { useCloudPlan, usePlansUrl } from "./PlanHooks";
 import { ImportWizard } from "./ImportWizard";
 import { IntegrationsPage } from "./IntegrationsPage";
 import styles from "./TeamPage.module.css";
 
-type Sub = "overview" | "board" | "members" | "home" | "audit" | "import" | "integrations";
 type TeamRef = { id: string; name: string };
 
 function ageLabel(iso: string | null): string {
@@ -59,10 +75,6 @@ function ageLabel(iso: string | null): string {
   const hours = Math.round(mins / 60);
   if (hours < 24) return `${hours} h`;
   return `${Math.round(hours / 24)} d`;
-}
-
-function roleLabel(role: TeamRole): string {
-  return t(role === "owner" ? "team.role.owner" : role === "admin" ? "team.role.admin" : "team.role.member");
 }
 
 function shortId(id: string | null): string {
@@ -116,15 +128,21 @@ export function TeamPage({
   const [detail, setDetail] = useState<TeamDetailInfo | null>(null);
   const [tasks, setTasks] = useState<TeamTaskInfo[]>([]);
   const [sprints, setSprints] = useState<TeamSprintInfo[]>([]);
-  const [sub, setSub] = useState<Sub>("overview");
+  // The open section lives in a small shared store: the sidebar nests the
+  // sections under "Team" and this page renders the one that is open.
+  useState(() => {
+    const asked = consumeTeamSub();
+    setTeamSub(isTeamSub(asked) ? asked : "overview");
+    return true;
+  });
+  const sub = useTeamNav().sub;
   const [cmdOpen, setCmdOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
-  const [invites, setInvites] = useState<{ id: string; target: string; role: TeamRole }[]>([]);
-  const [inviteTarget, setInviteTarget] = useState("");
-  const [inviteRole, setInviteRole] = useState<TeamRole>("member");
+  const [invites, setInvites] = useState<TeamInviteInfo[]>([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [filter, setFilter] = useState({ assigneeId: "", project: "", unassigned: false, search: "", mine: false });
   const [selectedTask, setSelectedTask] = useState<TeamTaskInfo | null>(null);
   const [taskDetail, setTaskDetail] = useState<TeamTaskDetailInfo | null>(null);
@@ -134,7 +152,6 @@ export function TeamPage({
   const [deleteTarget, setDeleteTarget] = useState<TeamTaskInfo | null>(null);
   const [deleteInitial, setDeleteInitial] = useState<DeleteMode>("archive");
   const [requested, setRequested] = useState<Record<string, boolean>>({});
-  const [seatsFull, setSeatsFull] = useState<number | null>(null);
 
   const { plan: cloudPlan, loggedIn } = useCloudPlan();
   const plansUrl = usePlansUrl();
@@ -153,7 +170,15 @@ export function TeamPage({
 
   // The team right is paid: on Free the section explains the Team plan and
   // locks create/invite/board; an expired plan keeps reading but blocks writes.
-  const teamAccess = decidePlanAccess(cloudPlan, "team");
+  const rawAccess = decidePlanAccess(cloudPlan, "team");
+  // The cached plan can lag behind the account (an invite accepted a moment ago):
+  // belonging to a team already means the team right is held through it, so an
+  // "upgrade" reading while teams exist is stale, not a refusal. The server still
+  // decides every write.
+  const teamAccess: PlanAccess =
+    rawAccess.kind === "upgrade" && overview !== null && overview.teams.length > 0
+      ? { kind: "granted", source: "team", teamId: overview.teams[0].id }
+      : rawAccess;
   const teamWritable = canWrite(teamAccess);
   // A refusal of a feature that is not granted becomes the plan notice, not a
   // raw server error (the board still shows its ordinary errors while granted).
@@ -254,7 +279,7 @@ export function TeamPage({
   useEffect(() => {
     if (!initialUnassigned) return;
     setFilter((f) => ({ ...f, unassigned: true }));
-    setSub("board");
+    setTeamSub("board");
   }, [initialUnassigned]);
 
   useEffect(() => {
@@ -262,7 +287,7 @@ export function TeamPage({
     const hit = tasks.find((task) => task.id === initialTaskId);
     if (hit) {
       setSelectedTask(hit);
-      setSub("board");
+      setTeamSub("board");
       void window.team.taskDetail(selected, hit.id).then((res) => {
         if (res.ok) setTaskDetail(res.detail);
       });
@@ -285,6 +310,15 @@ export function TeamPage({
   const accountId = overview?.accountId ?? null;
   const myRole: TeamRole | null = detail && accountId ? detail.members.find((m) => m.accountId === accountId)?.role ?? null : null;
   const isAdmin = isOwnerOrAdmin(myRole);
+  const hasTeam = overview !== null && overview.teams.length > 0;
+  const subsOffered: TeamSub[] = hasTeam
+    ? ["overview", "board", "members", "home", "import", "integrations", "audit", ...(canRenameTeam(myRole) ? (["settings"] as const) : [])]
+    : [];
+  const subsKey = subsOffered.join(",");
+  useEffect(() => {
+    publishTeamSubs(subsKey === "" ? [] : (subsKey.split(",") as TeamSub[]));
+    return () => publishTeamSubs([]);
+  }, [subsKey]);
   const team = overview?.teams.find((x) => x.id === selected) ?? null;
   const stats = boardStats(tasks);
   const filtered = filterBoardTasks(tasks, {
@@ -312,23 +346,97 @@ export function TeamPage({
     });
   }
 
-  async function handleInvite() {
-    if (!selected || !teamWritable) return;
+  /** Reads the team back after a change that moves members or seats. */
+  async function reloadDetail(teamId: string) {
+    const res = await window.team.detail(teamId);
+    if (res.ok) setDetail(res.detail);
+  }
+
+  /** The invite dialog renders the outcome itself; this only keeps the page's
+   *  pending list and seats in step. */
+  async function createInvite(target: string, role: TeamRole, delivery: "email" | "link") {
+    if (!selected || !teamWritable) return { ok: false as const, reason: "error" as const, error: t("teamTask.error") };
+    const res = await window.team.invite(selected, { target: target.trim(), role, delivery });
+    if (res.ok) setInvites((prev) => [...prev, res.invite]);
+    else if (res.reason === "seats-exceeded") void reloadDetail(selected);
+    return res;
+  }
+
+  async function handleChangeRole(member: TeamMemberInfo, role: TeamRole) {
+    if (!selected) return;
     await run(async () => {
-      const res = await window.team.invite(selected, { target: inviteTarget.trim(), role: inviteRole });
+      const res = await window.team.changeRole(selected, member.accountId, role);
       if (!res.ok) {
-        // The team already uses every paid seat: name the count, not a raw error.
-        if (res.reason === "seats-exceeded") {
-          setSeatsFull(detail?.members.length ?? 0);
-          return;
-        }
-        setError(res.reason === "forbidden" ? t("team.onlyAdmin") : res.error);
+        setError(res.error);
         return;
       }
-      setSeatsFull(null);
-      setInvites((prev) => [...prev, res.invite]);
-      setInviteTarget("");
-      setNote(t("team.invited", { target: res.invite.target }));
+      await reloadDetail(selected);
+      setNote(t("teamAdmin.member.roleChanged"));
+    });
+  }
+
+  async function handleRemoveMember(member: TeamMemberInfo, members: readonly TeamMemberInfo[]) {
+    if (!selected) return;
+    if (!window.confirm(t("team.removeConfirm", { who: memberDisplayName(members, member.accountId) }))) return;
+    await run(async () => {
+      const res = await window.team.removeMember(selected, member.accountId);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      await reloadDetail(selected);
+      setNote(t("teamAdmin.member.removed"));
+    });
+  }
+
+  /** The team is gone for this person (left or deleted): back to the team list. */
+  function leaveSelectedTeam(message: string) {
+    setSelected(null);
+    setDetail(null);
+    setTasks([]);
+    setInvites([]);
+    setTeamSub("overview");
+    void refreshOverview().then(() => setNote(message));
+  }
+
+  async function handleLeave() {
+    if (!selected) return;
+    if (!window.confirm(t("teamAdmin.member.leaveConfirm"))) return;
+    await run(async () => {
+      const res = await window.team.leave(selected);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      leaveSelectedTeam(t("teamAdmin.member.left"));
+    });
+  }
+
+  async function handleRename(name: string) {
+    if (!selected) return;
+    await run(async () => {
+      const res = await window.team.renameTeam(selected, name);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      const renamed = res.team;
+      setOverview((prev) => (prev ? { ...prev, teams: prev.teams.map((x) => (x.id === renamed.id ? { ...x, name: renamed.name } : x)) } : prev));
+      setDetail((prev) => (prev ? { ...prev, team: { ...prev.team, name: renamed.name } } : prev));
+      setNote(t("teamAdmin.settings.saved"));
+    });
+  }
+
+  async function handleDeleteTeam(slugConfirm: string) {
+    if (!selected) return;
+    const name = team?.name ?? "";
+    await run(async () => {
+      const res = await window.team.deleteTeam(selected, slugConfirm);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      leaveSelectedTeam(t("teamAdmin.settings.deleted", { name }));
     });
   }
 
@@ -440,15 +548,6 @@ export function TeamPage({
     });
   }
 
-  if (loggedIn && teamAccess.kind === "upgrade") {
-    return (
-      <div className={styles.page} data-part="team-plan-locked">
-        <h1 className={styles.title}>{t("shell.team")}</h1>
-        <PlanNotice access={teamAccess} plansUrl={plansUrl} />
-      </div>
-    );
-  }
-
   if (loadError) {
     return (
       <div className={styles.page}>
@@ -468,18 +567,17 @@ export function TeamPage({
   }
 
   if (overview.teams.length === 0) {
-    return <CreateTeamScreen busy={busy} onError={setError} onCreate={handleCreateTeam} />;
+    return (
+      <CreateTeamScreen
+        locked={loggedIn && teamAccess.kind === "upgrade"}
+        busy={busy}
+        error={error}
+        note={note}
+        onCreate={handleCreateTeam}
+      />
+    );
   }
 
-  const subItems: { id: Sub; label: MessageKey }[] = [
-    { id: "overview", label: "teamTask.subnav.overview" },
-    { id: "board", label: "teamTask.subnav.board" },
-    { id: "members", label: "teamTask.subnav.members" },
-    { id: "home", label: "teamTask.subnav.home" },
-    { id: "import", label: "teamTask.subnav.import" },
-    { id: "integrations", label: "teamTask.subnav.integrations" },
-    { id: "audit", label: "teamTask.subnav.audit" },
-  ];
 
   const activeSprint = sprints.find((s) => s.state === "ativa") ?? null;
 
@@ -534,7 +632,7 @@ export function TeamPage({
 
   if (sub === "import" && selected) {
     return (
-      <ImportWizard teamId={selected} teamName={team?.name ?? ""} role={myRole} onBack={() => setSub("overview")} />
+      <ImportWizard teamId={selected} teamName={team?.name ?? ""} role={myRole} onBack={() => setTeamSub("overview")} />
     );
   }
 
@@ -545,7 +643,7 @@ export function TeamPage({
         teamName={team?.name ?? ""}
         role={myRole}
         members={detail?.members ?? []}
-        onBack={() => setSub("overview")}
+        onBack={() => setTeamSub("overview")}
       />
     );
   }
@@ -580,7 +678,7 @@ export function TeamPage({
           sprintName={activeSprint?.name ?? ""}
           openCount={stats.open}
           sprintDone={stats.done}
-          onBack={() => setSub("overview")}
+          onBack={() => setTeamSub("overview")}
           onNewTask={() => {
             setFormEditing(null);
             setFormOpen(true);
@@ -714,16 +812,34 @@ export function TeamPage({
     );
   }
 
+  const seats = seatsView(detail?.seats ?? null);
+  const canInvite = canManageMembers(myRole);
+  const members = detail?.members ?? [];
+
   return (
-    <div className={styles.page}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>{team?.name ?? t("shell.team")}</h1>
-          <div className={styles.subtitle}>
-            {myRole ? t("teamTask.subtitle.role", { role: roleLabel(myRole) }) : t("teamTask.subtitle.noRole")}
+    <div className={styles.page} data-part="team-page">
+      <div className={styles.pageHead} data-part="team-head">
+        <div className={styles.pageHeadText}>
+          <h1 className={styles.title} data-part="team-title">
+            {team?.name ?? t("shell.team")}
+          </h1>
+          <div className={styles.metaRow}>
+            {seats.kind !== "unlimited" ? (
+              <span
+                className={`${styles.pill} ${seats.kind === "full" ? styles.pillBad : styles.pillOk}`}
+                data-part="seats-pill"
+                data-seats={seats.kind}
+              >
+                {t("teamAdmin.seats.pill", { used: seats.used, total: seats.total })}
+              </span>
+            ) : null}
+            {team ? (
+              <span className={styles.slugText}>
+                {t("teamAdmin.slug")} <span className={styles.mono}>{team.slug}</span>
+              </span>
+            ) : null}
           </div>
         </div>
-        <span className={styles.headerSpacer} />
         {overview.teams.length > 1 ? (
           <select className={styles.select} value={selected ?? ""} onChange={(e) => setSelected(e.target.value)} aria-label={t("teamTask.selectTeam")}>
             {overview.teams.map((x) => (
@@ -733,17 +849,22 @@ export function TeamPage({
             ))}
           </select>
         ) : null}
-        <button type="button" className={styles.btn} onClick={() => setSub("board")}>
-          {t("teamTask.openBoard")}
-        </button>
-        <button type="button" className={styles.btn} data-part="team-open-import" onClick={() => setSub("import")}>
-          {t("teamTask.subnav.import")}
-        </button>
-        <button type="button" className={styles.btn} data-part="team-open-integrations" onClick={() => setSub("integrations")}>
-          {t("teamTask.subnav.integrations")}
-        </button>
-        {isAdmin ? (
-          <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => setSub("members")}>
+        {canRenameTeam(myRole) ? (
+          <button type="button" className={styles.headBtn} data-part="team-open-settings" onClick={() => setTeamSub("settings")}>
+            {t("teamAdmin.subnav.settings")}
+          </button>
+        ) : null}
+        {canInvite ? (
+          <button
+            type="button"
+            className={`${styles.headBtn} ${styles.headBtnPrimary}`}
+            data-part="team-open-invite"
+            disabled={!teamWritable}
+            onClick={() => setInviteOpen(true)}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+              <path d="M7 2.5v9M2.5 7h9" />
+            </svg>
             {t("teamTask.invite")}
           </button>
         ) : null}
@@ -786,7 +907,7 @@ export function TeamPage({
               style={{ justifyContent: "flex-start", textAlign: "left" }}
               onClick={() => {
                 setCmdOpen(false);
-                setSub("import");
+                setTeamSub("import");
               }}
             >
               {t("teamImport.cmdPalette")}
@@ -798,7 +919,7 @@ export function TeamPage({
               style={{ justifyContent: "flex-start", textAlign: "left" }}
               onClick={() => {
                 setCmdOpen(false);
-                setSub("integrations");
+                setTeamSub("integrations");
               }}
             >
               {t("teamIntegrations.cmdPalette")}
@@ -808,7 +929,6 @@ export function TeamPage({
       ) : null}
 
       {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
-      {seatsFull !== null ? <PlanSeatsNotice seats={seatsFull} /> : null}
       {offline ? <div className={styles.banner}>{t("teamTask.offline")}</div> : null}
       {note ? <div className={styles.note}>{note}</div> : null}
       {error ? <div className={styles.error}>{error}</div> : null}
@@ -817,84 +937,430 @@ export function TeamPage({
 
       {deleteElement}
 
-      <div className={styles.layout}>
-        <nav className={styles.subnav} aria-label={t("teamTask.subnav.aria")}>
-          {subItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              data-team-sub={item.id}
-              className={`${styles.teamTab}${sub === item.id ? ` ${styles.teamTabOn}` : ""}`}
-              aria-current={sub === item.id ? "page" : undefined}
-              onClick={() => setSub(item.id)}
-            >
-              {t(item.label)}
-            </button>
-          ))}
-        </nav>
+      {inviteOpen && selected ? (
+        <InviteModal
+          seats={seats}
+          myRole={myRole}
+          onCreate={createInvite}
+          onNote={setNote}
+          onClose={() => setInviteOpen(false)}
+        />
+      ) : null}
 
-        <span className={styles.grow}>
+      <div data-part="team-content">
           {sub === "overview" || sub === "audit" || sub === "members" ? (
             <TeamAdminView
               stats={stats}
-              members={detail?.members ?? []}
+              members={members}
+              seats={seats}
               accountId={accountId}
               tasks={tasks}
-              sprints={sprints}
               invites={invites}
-              inviteTarget={inviteTarget}
-              inviteRole={inviteRole}
-              canManage={isAdmin && teamWritable}
               myRole={myRole}
               busy={busy || !teamWritable}
               auditOnly={sub === "audit"}
               membersOnly={sub === "members"}
-              onInviteTarget={setInviteTarget}
-              onInviteRole={setInviteRole}
-              onInvite={() => void handleInvite()}
-              onRevoke={(id) => void run(async () => {
-                if (!selected) return;
-                const res = await window.team.revokeInvite(selected, id);
-                if (res.ok) setInvites((prev) => prev.filter((i) => i.id !== id));
-                else setError(res.error ?? t("teamTask.error"));
-              })}
+              onChangeRole={(member, role) => void handleChangeRole(member, role)}
+              onRemove={(member) => void handleRemoveMember(member, members)}
+              onLeave={() => void handleLeave()}
+              onRevoke={(id) =>
+                void run(async () => {
+                  if (!selected) return;
+                  const res = await window.team.revokeInvite(selected, id);
+                  if (res.ok) setInvites((prev) => prev.filter((i) => i.id !== id));
+                  else setError(res.error ?? t("teamTask.error"));
+                })
+              }
+            />
+          ) : null}
+
+          {sub === "settings" && team ? (
+            <TeamSettingsView
+              teamName={team.name}
+              slug={team.slug}
+              myRole={myRole}
+              busy={busy || !teamWritable}
+              onBack={() => setTeamSub("overview")}
+              onRename={(name) => void handleRename(name)}
+              onDelete={(slugConfirm) => void handleDeleteTeam(slugConfirm)}
             />
           ) : null}
 
           {sub === "home" ? <TeamPanel inline /> : null}
-        </span>
       </div>
     </div>
   );
 }
 
-function CreateTeamScreen({ busy, onError, onCreate }: { busy: boolean; onError: (e: string) => void; onCreate: (name: string) => void }) {
+function CreateTeamScreen({
+  locked,
+  busy,
+  error,
+  note,
+  onCreate,
+}: {
+  /** No team plan on the account: the beta notice replaces the form. */
+  locked: boolean;
+  busy: boolean;
+  error: string | null;
+  note: string | null;
+  onCreate: (name: string) => void;
+}) {
   const [name, setName] = useState("");
+  const submit = () => {
+    if (!locked && !busy && name.trim() !== "") onCreate(name.trim());
+  };
   return (
-    <div className={styles.page}>
-      <h1 className={styles.title}>{t("shell.team")}</h1>
-      <div className={styles.card}>
-        <div className={styles.cardHead}>
-          <h2 className={styles.cardTitle}>{t("team.createTitle")}</h2>
-        </div>
-        <div className={styles.cardHead}>
-          <input className={styles.input} placeholder={t("team.name")} value={name} onChange={(e) => setName(e.target.value)} />
-          <button
-            type="button"
-            className={`${styles.btn} ${styles.btnPrimary}`}
-            disabled={busy || name.trim() === ""}
-            onClick={() => {
-              if (name.trim() === "") {
-                onError(t("teamTask.error"));
-                return;
-              }
-              onCreate(name.trim());
+    <div className={styles.createWrap} data-part="team-create">
+      <div className={styles.createCard}>
+        <h1 className={styles.createTitle} data-part="create-title">
+          {t("teamAdmin.create.title")}
+        </h1>
+        {locked ? (
+          <div className={styles.infoBox} data-part="beta-notice">
+            {t("teamAdmin.create.beta")}
+          </div>
+        ) : null}
+        {note ? <div className={styles.note}>{note}</div> : null}
+        <div>
+          <label className={styles.label} htmlFor="team-new-name">
+            {t("team.name")}
+          </label>
+          <input
+            id="team-new-name"
+            className={styles.field}
+            data-part="create-name"
+            placeholder={t("teamAdmin.create.namePlaceholder")}
+            value={name}
+            disabled={locked || busy}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
             }}
-          >
-            {t("team.create")}
+          />
+        </div>
+        {error ? (
+          <div className={styles.errorBox} data-part="create-error" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className={`${styles.headBtn} ${styles.headBtnPrimary}`}
+          data-part="create-submit"
+          disabled={locked || busy || name.trim() === ""}
+          onClick={submit}
+        >
+          {t("teamAdmin.create.submit")}
+        </button>
+        {locked ? <p className={styles.hint}>{t("teamAdmin.create.betaFoot")}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function InviteModal({
+  seats,
+  myRole,
+  onCreate,
+  onNote,
+  onClose,
+}: {
+  seats: SeatsView;
+  myRole: TeamRole | null;
+  onCreate: (target: string, role: TeamRole, delivery: "email" | "link") => Promise<
+    | { ok: true; invite: TeamInviteCreatedInfo }
+    | { ok: false; reason: "invalid-target" | "forbidden" | "seats-exceeded" | "email-unavailable" | "error"; error: string }
+  >;
+  onNote: (note: string) => void;
+  onClose: () => void;
+}) {
+  const [target, setTarget] = useState("");
+  const [role, setRole] = useState<TeamRole>("member");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [offerLink, setOfferLink] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [blocked, setBlocked] = useState(seats.kind === "full");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const total = seats.kind === "unlimited" ? 0 : seats.total;
+  const filled = target.trim() !== "";
+
+  async function submit(delivery: "email" | "link") {
+    setBusy(true);
+    setError(null);
+    setOfferLink(false);
+    try {
+      const res = await onCreate(target, role, delivery);
+      if (!res.ok) {
+        if (res.reason === "seats-exceeded") setBlocked(true);
+        else {
+          setError(res.reason === "forbidden" ? t("team.onlyAdmin") : res.error);
+          setOfferLink(res.reason === "email-unavailable");
+        }
+        return;
+      }
+      if (delivery === "email") {
+        onNote(t("team.invited", { target: res.invite.target }));
+        onClose();
+      } else if (res.invite.inviteUrl) {
+        setLink(res.invite.inviteUrl);
+      } else {
+        setError(t("teamAdmin.invite.noLink"));
+      }
+    } catch {
+      setError(t("teamTask.error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      setError(t("teamAdmin.invite.copyFailed"));
+    }
+  }
+
+  return (
+    <div className={styles.veil} data-part="invite-modal">
+      <div className={styles.modal} role="dialog" aria-labelledby="inv-form-t">
+        <div className={styles.modalHead}>
+          <h2 id="inv-form-t" className={styles.modalTitle} data-part="invite-title">
+            {t("teamTask.invite")}
+          </h2>
+          <button type="button" className={styles.iconBtn} aria-label={t("teamAdmin.invite.close")} data-part="invite-close" onClick={onClose}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <path d="M3 3l8 8M11 3l-8 8" />
+            </svg>
           </button>
         </div>
+
+        <p className={styles.hint}>{t("teamAdmin.invite.hint")}</p>
+        <div>
+          <label className={styles.label} htmlFor="inv-target">
+            {t("teamAdmin.invite.targetLabel")}
+          </label>
+          <input
+            id="inv-target"
+            className={styles.field}
+            data-part="invite-target"
+            placeholder={t("teamAdmin.invite.targetPlaceholder")}
+            value={target}
+            autoFocus
+            readOnly={link !== null || blocked}
+            onChange={(e) => setTarget(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={styles.label} htmlFor="inv-role">
+            {t("teamAdmin.invite.roleLabel")}
+          </label>
+          <select
+            id="inv-role"
+            className={styles.fieldSelect}
+            data-part="invite-role"
+            value={role}
+            disabled={link !== null}
+            onChange={(e) => setRole(e.target.value as TeamRole)}
+          >
+            {INVITE_ROLES.filter((r) => r !== "owner" || myRole === "owner").map((r) => (
+              <option key={r} value={r}>
+                {t(r === "admin" ? "teamAdmin.role.admin" : "teamAdmin.role.member")}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {blocked ? (
+          <>
+            <div className={styles.warnBox} data-part="invite-full" role="alert">
+              {t("teamAdmin.invite.full", { total })}
+            </div>
+            <div className={styles.btnRow}>
+              <button type="button" className={`${styles.headBtn} ${styles.headBtnPrimary}`} data-part="invite-send-email" disabled>
+                {t("teamAdmin.invite.sendEmail")}
+              </button>
+              <button type="button" className={styles.headBtn} data-part="invite-copy-link" disabled>
+                {t("teamAdmin.invite.copyLink")}
+              </button>
+              <button type="button" className={styles.headBtn} data-part="invite-back" onClick={onClose}>
+                {t("teamAdmin.invite.back")}
+              </button>
+            </div>
+          </>
+        ) : link ? (
+          <div className={styles.stackCol} data-part="invite-copied">
+            <div className={styles.linkRow}>
+              <div className={styles.linkBox} data-part="invite-url">
+                {link}
+              </div>
+              <button type="button" className={styles.headBtn} data-part="invite-copy" data-copied={copied ? "true" : "false"} onClick={() => void copy()}>
+                {copied ? t("teamAdmin.invite.copied") : t("teamAdmin.invite.copy")}
+              </button>
+            </div>
+            <p className={styles.hint}>{t("teamAdmin.invite.linkHint")}</p>
+            <div className={styles.warnBox} data-part="invite-link-warn">
+              {t("teamAdmin.invite.linkWarn")}
+            </div>
+            {error ? <div className={styles.errorBox}>{error}</div> : null}
+            <button type="button" className={styles.headBtn} style={{ alignSelf: "flex-start" }} data-part="invite-done" onClick={onClose}>
+              {t("teamAdmin.invite.done")}
+            </button>
+          </div>
+        ) : (
+          <>
+            {error ? (
+              <div className={styles.errorBox} data-part="invite-error" role="alert">
+                {error}
+                {offerLink ? ` ${t("teamAdmin.invite.emailUnavailable")}` : ""}
+              </div>
+            ) : null}
+            <div className={styles.btnRow}>
+              <button
+                type="button"
+                className={`${styles.headBtn} ${styles.headBtnPrimary}`}
+                data-part="invite-send-email"
+                disabled={busy || !filled}
+                onClick={() => void submit("email")}
+              >
+                {t("teamAdmin.invite.sendEmail")}
+              </button>
+              <button type="button" className={styles.headBtn} data-part="invite-copy-link" disabled={busy || !filled} onClick={() => void submit("link")}>
+                {t("teamAdmin.invite.copyLink")}
+              </button>
+            </div>
+          </>
+        )}
       </div>
+    </div>
+  );
+}
+
+function TeamSettingsView({
+  teamName,
+  slug,
+  myRole,
+  busy,
+  onBack,
+  onRename,
+  onDelete,
+}: {
+  teamName: string;
+  slug: string;
+  myRole: TeamRole | null;
+  busy: boolean;
+  onBack: () => void;
+  onRename: (name: string) => void;
+  onDelete: (slugConfirm: string) => void;
+}) {
+  const [name, setName] = useState(teamName);
+  const [confirm, setConfirm] = useState("");
+  // A rename from elsewhere (or the saved value) keeps the field in step.
+  useEffect(() => setName(teamName), [teamName]);
+  const mayRename = canRenameTeam(myRole);
+  const mayDelete = canDeleteTeam(myRole);
+  const dirty = name.trim() !== "" && name.trim() !== teamName;
+  return (
+    <div className={styles.stackCol} style={{ gap: "var(--v2-s11)" }} data-part="team-settings">
+      <div className={styles.settingsHead}>
+        <button type="button" className={styles.backLinkText} data-part="settings-back" onClick={onBack}>
+          {t("teamAdmin.settings.back")}
+        </button>
+        <h1 className={styles.title} data-part="settings-title">
+          {t("teamAdmin.settings.title")}
+        </h1>
+        <div className={styles.subtitle}>{t("teamAdmin.settings.sub", { name: teamName })}</div>
+      </div>
+
+      <section className={styles.settingsCard} data-part="settings-rename" aria-labelledby="set-name-t">
+        <h2 id="set-name-t" className={styles.cardTitle} style={{ flex: "none" }}>
+          {t("teamAdmin.settings.nameTitle")}
+        </h2>
+        <div>
+          <label className={styles.label} htmlFor="set-rename">
+            {t("teamAdmin.settings.nameLabel")}
+          </label>
+          <input
+            id="set-rename"
+            className={styles.field}
+            data-part="rename-input"
+            value={name}
+            maxLength={80}
+            disabled={!mayRename || busy}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div className={styles.hint}>
+          <Rich template={t("teamAdmin.settings.slugHint", { slug: "{slug}" })} slots={{ slug: { text: slug, className: styles.mono } }} />
+        </div>
+        {!mayRename ? <div className={styles.hint}>{t("teamAdmin.settings.renameForbidden")}</div> : null}
+        <div>
+          <button
+            type="button"
+            className={`${styles.headBtn} ${styles.headBtnPrimary}`}
+            data-part="rename-save"
+            disabled={!mayRename || busy || name.trim() === ""}
+            onClick={() => (dirty ? onRename(name.trim()) : undefined)}
+          >
+            {t("teamAdmin.settings.save")}
+          </button>
+        </div>
+      </section>
+
+      <section className={`${styles.settingsCard} ${styles.settingsDanger}`} data-part="settings-danger" aria-labelledby="set-danger-t">
+        <h2 id="set-danger-t" className={styles.dangerTitle}>
+          {t("teamAdmin.settings.dangerTitle")}
+        </h2>
+        <p className={`${styles.hint} ${styles.dangerText}`}>{t("teamAdmin.settings.dangerText")}</p>
+        {mayDelete ? (
+          <>
+            <div>
+              <label className={`${styles.label} ${styles.dangerText}`} htmlFor="set-del-slug">
+                <Rich
+                  template={t("teamAdmin.settings.deleteLabel", { slug: "{slug}" })}
+                  slots={{ slug: { text: slug, className: styles.mono } }}
+                />
+              </label>
+              <input
+                id="set-del-slug"
+                className={`${styles.field} ${styles.fieldDanger}`}
+                data-part="delete-slug"
+                placeholder={slug}
+                autoComplete="off"
+                value={confirm}
+                disabled={busy}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+            </div>
+            <div>
+              <button
+                type="button"
+                className={`${styles.headBtn} ${styles.headBtnDanger}`}
+                data-part="delete-team"
+                disabled={busy || !slugMatches(confirm, slug)}
+                onClick={() => onDelete(confirm.trim())}
+              >
+                {t("teamAdmin.settings.delete")}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className={styles.hint}>{t("teamAdmin.settings.deleteForbidden")}</div>
+        )}
+      </section>
     </div>
   );
 }
@@ -902,216 +1368,246 @@ function CreateTeamScreen({ busy, onError, onCreate }: { busy: boolean; onError:
 function TeamAdminView({
   stats,
   members,
+  seats,
   accountId,
   tasks,
-  sprints,
   invites,
-  inviteTarget,
-  inviteRole,
-  canManage,
   myRole,
   busy,
   auditOnly,
   membersOnly,
-  onInviteTarget,
-  onInviteRole,
-  onInvite,
+  onChangeRole,
+  onRemove,
+  onLeave,
   onRevoke,
 }: {
   stats: ReturnType<typeof boardStats>;
   members: TeamMemberInfo[];
+  seats: SeatsView;
   accountId: string | null;
   tasks: TeamTaskInfo[];
-  sprints: TeamSprintInfo[];
-  invites: { id: string; target: string; role: TeamRole }[];
-  inviteTarget: string;
-  inviteRole: TeamRole;
-  canManage: boolean;
+  invites: TeamInviteInfo[];
   myRole: TeamRole | null;
   busy: boolean;
   auditOnly: boolean;
   membersOnly: boolean;
-  onInviteTarget: (v: string) => void;
-  onInviteRole: (r: TeamRole) => void;
-  onInvite: () => void;
+  onChangeRole: (member: TeamMemberInfo, role: TeamRole) => void;
+  onRemove: (member: TeamMemberInfo) => void;
+  onLeave: () => void;
   onRevoke: (id: string) => void;
 }) {
-  const activeSprint = sprints.find((s) => s.state === "ativa") ?? sprints[0] ?? null;
   const activity = [...tasks].sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? "")).slice(0, 4);
+  const now = Date.now();
+  const soleOwner = myRole === "owner" && ownerCount(members) <= 1;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--v2-s14)" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--v2-s11)" }}>
+      {!auditOnly && seats.kind === "full" ? (
+        <div className={styles.warnBox} data-part="seats-full-banner" role="status">
+          {t("teamAdmin.seats.fullBanner", { total: seats.total })}
+        </div>
+      ) : null}
+
       {!auditOnly && !membersOnly ? (
-        <div className={styles.stats}>
-          <Stat label={t("teamTask.stat.members")} value={String(members.length)} hint={t("teamTask.stat.invitePending", { n: String(invites.length) })} />
-          <Stat label={t("teamTask.stat.open")} value={String(stats.open)} hint={t("teamTask.stat.noOwnerCount", { n: String(stats.unassigned) })} />
-          <Stat label={t("teamTask.stat.review")} value={String(stats.awaitingReview)} hint={activeSprint ? activeSprint.name : "—"} warn />
-          <Stat label={t("teamTask.stat.house")} value={t("teamTask.stat.houseRev", { n: "—" })} hint={t("teamTask.stat.houseHint")} />
+        <div className={styles.stats3} data-part="team-stats">
+          <Stat
+            label={t("teamTask.stat.members")}
+            value={String(members.length)}
+            hint={invites.length === 1 ? t("teamTask.stat.invitePending", { n: "1" }) : t("teamAdmin.stat.invitesPending", { n: String(invites.length) })}
+            part="members"
+          />
+          <Stat
+            label={t("teamAdmin.stat.seats")}
+            value={seats.kind === "unlimited" ? t("teamAdmin.stat.seatsNone") : t("teamAdmin.stat.seatsValue", { used: seats.used, total: seats.total })}
+            hint={seats.kind === "unlimited" ? t("teamAdmin.stat.seatsNoneHint") : t("teamAdmin.stat.seatsHint")}
+            part="seats"
+          />
+          <Stat label={t("teamTask.stat.open")} value={String(stats.open)} hint={t("teamTask.stat.noOwnerCount", { n: String(stats.unassigned) })} part="open" />
         </div>
       ) : null}
 
       {!auditOnly ? (
-        <div className={styles.layout}>
-          <section className={`${styles.card} ${styles.grow}`} aria-labelledby="team-members">
-            <div className={styles.cardHead}>
-              <h2 id="team-members" className={styles.cardTitle}>
-                {t("teamTask.members.title")}
-              </h2>
-              <span className={styles.cardHint}>{t("teamTask.members.keepOwner")}</span>
-            </div>
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>{t("teamTask.th.person")}</th>
-                    <th>{t("teamTask.th.role")}</th>
-                    <th>{t("teamTask.th.tasks")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((m) => (
-                    <tr key={m.accountId}>
+        <section className={styles.membersCard} aria-labelledby="team-members" data-part="members-card">
+          <div className={styles.sectionHead}>
+            <h2 id="team-members" className={styles.cardTitle}>
+              {t("teamTask.members.title")}
+            </h2>
+            <span className={styles.hint}>{t("teamTask.members.keepOwner")}</span>
+          </div>
+          <div className={styles.tableWrap}>
+            <table className={styles.mTable} data-part="members-table">
+              <thead>
+                <tr>
+                  <th>{t("teamTask.th.person")}</th>
+                  <th>{t("teamTask.th.role")}</th>
+                  <th>{t("teamTask.th.tasks")}</th>
+                  <th>
+                    <span className={styles.srOnly}>{t("teamAdmin.th.actions")}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((m) => {
+                  const row = memberRowState({ members, member: m, accountId, myRole });
+                  const isSelf = m.accountId === accountId;
+                  const name = memberDisplayName(members, m.accountId);
+                  const roleTitle =
+                    row.roleLock === "last-owner" ? t("teamAdmin.member.lastOwnerRole") : row.roleLock === "permission" ? t("teamAdmin.member.noPermission") : undefined;
+                  return (
+                    <tr key={m.accountId} data-part="member-row" data-member={m.accountId}>
                       <td>
                         <span className={styles.person}>
                           <Avatar members={members} accountId={m.accountId} />
                           <span className={styles.personText}>
-                            <span>{m.accountId === accountId ? t("team.you") : memberDisplayName(members, m.accountId)}</span>
-                            <span className={styles.personMeta}>{m.email ?? m.accountId}</span>
+                            <span>{name}</span>
+                            <span className={styles.personMeta}>
+                              {isSelf ? t("teamAdmin.member.you", { email: m.email ?? m.accountId }) : m.email ?? m.accountId}
+                            </span>
                           </span>
                         </span>
                       </td>
-                      <td>{roleLabel(m.role)}</td>
+                      <td>
+                        <select
+                          className={styles.roleSelect}
+                          data-part="member-role"
+                          aria-label={t("teamAdmin.member.roleAria", { name })}
+                          title={roleTitle}
+                          value={m.role}
+                          disabled={busy || !row.canChangeRole}
+                          onChange={(e) => onChangeRole(m, e.target.value as TeamRole)}
+                        >
+                          {(row.roleOptions.length > 0 ? row.roleOptions : [m.role]).map((r) => (
+                            <option key={r} value={r}>
+                              {t(r === "owner" ? "teamAdmin.role.owner" : r === "admin" ? "teamAdmin.role.admin" : "teamAdmin.role.member")}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
                       <td>{tasks.filter((task) => task.assigneeId === m.accountId).length}</td>
+                      <td>
+                        <span className={styles.rowActions}>
+                          {row.action === "leave" ? (
+                            <button
+                              type="button"
+                              className={`${styles.headBtn} ${styles.rowBtn}`}
+                              data-part="member-leave"
+                              disabled={busy || row.actionLock !== null}
+                              title={row.actionLock === "last-owner" ? t("teamAdmin.member.leaveBlocked") : undefined}
+                              onClick={onLeave}
+                            >
+                              {t("teamAdmin.member.leave")}
+                            </button>
+                          ) : null}
+                          {row.action === "remove" ? (
+                            <button
+                              type="button"
+                              className={`${styles.headBtn} ${styles.rowBtn} ${styles.rowBtnDanger}`}
+                              data-part="member-remove"
+                              disabled={busy || row.actionLock !== null}
+                              onClick={() => onRemove(m)}
+                            >
+                              {t("team.remove")}
+                            </button>
+                          ) : null}
+                        </span>
+                      </td>
                     </tr>
-                  ))}
-                  {invites.map((inv) => (
-                    <tr key={inv.id}>
+                  );
+                })}
+                {invites.map((inv) => {
+                  const days = inviteDaysLeft(inv, now);
+                  const meta =
+                    days === null
+                      ? t("teamTask.invitePendingLabel")
+                      : days === 0
+                        ? t("teamAdmin.invite.expiresToday")
+                        : days === 1
+                          ? t("teamAdmin.invite.expiresOne")
+                          : t("teamAdmin.invite.expires", { n: days });
+                  return (
+                    <tr key={inv.id} data-part="pending-row">
                       <td>
                         <span className={styles.person}>
-                          <span className={styles.avatar} style={{ border: "1px dashed var(--v2-dashed)", background: "transparent" }}>
-                            @
-                          </span>
+                          <span className={styles.pendingAvatar}>@</span>
                           <span className={styles.personText}>
                             <span>{inv.target}</span>
-                            <span className={styles.personMeta}>{t("teamTask.invitePendingLabel")}</span>
+                            <span className={styles.pendingMeta}>{meta}</span>
                           </span>
                         </span>
                       </td>
-                      <td className={styles.muted}>{roleLabel(inv.role)}</td>
+                      <td className={styles.pendingRole}>{t(inv.role === "owner" ? "teamAdmin.role.owner" : inv.role === "admin" ? "teamAdmin.role.admin" : "teamAdmin.role.member")}</td>
+                      <td className={styles.dashCell}>—</td>
                       <td>
-                        <button type="button" className={styles.btn} disabled={busy} onClick={() => onRevoke(inv.id)}>
+                        <button type="button" className={`${styles.headBtn} ${styles.rowBtn}`} data-part="invite-revoke" disabled={busy} onClick={() => onRevoke(inv.id)}>
                           {t("team.revoke")}
                         </button>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {soleOwner ? (
+            <div className={`${styles.hint} ${styles.footHint}`} data-part="last-owner-hint">
+              {t("teamAdmin.lastOwnerHint")}
             </div>
-          </section>
-
-          {!membersOnly ? (
-            <section className={styles.side} aria-labelledby="team-matrix">
-              <div className={styles.card}>
-                <div className={styles.cardHead}>
-                  <h2 id="team-matrix" className={styles.cardTitle}>
-                    {t("teamTask.matrix.title")}
-                  </h2>
-                </div>
-                <div className={styles.cardHead}>
-                  <div className={styles.matrix}>
-                    <span />
-                    <span className={styles.matrixHead}>Owner</span>
-                    <span className={styles.matrixHead}>Admin</span>
-                    <span className={styles.matrixHead}>Membro</span>
-                    {MATRIX_ROWS.map((row) => (
-                      <div key={row.key} style={{ display: "contents" }}>
-                        <span className={styles.matrixRowLabel}>{t(row.key)}</span>
-                        <MatrixCell value={row.owner} />
-                        <MatrixCell value={row.admin} />
-                        <MatrixCell value={row.member} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className={styles.cardHead}>
-                  <div className={styles.divider} style={{ flex: 1 }} />
-                </div>
-                <div className={styles.cardHead}>
-                  <h3 className={styles.cardTitle}>{t("teamTask.activity.title")}</h3>
-                </div>
-                <div className={styles.cardHead}>
-                  <div className={styles.activity}>
-                    {activity.length === 0 ? (
-                      <span className={styles.muted}>{t("teamTask.activity.empty")}</span>
-                    ) : (
-                      activity.map((task) => (
-                        <span key={task.id}>
-                          <b>{task.ref}</b> · {t(TEAM_STATE_LABEL_KEY[task.state])} · {ageLabel(task.updatedAt)}
-                        </span>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {canManage ? (
-                <div className={styles.card}>
-                  <div className={styles.cardHead}>
-                    <h2 className={styles.cardTitle}>{t("team.inviteTitle")}</h2>
-                  </div>
-                  <div className={styles.cardHead}>
-                    <input
-                      className={styles.input}
-                      placeholder={t("team.inviteTarget")}
-                      value={inviteTarget}
-                      onChange={(e) => onInviteTarget(e.target.value)}
-                    />
-                    <select className={styles.select} value={inviteRole} onChange={(e) => onInviteRole(e.target.value as TeamRole)}>
-                      <option value="member">{roleLabel("member")}</option>
-                      <option value="admin">{roleLabel("admin")}</option>
-                      {myRole === "owner" ? <option value="owner">{roleLabel("owner")}</option> : null}
-                    </select>
-                    <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={busy || inviteTarget.trim() === ""} onClick={onInvite}>
-                      {t("team.invite")}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </section>
           ) : null}
-        </div>
+        </section>
       ) : (
-        <div className={styles.card}>
-          <div className={styles.cardHead}>
-            <h2 className={styles.cardTitle}>{t("teamTask.activity.title")}</h2>
-          </div>
-          <div className={styles.cardHead}>
-            <div className={styles.activity}>
-              {activity.length === 0 ? (
-                <span className={styles.muted}>{t("teamTask.activity.empty")}</span>
-              ) : (
-                activity.map((task) => (
-                  <span key={task.id}>
-                    <b>{task.ref}</b> · {t(TEAM_STATE_LABEL_KEY[task.state])} · {ageLabel(task.updatedAt)}
-                  </span>
-                ))
-              )}
+        <>
+          <div className={styles.card}>
+            <div className={styles.cardHead}>
+              <h2 className={styles.cardTitle}>{t("teamAdmin.audit.matrixTitle")}</h2>
+            </div>
+            <div className={styles.cardHead}>
+              <div className={styles.matrix}>
+                <span />
+                <span className={styles.matrixHead}>Owner</span>
+                <span className={styles.matrixHead}>Admin</span>
+                <span className={styles.matrixHead}>Membro</span>
+                {MATRIX_ROWS.map((row) => (
+                  <div key={row.key} style={{ display: "contents" }}>
+                    <span className={styles.matrixRowLabel}>{t(row.key)}</span>
+                    <MatrixCell value={row.owner} />
+                    <MatrixCell value={row.admin} />
+                    <MatrixCell value={row.member} />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-          <div className={styles.cardHead}>
-            <span className={styles.muted}>{t("teamTask.audit.note")}</span>
+          <div className={styles.card}>
+            <div className={styles.cardHead}>
+              <h2 className={styles.cardTitle}>{t("teamTask.activity.title")}</h2>
+            </div>
+            <div className={styles.cardHead}>
+              <div className={styles.activity}>
+                {activity.length === 0 ? (
+                  <span className={styles.muted}>{t("teamTask.activity.empty")}</span>
+                ) : (
+                  activity.map((task) => (
+                    <span key={task.id}>
+                      <b>{task.ref}</b> · {t(TEAM_STATE_LABEL_KEY[task.state])} · {ageLabel(task.updatedAt)}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className={styles.cardHead}>
+              <span className={styles.muted}>{t("teamTask.audit.note")}</span>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-function Stat({ label, value, hint, warn }: { label: string; value: string; hint: string; warn?: boolean }) {
+function Stat({ label, value, hint, warn, part }: { label: string; value: string; hint: string; warn?: boolean; part?: string }) {
   return (
-    <div className={`${styles.stat}${warn ? ` ${styles.statWarn}` : ""}`}>
+    <div className={`${styles.stat}${warn ? ` ${styles.statWarn}` : ""}`} data-part={part ? `stat-${part}` : undefined}>
       <span className={styles.statLabel}>{label}</span>
-      <span className={`${styles.statValue}${warn ? ` ${styles.statValueWarn}` : ""}`}>{value}</span>
+      <span className={`${styles.statBig}${warn ? ` ${styles.statValueWarn}` : ""}`}>{value}</span>
       <span className={styles.statHint}>{hint}</span>
     </div>
   );
@@ -1228,7 +1724,7 @@ function TeamBoard({
           </svg>
           {teamName}
         </button>
-        <h1 className={styles.boardTitle}>{t("teamTask.subnav.board")}</h1>
+        <h1 className={styles.boardTitle}>{t("teamAdmin.boardTitle")}</h1>
         <span className={styles.boardMeta}>
           {sprintName ? `${sprintName} · ` : ""}
           {t("teamTask.board.openCount", { n: String(openCount) })}

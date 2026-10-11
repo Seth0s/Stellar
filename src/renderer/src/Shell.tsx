@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { t } from "../../shared/i18n";
+import type { MessageKey } from "../../shared/i18n";
 import type { BoardRow, BoardCounts, CloudStatusInfo, InboxSnapshotInfo } from "../../preload/index";
 import type { SessionTemplate } from "./useBoardStore";
 import { Home } from "./Home";
@@ -10,8 +11,20 @@ import { InboxPage } from "./InboxPage";
 import { CloudLinkPanel } from "./CloudLinkPanel";
 import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries";
 import { consumeTeamBoardFocus } from "./board-quick-task-decisions";
+import { setTeamSub, useTeamNav, type TeamSub } from "./team-nav";
 import { hasCloudAccount, shellNavSections, shouldResetShellSection } from "./account-mode-decision";
 import styles from "./Shell.module.css";
+
+const TEAM_SUB_LABEL: Record<TeamSub, MessageKey> = {
+  overview: "teamTask.subnav.overview",
+  board: "teamTask.subnav.board",
+  members: "teamTask.subnav.members",
+  home: "teamTask.subnav.home",
+  import: "teamTask.subnav.import",
+  integrations: "teamTask.subnav.integrations",
+  audit: "teamTask.subnav.audit",
+  settings: "teamAdmin.subnav.settings",
+};
 
 export type ShellSection = "sessions" | "inbox" | "workhome" | "team" | "stats" | "account";
 
@@ -109,6 +122,7 @@ export function Shell({
   const [section, setSection] = useState<ShellSection>(initialSection);
   const [hasInvite, setHasInvite] = useState(false);
   const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
+  const teamNav = useTeamNav();
   const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId?: string; unassigned?: boolean } | null>(null);
 
   const loggedIn = hasCloudAccount(cloud);
@@ -190,11 +204,11 @@ export function Shell({
 
         <nav className={styles.nav} aria-label={t("shell.sections")}>
           {items.map((item) => (
+            <Fragment key={item.id}>
             <button
-              key={item.id}
               type="button"
               data-section={item.id}
-              className={`${styles.navItem}${section === item.id ? ` ${styles.navItemOn}` : ""}`}
+              className={`${styles.navItem}${section === item.id ? ` ${styles.navItemOn}` : ""}${item.id === "team" && section === "team" && teamNav.available.length > 0 ? ` ${styles.navItemParent}` : ""}`}
               aria-current={section === item.id ? "page" : undefined}
               onClick={() => setSection(item.id)}
             >
@@ -204,6 +218,22 @@ export function Shell({
               {item.sub !== undefined ? <span className={styles.navSub}>{item.sub}</span> : null}
               {item.badge !== undefined ? <span className={styles.badge}>{item.badge}</span> : null}
             </button>
+            {item.id === "team" && section === "team"
+              ? teamNav.available.map((sub) => (
+                  <button
+                    key={sub}
+                    type="button"
+                    data-team-sub={sub}
+                    data-part={sub === "import" ? "team-open-import" : sub === "integrations" ? "team-open-integrations" : undefined}
+                    className={`${styles.subItem}${teamNav.sub === sub ? ` ${styles.subItemOn}` : ""}`}
+                    aria-current={teamNav.sub === sub ? "page" : undefined}
+                    onClick={() => setTeamSub(sub)}
+                  >
+                    {t(TEAM_SUB_LABEL[sub])}
+                  </button>
+                ))
+              : null}
+            </Fragment>
           ))}
         </nav>
 

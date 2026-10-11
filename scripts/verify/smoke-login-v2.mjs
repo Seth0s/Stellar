@@ -219,44 +219,33 @@ await withApp("waiting", async (page) => {
 });
 
 // ---- Tela 7: Invite ----
+// The invite dialog is the approved Invite.dc.html (sign-in step): who invited whom, the
+// masked invited identity, GitHub / email sign-in. The fixture feeds the public preview.
 await withApp("invite", async (page) => {
-  const up = await waitFor(page, `!!document.querySelector('[data-invite-dialog]')`);
-  check("invite dialog mounts from fixture", up, true);
+  const up = await waitFor(page, `!!document.querySelector('[data-invite-dialog][data-step="signin"]')`);
+  check("invite dialog mounts from fixture on the sign-in step", up, true);
   await delay(300);
 
-  const head = await page.evalJs(
-    `(document.querySelector('[data-invite-dialog] [class*="inviter"]')?.textContent || "").trim()`,
-  );
-  const team = await page.evalJs(
-    `(document.querySelector('[data-invite-dialog] h1')?.textContent || "").trim()`,
-  );
-  const role = await page.evalJs(
-    `(document.querySelector('[data-invite-dialog] [class*="role"]')?.textContent || "").trim()`,
-  );
-  const expires = await page.evalJs(
-    `(document.querySelector('[data-invite-dialog] [class*="expires"]')?.textContent || "").trim()`,
-  );
-  const accept = await page.evalJs(
-    `(document.querySelector('[data-invite-dialog] [class*="primaryBtn"]')?.textContent || "").trim()`,
-  );
-  const stats = await page.evalJs(
-    `[...document.querySelectorAll('[data-invite-dialog] [class*="statN"]')].map((e) => e.textContent.trim())`,
-  );
-  const grid = await page.evalJs(measureBox("[data-invite-dialog] [class*='withTeamGrid']"));
+  const text = (sel) => page.evalJs(`(document.querySelector(${JSON.stringify(sel)})?.textContent || "").replace(/\\s+/g, " ").trim()`);
+  const title = await text("[data-invite-dialog] h1");
+  const lead = await text('[data-part="signin-lead"]');
+  const info = await text('[data-part="signin-info"]');
+  const github = await text('[data-part="signin-github"]');
+  const submit = await text('[data-part="signin-submit"]');
+  const panel = await page.evalJs(`(() => {
+    const el = document.querySelector("[data-invite-dialog] section");
+    const cs = getComputedStyle(el);
+    return { width: Math.round(el.getBoundingClientRect().width), padding: cs.paddingTop, radius: cs.borderTopLeftRadius, gap: cs.rowGap };
+  })()`);
 
-  check("invite header names inviter", head.includes("Riley Chen"), true);
-  check("invite team name", team, "Orbit Labs");
-  check("invite role badge", role, "MEMBRO");
-  check("invite expiry", expires, "Expira em 6 dias");
-  check("invite accept copy", accept, "Aceitar e abrir o perfil");
-  check(
-    "invite team grid 3 stats",
-    Array.isArray(stats) && stats[0] === "12" && stats[1] === "3" && stats[2] === "2",
-    true,
-  );
-  check("invite grid is 3 columns", grid?.gap != null, true);
+  check("invite title", title, "Você foi convidado");
+  check("invite names inviter and team", lead, "Riley Chen convidou você para o time Orbit Labs.");
+  check("invite shows only the masked invited identity", info.includes("r***@orbit.example") && !info.includes("riley@"), true);
+  check("invite GitHub sign-in", github, "Continuar com GitHub");
+  check("invite email sign-in", submit, "Entrar e ver o convite");
+  check("invite panel is the prototype's (478px wide, 28px padding, 16px radius, 18px gap)", `${panel?.width}|${panel?.padding}|${panel?.radius}|${panel?.gap}`, "478|28px|16px|18px");
 
-  measures.tela7 = { head, team, role, expires, accept, stats, grid };
+  measures.tela7 = { title, lead, info, github, submit, panel };
   const appShot = await shot(page, "tela7-app");
   const protoShot = await captureProto(page, "Invite.dc.html", "tela7-proto");
   const side = join(OUT_DIR, "tela7-side-by-side.png");

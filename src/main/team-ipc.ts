@@ -25,7 +25,6 @@ import {
   claimTeamTaskOp,
   commentTeamTaskOp,
   createAccountTeam,
-  createTeamInvite,
   createTeamTaskOp,
   createTeamSubtasksOp,
   patchTeamOp,
@@ -53,7 +52,8 @@ import {
   type TeamActiveProfile,
   type TeamContext,
 } from "./team";
-import type { TeamRole } from "./team-decision";
+import { deleteTeamOp, createTeamInviteWithDelivery, previewTeamInvite, renameTeamOp } from "./team-admin";
+import { extractInviteToken, inviteTokenForAccept, type TeamRole } from "./team-decision";
 import { TEAM_TASK_PURPOSE, localGateCommands, teamTaskPrompt, type TeamTaskView } from "./team-task-decision";
 import type { TaskPurpose } from "../task-purpose";
 import type { WorkHomeConflictChoice } from "./work-home-apply-decision";
@@ -163,9 +163,34 @@ export function registerTeamIpc(deps: TeamIpcDeps): void {
     const built = await context();
     if (!built.ok) return { ok: false as const, error: built.error };
     if (typeof teamId !== "string") return { ok: false as const, error: "time inválido" };
-    const rec = (typeof input === "object" && input !== null ? input : {}) as { target?: unknown; role?: unknown };
+    const rec = (typeof input === "object" && input !== null ? input : {}) as { target?: unknown; role?: unknown; delivery?: unknown };
     if (typeof rec.target !== "string" || typeof rec.role !== "string") return { ok: false as const, reason: "invalid-target" as const, error: "pedido de convite incompleto" };
-    return createTeamInvite(built.ctx, teamId, { target: rec.target, role: rec.role as TeamRole });
+    return createTeamInviteWithDelivery(built.ctx, teamId, {
+      target: rec.target,
+      role: rec.role as TeamRole,
+      delivery: rec.delivery === "link" ? "link" : "email",
+    });
+  });
+
+  // Public preview: no login needed, so it never goes through `context()`.
+  ipcMain.handle("team:invite-preview", async (_e, tokenOrLink: unknown) => {
+    const token = typeof tokenOrLink === "string" ? extractInviteToken(tokenOrLink) : null;
+    if (!token) return { ok: false as const, reason: "not-found" as const, error: "convite sem token" };
+    return previewTeamInvite(deps.apiBaseUrl(), token);
+  });
+
+  ipcMain.handle("team:rename", async (_e, teamId: unknown, name: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof name !== "string") return { ok: false as const, error: "pedido de renomear incompleto" };
+    return renameTeamOp(built.ctx, teamId, name);
+  });
+
+  ipcMain.handle("team:delete", async (_e, teamId: unknown, confirm: unknown) => {
+    const built = await context();
+    if (!built.ok) return { ok: false as const, error: built.error };
+    if (typeof teamId !== "string" || typeof confirm !== "string") return { ok: false as const, error: "pedido de apagar incompleto" };
+    return deleteTeamOp(built.ctx, teamId, confirm);
   });
 
   ipcMain.handle("team:revoke-invite", async (_e, teamId: unknown, inviteId: unknown) => {
@@ -208,8 +233,10 @@ export function registerTeamIpc(deps: TeamIpcDeps): void {
   ipcMain.handle("team:accept-invite", async (_e, token: unknown) => {
     const built = await context();
     if (!built.ok) return { ok: false as const, reason: "error" as const, error: built.error };
-    if (typeof token !== "string" || token.trim() === "") return { ok: false as const, reason: "not-found" as const, error: "convite sem token" };
-    return acceptTeamInvite(built.ctx, token.trim());
+    // The raw token or the whole pasted invite link (token in the fragment).
+    const raw = typeof token === "string" ? inviteTokenForAccept(token) : null;
+    if (!raw) return { ok: false as const, reason: "not-found" as const, error: "convite sem token" };
+    return acceptTeamInvite(built.ctx, raw);
   });
 
   ipcMain.handle("team:publish-preview", async (_e, teamId: unknown) => {

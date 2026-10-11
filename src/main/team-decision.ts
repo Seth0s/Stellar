@@ -201,7 +201,19 @@ export function parseTeamListView(raw: unknown): TeamListView | null {
   };
 }
 
-export type TeamDetailView = { team: TeamSummary; members: TeamMemberView[] };
+/** Plan seats of a team: members of any role count, pending invites do not.
+ *  `null` on the detail means the team has no plan (no seat limit). */
+export type TeamSeats = { used: number; total: number; expiresAt: string | null };
+
+export type TeamDetailView = { team: TeamSummary; members: TeamMemberView[]; seats: TeamSeats | null };
+
+function parseTeamSeats(raw: unknown): TeamSeats | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (typeof rec.used !== "number" || typeof rec.total !== "number") return null;
+  if (!Number.isFinite(rec.used) || !Number.isFinite(rec.total) || rec.total < 0 || rec.used < 0) return null;
+  return { used: rec.used, total: rec.total, expiresAt: asTimestamp(rec.expires_at) };
+}
 
 /** One member row. B7.1 carries `display_name`/`avatar_initials` (and `email`
  *  for owner/admin); older replies simply leave them blank. */
@@ -231,17 +243,34 @@ export function parseTeamDetail(raw: unknown): TeamDetailView | null {
       if (parsed) members.push(parsed);
     }
   }
-  return { team, members };
+  return { team, members, seats: parseTeamSeats(rec.seats) };
 }
 
-export type TeamInviteView = { id: string; teamId: string; target: string; role: TeamRole };
+export type TeamInviteView = { id: string; teamId: string; target: string; role: TeamRole; expiresAt: string | null };
 
 export function parseTeamInvite(raw: unknown): TeamInviteView | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   if (!isOpaqueId(rec.id) || !isOpaqueId(rec.team_id)) return null;
   if (typeof rec.target !== "string" || !isTeamRole(rec.role)) return null;
-  return { id: rec.id, teamId: rec.team_id, target: rec.target, role: rec.role };
+  return { id: rec.id, teamId: rec.team_id, target: rec.target, role: rec.role, expiresAt: asTimestamp(rec.expires_at) };
+}
+
+export type InviteDelivery = "email" | "link";
+
+/** Reply of `POST /v1/teams/{id}/invites`: the invite plus how it was sent. The
+ *  `inviteUrl` only exists in this reply (the server never lists it again). */
+export type TeamInviteCreated = TeamInviteView & { delivery: InviteDelivery; inviteUrl: string | null };
+
+export function parseTeamInviteCreated(raw: unknown, requested: InviteDelivery): TeamInviteCreated | null {
+  const invite = parseTeamInvite(raw);
+  if (!invite) return null;
+  const rec = raw as Record<string, unknown>;
+  return {
+    ...invite,
+    delivery: rec.delivery === "link" ? "link" : rec.delivery === "email" ? "email" : requested,
+    inviteUrl: asString(rec.invite_url),
+  };
 }
 
 /** GET /v1/teams/{id}/invites -> `{ invites: [...] }` (owner/admin). */
@@ -255,6 +284,87 @@ export function parseTeamInviteList(raw: unknown): TeamInviteView[] {
     }
   }
   return invites;
+}
+
+// ---------------------------------------------------------------------------
+// Invite token and public preview
+// ---------------------------------------------------------------------------
+
+/** Same rule the server and the site page use for a raw invite token. */
+const INVITE_TOKEN_RE = /^[A-Za-z0-9_-]{16,200}$/;
+
+/**
+ * Reads an invite token from what the person has: the raw token, or the whole
+ * invite link pasted (`https://.../invite#t=<token>` — the token lives in the
+ * fragment). Anything that does not end up matching the token rule is `null`,
+ * never a guess.
+ */
+export function extractInviteToken(input: string): string | null {
+  const text = input.trim();
+  if (text === "") return null;
+  if (INVITE_TOKEN_RE.test(text)) return text;
+  let fragment: string | null;
+  try {
+    const hash = new URL(text).hash;
+    fragment = hash !== "" ? hash.slice(1) : null;
+  } catch {
+    // Not an absolute URL: accept `#t=...` or `t=...` pasted on its own.
+    const at = text.indexOf("#");
+    fragment = at >= 0 ? text.slice(at + 1) : text.startsWith("t=") ? text : null;
+  }
+  if (fragment === null) return null;
+  const token = new URLSearchParams(fragment).get("t")?.trim() ?? "";
+  return INVITE_TOKEN_RE.test(token) ? token : null;
+}
+
+/**
+ * For accepting: the strict token/link reading above, and for a bare string
+ * that is clearly not a link (no scheme, path or fragment marks) the trimmed
+ * text itself — the server is the authority on a short or odd token, and a
+ * deep link has always been trusted as received.
+ */
+export function inviteTokenForAccept(input: string): string | null {
+  const strict = extractInviteToken(input);
+  if (strict !== null) return strict;
+  const text = input.trim();
+  return text !== "" && text.length <= 200 && !/[\s/:#?=]/.test(text) ? text : null;
+}
+
+/** `GET /v1/invites/{token}/preview` — public, no login; the target is masked. */
+export type InvitePreviewView = {
+  teamName: string;
+  invitedByName: string;
+  role: TeamRole;
+  targetMasked: string;
+  expiresAt: string | null;
+};
+
+export function parseInvitePreview(raw: unknown): InvitePreviewView | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const teamName = asString(rec.team_name);
+  if (teamName === null || !isTeamRole(rec.role)) return null;
+  return {
+    teamName,
+    invitedByName: typeof rec.invited_by_name === "string" ? rec.invited_by_name : "",
+    role: rec.role,
+    targetMasked: typeof rec.target_masked === "string" ? rec.target_masked : "",
+    expiresAt: asTimestamp(rec.expires_at),
+  };
+}
+
+/**
+ * Masks an identity the way the server masks an invite target: only the first
+ * letter stays (`k***@example.com` for an email, `o***` for a GitHub login).
+ * Lets the app compare the signed-in identity with the preview without the
+ * server ever sending the full target before login.
+ */
+export function maskInviteTarget(target: string): string {
+  const value = target.trim();
+  if (value === "") return "";
+  const at = value.indexOf("@");
+  if (at < 0) return `${value.charAt(0)}***`;
+  return `${value.charAt(0)}***${value.slice(at)}`;
 }
 
 // ---------------------------------------------------------------------------

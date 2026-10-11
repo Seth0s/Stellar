@@ -109,6 +109,38 @@
   color: var(--v2-bright);
 }
 
+/* The section whose children are listed under it keeps white text; the open child carries the highlight. */
+.navItemParent {
+  background: transparent;
+  color: var(--v2-bright);
+}
+
+.subItem {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+  height: var(--v2-s16);
+  padding: 0 var(--v2-s5) 0 var(--v2-s17);
+  border: 0;
+  border-radius: var(--v2-r8);
+  background: transparent;
+  color: var(--v2-text-3);
+  font: inherit;
+  font-size: var(--v2-f13);
+  cursor: pointer;
+  text-align: left;
+}
+
+.subItem:hover {
+  background: var(--v2-nav-hover);
+  color: var(--v2-text);
+}
+
+.subItemOn {
+  background: var(--v2-nav-active);
+  color: var(--v2-bright);
+}
+
 .navLabel {
   flex: 1;
 }

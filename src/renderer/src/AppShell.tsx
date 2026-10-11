@@ -8,6 +8,8 @@ import { LoginScreen } from "./LoginScreen";
 import { InviteDialog, type InvitePreview } from "./InviteDialog";
 import { Shell } from "./Shell";
 import { shouldShowFirstRun } from "./home-decisions";
+import { writeTeamBoardFocus } from "./board-quick-task-decisions";
+import { maskIdentity, requestTeamSub } from "./team-admin-decisions";
 
 function firstRunKey(profileId: string | null): string {
   return `ac.firstRun.${profileId ?? "default"}`;
@@ -61,6 +63,8 @@ export function AppShell({
   const [fixture, setFixture] = useState<LoginV2Fixture>(null);
   const [fixtureReady, setFixtureReady] = useState(false);
   const [homeSynced, setHomeSynced] = useState(false);
+  // Bumped to remount the shell once an accepted invite should land on the team.
+  const [shellKey, setShellKey] = useState(0);
 
   useEffect(() => {
     void window.system
@@ -93,13 +97,10 @@ export function AppShell({
     setInviteToken(fixture.invite.token);
     setInvitePreview({
       teamName: fixture.invite.teamName,
-      inviterName: fixture.invite.inviterName,
+      invitedByName: fixture.invite.inviterName,
       role: fixture.invite.role,
-      expiresInDays: fixture.invite.expiresInDays,
-      email: fixture.invite.email,
-      skills: fixture.invite.skills,
-      agents: fixture.invite.agents,
-      rules: fixture.invite.rules,
+      targetMasked: maskIdentity(fixture.invite.email),
+      expiresAt: new Date(Date.now() + fixture.invite.expiresInDays * 24 * 60 * 60 * 1000).toISOString(),
     });
   }, [fixture]);
 
@@ -122,6 +123,12 @@ export function AppShell({
     // status push (pending → logged-out with lastError) must not bounce them
     // back to the shell mid-flow.
     if (phase === "login") return;
+    // An invite is waiting: the guest lands on it, not on the first-run choice
+    // (the invite dialog signs them in itself).
+    if (inviteToken) {
+      setPhase("ready");
+      return;
+    }
     if (fixture?.invite && !fixture.login) {
       setPhase("ready");
       return;
@@ -132,7 +139,7 @@ export function AppShell({
     } else {
       setPhase("ready");
     }
-  }, [booted, profileId, boards.length, cloud, fixture, phase]);
+  }, [booted, profileId, boards.length, cloud, fixture, phase, inviteToken]);
 
   function decideFirstRun() {
     try {
@@ -208,6 +215,7 @@ export function AppShell({
   return (
     <>
       <Shell
+        key={shellKey}
         boards={boards}
         boardCounts={boardCounts}
         workspaceRoot={workspaceRoot}
@@ -233,9 +241,14 @@ export function AppShell({
             setInvitePreview(null);
           }}
           onAccepted={() => {
-            setInviteToken(null);
-            setInvitePreview(null);
+            // The dialog stays up on its "joined" screen; only the profiles refresh.
             void window.profiles.list().then(setProfiles).catch(() => {});
+            void window.cloud.status().then(setCloud).catch(() => {});
+          }}
+          onOpenTeam={(teamId) => {
+            writeTeamBoardFocus({ teamId, unassigned: false });
+            requestTeamSub("board");
+            setShellKey((k) => k + 1);
           }}
         />
       ) : null}

@@ -756,6 +756,29 @@
   --v2-danger-bg: #3a1717;
   --v2-info-bg: #1b2546;
 
+  /* Team admin and invite screens (TeamAdmin / Invite prototypes): notices, status
+   * pills, the danger family, and the lines the shared scale does not carry. */
+  --v2-ok-fg: #a6ecc0;
+  --v2-ok-bg: #1d3a2a;
+  --v2-ok-surface: #14241a;
+  --v2-warn-surface: #2a2414;
+  --v2-warn-line: #3a3218;
+  --v2-info-surface: #181e36;
+  --v2-info-line: #2a3358;
+  --v2-danger-fg: #f0a8a8;
+  --v2-danger-fg-hover: #ffc8c8;
+  --v2-danger-line: #5a2a2a;
+  --v2-danger-line-hover: #7a3a3a;
+  --v2-danger-surface: #1a1010;
+  --v2-danger-pill-bg: #3a1a1a;
+  --v2-danger-notice-bg: #2a1414;
+  --v2-danger-text: #c9a0a0;
+  --v2-line-table: #1d2130;
+  --v2-line-modal: #262c3d;
+  --v2-line-divider: #232836;
+  --v2-icon-muted: #858da0;
+  --v2-dashed-pending: #4a5163;
+
   --v2-team-bg: #123a35;
   --v2-team-fg: #8ee6d8;
   --v2-avatar-bg: #262d52;
