@@ -1,0 +1,8 @@
+{
+  "login": {
+    "step": 1,
+    "machineName": "dev-fedora",
+    "expiresSec": 292,
+    "displayName": "riley"
+  }
+}

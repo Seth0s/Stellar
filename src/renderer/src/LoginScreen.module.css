@@ -8,6 +8,59 @@
   color: var(--v2-text);
 }
 
+.waitingWrap {
+  position: absolute;
+  inset: 0;
+  top: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--v2-s18);
+  box-sizing: border-box;
+  background: radial-gradient(760px 480px at 50% 40%, var(--v2-glow) 0%, var(--v2-bg) 72%);
+  color: var(--v2-text);
+}
+
+.waitingCard {
+  /* Prototype LoginWaiting.dc.html omits box-sizing on the card → content-box:
+     max-width 560px is the content box; padding 32px + border 1px each side
+     render ~624px total (same as the approved print). */
+  box-sizing: content-box;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s13);
+  padding: var(--v2-s16);
+  border-radius: var(--v2-r18);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-card);
+}
+
+.cancelLink {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--v2-f12h);
+  color: var(--v2-link);
+  cursor: pointer;
+}
+
+.cancelLink:hover {
+  color: var(--fila-link-hover);
+}
+
+.waitingWrap .primaryBtn {
+  height: 42px;
+  padding: 0 var(--v2-s9);
+}
+
+.waitingWrap .input {
+  height: 42px;
+  padding: 0 var(--v2-s7);
+}
+
 .left {
   flex: 1 1 520px;
   display: flex;

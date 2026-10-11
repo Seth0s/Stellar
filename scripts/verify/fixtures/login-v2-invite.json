@@ -1,0 +1,13 @@
+{
+  "invite": {
+    "token": "fixture-invite-token",
+    "teamName": "Orbit Labs",
+    "inviterName": "Riley Chen",
+    "role": "member",
+    "expiresInDays": 6,
+    "email": "riley@orbit.example",
+    "skills": 12,
+    "agents": 3,
+    "rules": 2
+  }
+}

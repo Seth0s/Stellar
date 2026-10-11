@@ -2145,6 +2145,22 @@ const system = {
     busProtocol: number;
     label: string;
   }> => ipcRenderer.invoke("app:build-identity"),
+  /** Isolated fixture for app-v2 Boot / LoginWaiting / Invite smokes. */
+  getLoginV2Fixture: (): Promise<{
+    boot?: { sessionCount?: number; homeSynced?: boolean; hold?: boolean };
+    login?: { step?: 0 | 1 | 2 | 3; machineName?: string; expiresSec?: number; displayName?: string };
+    invite?: {
+      token: string;
+      teamName: string;
+      inviterName: string;
+      role: "owner" | "admin" | "member";
+      expiresInDays: number;
+      email: string;
+      skills: number;
+      agents: number;
+      rules: number;
+    };
+  } | null> => ipcRenderer.invoke("ui:login-v2-fixture"),
   /** Providers DINÂMICOS (task cebaf3c8) — a tela de Settings. O main é
    * dono do arquivo: a tela manda INTENÇÃO (adicionar/remover) e recebe de
    * volta a visão do que o loader registrou. A tela nunca lê nem escreve

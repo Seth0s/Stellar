@@ -5,7 +5,7 @@ import type { SessionTemplate } from "./useBoardStore";
 import { Boot } from "./Boot";
 import { FirstRun } from "./FirstRun";
 import { LoginScreen } from "./LoginScreen";
-import { InviteDialog } from "./InviteDialog";
+import { InviteDialog, type InvitePreview } from "./InviteDialog";
 import { Shell } from "./Shell";
 import { shouldShowFirstRun } from "./home-decisions";
 
@@ -14,6 +14,8 @@ function firstRunKey(profileId: string | null): string {
 }
 
 type Phase = "boot" | "firstRun" | "login" | "ready";
+
+type LoginV2Fixture = Awaited<ReturnType<typeof window.system.getLoginV2Fixture>>;
 
 /**
  * Home controller. Decides, in order: the cold-start screen while the app
@@ -54,12 +56,25 @@ export function AppShell({
   const [profiles, setProfiles] = useState<ProfilesState | null>(null);
   const [cloud, setCloud] = useState<CloudStatusInfo | null>(null);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [locale, setLocaleState] = useState<Locale>(getLocale());
+  const [fixture, setFixture] = useState<LoginV2Fixture>(null);
+  const [fixtureReady, setFixtureReady] = useState(false);
+  const [homeSynced, setHomeSynced] = useState(false);
 
   useEffect(() => {
+    void window.system
+      .getLoginV2Fixture()
+      .then((f) => setFixture(f))
+      .catch(() => setFixture(null))
+      .finally(() => setFixtureReady(true));
     void window.profiles.list().then(setProfiles).catch(() => setProfiles(null));
     void window.cloud.status().then(setCloud).catch(() => {});
     const off = window.cloud.onStatusChanged(setCloud);
+    void window.workhome
+      .status()
+      .then((s) => setHomeSynced(s.lastSyncAt !== null || s.lastRevision !== null))
+      .catch(() => {});
     void window.team
       .pendingInvite()
       .then((r) => {
@@ -73,20 +88,47 @@ export function AppShell({
     };
   }, []);
 
+  useEffect(() => {
+    if (!fixture?.invite) return;
+    setInviteToken(fixture.invite.token);
+    setInvitePreview({
+      teamName: fixture.invite.teamName,
+      inviterName: fixture.invite.inviterName,
+      role: fixture.invite.role,
+      expiresInDays: fixture.invite.expiresInDays,
+      email: fixture.invite.email,
+      skills: fixture.invite.skills,
+      agents: fixture.invite.agents,
+      rules: fixture.invite.rules,
+    });
+  }, [fixture]);
+
   const profileId = profiles?.activeProfileId ?? null;
   const profileName = profiles?.profiles.find((p) => p.isActive)?.name ?? null;
+  const sessionCount =
+    typeof fixture?.boot?.sessionCount === "number" ? fixture.boot.sessionCount : boards.length;
+  const bootHomeSynced = fixture?.boot?.homeSynced ?? homeSynced;
+  const bootHold = !fixtureReady || fixture?.boot?.hold === true;
 
   const onBootReady = useCallback(() => setBooted(true), []);
 
   useEffect(() => {
     if (!booted) return;
+    if (fixture?.login) {
+      setPhase("login");
+      return;
+    }
+    if (fixture?.invite && !fixture.login) {
+      setPhase("ready");
+      return;
+    }
     const decided = localStorage.getItem(firstRunKey(profileId)) !== null;
     if (shouldShowFirstRun({ decided, boardCount: boards.length, cloud: cloud?.state ?? null })) {
       setPhase("firstRun");
     } else {
       setPhase("ready");
     }
-  }, [booted, profileId, boards.length, cloud]);
+  }, [booted, profileId, boards.length, cloud, fixture]);
 
   function decideFirstRun() {
     try {
@@ -111,7 +153,17 @@ export function AppShell({
   }
 
   if (!booted || phase === "boot") {
-    return <Boot profileReady={profiles !== null} profileName={profileName} sessionsReady={loaded} onReady={onBootReady} />;
+    return (
+      <Boot
+        profileReady={profiles !== null}
+        profileName={profileName}
+        sessionsReady={loaded}
+        sessionCount={sessionCount}
+        homeSynced={bootHomeSynced}
+        hold={bootHold}
+        onReady={onBootReady}
+      />
+    );
   }
 
   if (phase === "firstRun") {
@@ -131,6 +183,10 @@ export function AppShell({
   if (phase === "login") {
     return (
       <LoginScreen
+        initialStep={fixture?.login?.step}
+        initialMachineName={fixture?.login?.machineName}
+        initialExpiresSec={fixture?.login?.expiresSec}
+        fixtureDisplayName={fixture?.login?.displayName}
         onClose={() => {
           void window.profiles.list().then(setProfiles).catch(() => {});
           setPhase("ready");
@@ -167,9 +223,14 @@ export function AppShell({
       {inviteToken ? (
         <InviteDialog
           token={inviteToken}
-          onClose={() => setInviteToken(null)}
+          preview={invitePreview}
+          onClose={() => {
+            setInviteToken(null);
+            setInvitePreview(null);
+          }}
           onAccepted={() => {
             setInviteToken(null);
+            setInvitePreview(null);
             void window.profiles.list().then(setProfiles).catch(() => {});
           }}
         />

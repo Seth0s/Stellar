@@ -11,8 +11,9 @@
  * missing instead of returning an empty or invented state.
  */
 
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import { createCloudApi, type CloudApi } from "./cloud-api";
+import { loadLoginV2Fixture, type LoginV2Fixture } from "./login-v2-fixture";
 import {
   createAndLinkCloudProfile,
   readCloudLinkView,
@@ -93,5 +94,11 @@ export function registerCloudAccountIpc(deps: CloudAccountIpcDeps): void {
     if (!token) return { ok: false, error: NOT_LOGGED_IN };
     const res = await cloudApi().deleteDevice(token, id);
     return res.ok ? { ok: true } : { ok: false, error: res.error.message };
+  });
+
+  /** Isolated Boot/LoginWaiting/Invite fixture — dev/smoke only; packaged builds refuse. */
+  ipcMain.handle("ui:login-v2-fixture", (): LoginV2Fixture | null => {
+    if (app.isPackaged) return null;
+    return loadLoginV2Fixture({ isPackaged: false });
   });
 }

@@ -81,7 +81,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--ink);
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  box-sizing: border-box;
+  background: var(--v2-titlebar);
   border-bottom: 1px solid var(--border);
   /* A moldura da JANELA: acima de tudo, inclusive do modal. Sem moldura do
      sistema, arrastar/minimizar/fechar não têm plano B (ver tokens.css). */
@@ -94,7 +97,7 @@ body {
   height: 100%;
   display: flex;
   align-items: center;
-  padding-left: 12px;
+  padding-left: 0;
   min-width: 0;
 }
 
