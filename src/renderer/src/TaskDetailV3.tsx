@@ -19,6 +19,16 @@ import {
   extractMeasuredBlurb,
   measuredGateRows,
 } from "./task-detail-v3-sections";
+
+function extractChangesRequestedReason(prompt: string | null | undefined): string | null {
+  if (!prompt) return null;
+  let last: string | null = null;
+  for (const raw of prompt.split(/\r?\n/)) {
+    const m = raw.trim().match(/^\[stellar:changes_requested\]\s+(.+)$/);
+    if (m?.[1]) last = m[1].trim();
+  }
+  return last;
+}
 import { Icon } from "./icons";
 import { getLocale, t } from "../../shared/i18n";
 import styles from "./TaskDetailV3.module.css";
@@ -129,12 +139,13 @@ export function TaskDetailV3({
   const [contextPercent, setContextPercent] = useState<number | null>(null);
   const [lastActivityAgeMs, setLastActivityAgeMs] = useState<number | null>(null);
   const implementer = task.cards.find((c) => c.role === "implementer") ?? task.cards[0] ?? null;
+  const changesRequestedReason = extractChangesRequestedReason(fullPrompt);
   const facts = queueFactsFromBoardItem(task, {
     contextPercent,
     lastActivityAgeMs,
     hasReportThisRound: task.report != null,
   });
-  const agora = deriveAgoraBanner(facts, now);
+  const agora = deriveAgoraBanner({ ...facts, changesRequestedReason }, now);
   const typeLabel = deriveTileTypeLabel(facts);
   const title = boardItemTitle(task);
   const parsed = parseTaskPrompt(fullPrompt);
@@ -255,8 +266,8 @@ export function TaskDetailV3({
       { id: "done", label: t("task.detail.phase.done") },
     ] as const;
     let current = 0;
-    if (facts.phase === "running") current = 1;
-    else if (facts.phase === "awaiting_review" || facts.phase === "changes_requested") current = 3;
+    if (facts.phase === "running" || facts.phase === "changes_requested") current = 1;
+    else if (facts.phase === "awaiting_review") current = 3;
     else if (facts.phase === "done") current = 4;
     else if (task.report) current = 2;
     else if (facts.phase === "ready" || facts.phase === "reserved" || facts.phase === "waiting_deps") current = 0;
@@ -335,7 +346,7 @@ export function TaskDetailV3({
                       <span
                         className={`${styles.phaseDot}${
                           i === phaseSteps.current
-                            ? ` ${styles.phaseDotCurrent}${facts.phase === "awaiting_review" || facts.phase === "changes_requested" ? ` ${styles.phaseDotCurrentAmber}` : ""}`
+                            ? ` ${styles.phaseDotCurrent}${facts.phase === "awaiting_review" ? ` ${styles.phaseDotCurrentAmber}` : ""}`
                             : i > phaseSteps.current
                               ? ` ${styles.phaseDotHollow}`
                               : ""

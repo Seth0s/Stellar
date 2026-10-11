@@ -38,10 +38,19 @@ import { APP_NOTICE } from "./agent-facing-notices";
  * file at the choke point). Same four values, same meaning. */
 export type StatusWriteActor = "app" | "agent" | "human" | "orchestrator";
 
-/** Human UI click OR board-orchestrator delegated signature — both are
- * authoritative judgment. Agent/app never displace either. */
-function isAuthoritativeActor(actor: StatusWriteActor): boolean {
+/** Writers who always apply their proposed status (human UI, or board
+ * orchestrator delegated signature). Distinct from the hold rule below. */
+function isAuthoritativeWriter(actor: StatusWriteActor): boolean {
   return actor === "human" || actor === "orchestrator";
+}
+
+/**
+ * Only a true human status move creates a hold. An orchestrator write
+ * (including unblock after answering a blocked question, when stamped
+ * orchestrator) must not park a later entitled judgment as divergence.
+ */
+function isHumanStatusHold(actor: StatusWriteActor | null): boolean {
+  return actor === "human";
 }
 
 export type StatusWriteInput = {
@@ -109,9 +118,11 @@ export type StatusWriteDecision = {
  *  4. Authoritative writer (human OR board orchestrator) → ALWAYS apply;
  *     CLEAR divergence. Orchestrator is delegated signature — never stamp
  *     as `human`.
- *  5. App/agent writes while last status actor is authoritative → HOLD
+ *  5. App/agent writes while last status actor is a true HUMAN → HOLD
  *     that status; SET divergence to the proposed value; warn when actor
- *     is agent; record a declaration (not a status transition).
+ *     is agent; record a declaration (not a status transition). An
+ *     orchestrator last move does NOT hold — unblock and other delegated
+ *     writes must not trap entitled judgment (reviewer done) as divergence.
  *  6. Otherwise → apply; CLEAR divergence.
  */
 export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision {
@@ -166,7 +177,7 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
     };
   }
 
-  if (isAuthoritativeActor(newActor)) {
+  if (isAuthoritativeWriter(newActor)) {
     return {
       status: proposedStatus,
       statusChanged: true,
@@ -178,7 +189,7 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
     };
   }
 
-  if (previousActor !== null && isAuthoritativeActor(previousActor)) {
+  if (isHumanStatusHold(previousActor)) {
     return {
       status: previousStatus,
       statusChanged: false,

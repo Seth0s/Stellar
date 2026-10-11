@@ -198,6 +198,19 @@ import {
   reportDeclaresIntention,
 } from "./report-estado-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
+import {
+  CHANGES_REQUESTED_STATUS,
+  carryChangesRequested,
+  changesRequestedFromResultJson,
+  clearChangesRequestedJson,
+  decideChangesRequestedWrite,
+  describeChangesRequestedWithoutReason,
+  normalizeChangesRequested,
+  reasonFromReviewReport,
+  stampChangesRequestedJson,
+  type ChangesRequestedStamp,
+} from "./task-changes-requested-decision";
+export { CHANGES_REQUESTED_STATUS } from "./task-changes-requested-decision";
 import { decideSpawnIsolation } from "./worktree-isolation-decision";
 import { defaultWorktreeRoot, prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
 import {
@@ -1292,6 +1305,12 @@ export type BusRequest =
        * Omitida em qualquer outro status = não mexe; ao SAIR de `blocked`, a
        * pergunta é limpa. */
       question?: unknown;
+      /**
+       * Required when `status` is `"changes_requested"`: `{ reason }` — short
+       * return-for-rework note. Board orchestrator, linked reviewer, or human
+       * may write it (even with review="wanted"); implementer is refused.
+       */
+      requestChanges?: { reason?: string } | unknown;
       /** Orchestrator override of the territory guard (a non-empty reason makes
        *  a would-be refusal pass and is recorded on the task's trail). Only
        *  read when this write ACTIVATES the task (attaches a card). */
@@ -3197,6 +3216,9 @@ export function createMessageBus(
       // `result_json` (nenhuma coluna nova). `null` = não há pergunta; um
       // `blocked` sem isto é RECUSADO na escrita, então não deveria existir.
       blockedQuestion: blockedQuestionFromResultJson(row.result_json),
+      // Return-for-rework stamp (status `changes_requested`) — same envelope
+      // as blockedQuestion; null when no open return.
+      changesRequested: changesRequestedFromResultJson(row.result_json),
       // Item 6 do sticky — a escrita FORA do território declarado, nomeada a
       // partir do diff que o gate-runner já capturou (nenhuma fonte nova).
       // `null` = sem território declarado, ou diff ainda não capturado.
@@ -4226,12 +4248,15 @@ export function createMessageBus(
     // Registra a resposta ANTES de limpar a pergunta: se o card estiver morto,
     // a resposta não some — vira fato da task.
     const withAnswer = stampBlockedAnswerJson(existing.result_json, { optionId: optionId || null, note: note || null, answer, by: actor, at: Date.now() });
+    // Status write uses `app`: answering a question is not judgment. Stamping
+    // human/orchestrator here used to create a status hold that parked a later
+    // entitled reviewer `done` as divergence. Who answered stays on `by`.
     const updated: TaskRow = {
       ...existing,
       status: "pending",
       result_json: clearBlockedQuestionJson(withAnswer),
       updated_at: Date.now(),
-      actor,
+      actor: "app",
     };
     const decision = callbacks.upsertTask(updated);
     let delivered = false;
@@ -6438,6 +6463,61 @@ export function createMessageBus(
           });
         }
       }
+      // Formal reviewer verdict moves authoritative status (same gate already
+      // ran above): aprovado → done; reprovado → changes_requested (rework).
+      // A concluding implementer report while returned clears the return so
+      // phase can become awaiting_review again.
+      if (linkedTask && !isTerminalStatus(linkedTask.status)) {
+        const taskForVerdict = callbacks.getTask(linkedTask.id) ?? linkedTask;
+        if (formalVerdict === "aprovado") {
+          callbacks.upsertTask({
+            ...taskForVerdict,
+            status: "done",
+            result_json: clearChangesRequestedJson(taskForVerdict.result_json) ?? taskForVerdict.result_json,
+            updated_at: Date.now(),
+            actor: "agent",
+            actorCardId: req.requesterId ?? null,
+            statusProposed: true,
+          });
+        } else if (formalVerdict === "reprovado") {
+          const stamp = {
+            reason: reasonFromReviewReport(report),
+            by: req.requesterId ?? null,
+            at: Date.now(),
+          };
+          const noted = applyTaskPromptWrite({
+            existing: taskForVerdict.prompt,
+            incoming: `[stellar:changes_requested] ${stamp.reason}`,
+            mode: "append",
+            at: stamp.at,
+          });
+          callbacks.upsertTask({
+            ...taskForVerdict,
+            status: CHANGES_REQUESTED_STATUS,
+            prompt: noted.ok ? noted.prompt : taskForVerdict.prompt,
+            result_json: stampChangesRequestedJson(clearBlockedQuestionJson(taskForVerdict.result_json), stamp),
+            updated_at: Date.now(),
+            actor: "agent",
+            actorCardId: req.requesterId ?? null,
+            statusProposed: true,
+          });
+        } else if (
+          !formalVerdict &&
+          taskForVerdict.status === CHANGES_REQUESTED_STATUS &&
+          decision.action === "accept" &&
+          reportConcludesTask(report) &&
+          reporterRole === TASK_CARD_IMPLEMENTER_ROLE
+        ) {
+          callbacks.upsertTask({
+            ...taskForVerdict,
+            status: "pending",
+            result_json: clearChangesRequestedJson(taskForVerdict.result_json) ?? taskForVerdict.result_json,
+            updated_at: Date.now(),
+            actor: "app",
+            statusProposed: true,
+          });
+        }
+      }
       // Gate runner — an ACCEPTED report of a task with declared gates fires
       // the app-MEASURED execution, instead of the orchestrator trusting the
       // number the agent typed. `accept_failure` ALSO runs the gates: a report
@@ -7039,18 +7119,36 @@ export function createMessageBus(
       // REGRA DURA: `blocked` SEM pergunta é RECUSADO — é o travamento mudo
       // que o item 12 existe para eliminar.
       result_json = carryBlockedQuestion(existing.result_json, result_json) ?? result_json;
+      result_json = carryChangesRequested(existing.result_json, result_json) ?? result_json;
       const now = Date.now();
       let blockedQuestionWritten: BlockedQuestion | null = null;
+      let changesRequestedWritten: ChangesRequestedStamp | null = null;
       if (statusProposed && req.status === BLOCKED_STATUS) {
         blockedQuestionWritten =
           normalizeBlockedQuestion(req.question, now, req.requesterId ?? null) ??
           blockedQuestionFromResultJson(existing.result_json);
         if (!blockedQuestionWritten) return { ok: false, error: describeBlockedWithoutQuestion() };
         result_json = stampBlockedQuestionJson(result_json, blockedQuestionWritten);
-      } else if (statusProposed) {
-        // Sair de `blocked` (ou para qualquer outro status) encerra a pergunta;
-        // uma pergunta órfã num status que não é `blocked` seria lixo na Fila.
+        result_json = clearChangesRequestedJson(result_json) ?? result_json;
+      } else if (statusProposed && req.status === CHANGES_REQUESTED_STATUS) {
+        const cardsForReturn = callbacks.getTaskCards(req.taskId) ?? [];
+        const returnAuth = decideChangesRequestedWrite({
+          requesterId: req.requesterId,
+          requesterRoleOnTask: roleOnTask(cardsForReturn, req.requesterId),
+          orchestratorCardId: callbacks.getBoardOrchestratorCardId(existing.board_id ?? declaredBoardId ?? ""),
+        });
+        if (returnAuth.action === "refuse") return { ok: false, error: returnAuth.error };
+        changesRequestedWritten =
+          normalizeChangesRequested(req.requestChanges, now, req.requesterId ?? null) ??
+          changesRequestedFromResultJson(existing.result_json);
+        if (!changesRequestedWritten) return { ok: false, error: describeChangesRequestedWithoutReason() };
+        result_json = stampChangesRequestedJson(result_json, changesRequestedWritten);
         result_json = clearBlockedQuestionJson(result_json);
+      } else if (statusProposed) {
+        // Leaving blocked / changes_requested clears their stamps — an orphan
+        // question or return note on another status would lie on the Queue.
+        result_json = clearBlockedQuestionJson(result_json);
+        result_json = clearChangesRequestedJson(result_json) ?? result_json;
       }
       let prompt = existing.prompt;
       if (req.prompt !== undefined) {
@@ -7061,6 +7159,17 @@ export function createMessageBus(
         const applied = applyTaskPromptWrite({ existing: existing.prompt, incoming: req.prompt, mode, at: now });
         if (!applied.ok) return applied;
         prompt = applied.prompt;
+      }
+      // Detail loads the briefing; board push has no result_json. Append the
+      // return reason so the note is visible without a new Queue field.
+      if (changesRequestedWritten) {
+        const noted = applyTaskPromptWrite({
+          existing: prompt,
+          incoming: `[stellar:changes_requested] ${changesRequestedWritten.reason}`,
+          mode: "append",
+          at: now,
+        });
+        if (noted.ok) prompt = noted.prompt;
       }
       // `purpose` is NOT read from `req` on purpose (acbridge spreads raw
       // JSON into this request, so the key CAN arrive): the row keeps
@@ -7143,6 +7252,17 @@ export function createMessageBus(
         const taskBoardId = existing.board_id ?? callbacks.getCardBoardId(req.requesterId);
         const orchId = taskBoardId ? callbacks.getBoardOrchestratorCardId(taskBoardId) : null;
         if (orchId && orchId === req.requesterId) writeActor = "orchestrator";
+      }
+      // Return-for-rework: marked orchestrator stamps `orchestrator` on the
+      // trail (audit), human stamps `human`. Not a hold — only human last
+      // status holds against later judgment.
+      if (statusProposed && req.status === CHANGES_REQUESTED_STATUS && req.requesterId) {
+        if (req.requesterId === "human:ui") writeActor = "human";
+        else {
+          const taskBoardId = existing.board_id ?? callbacks.getCardBoardId(req.requesterId);
+          const orchId = taskBoardId ? callbacks.getBoardOrchestratorCardId(taskBoardId) : null;
+          if (orchId && orchId === req.requesterId) writeActor = "orchestrator";
+        }
       }
       // SUPERSEDED — authorship belongs to the marked orchestrator (delegated
       // signature, stamped `orchestrator`, never `human`) or to the named
@@ -7283,6 +7403,10 @@ export function createMessageBus(
       }
       const blockedQuestionField =
         blockedQuestionWritten && decision.status === BLOCKED_STATUS ? { blockedQuestion: blockedQuestionWritten } : {};
+      const changesRequestedField =
+        changesRequestedWritten && decision.status === CHANGES_REQUESTED_STATUS
+          ? { changesRequested: changesRequestedWritten }
+          : {};
       const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
@@ -7292,7 +7416,15 @@ export function createMessageBus(
         // fact — and when requesterId is missing the code already
         // fell through to this JSON alone, which is the proof it
         // suffices. Do not type.
-        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten, ...blockedQuestionField };
+        return {
+          ok: true,
+          warning,
+          status: decision.status,
+          divergedStatus: decision.divergedStatus,
+          ...promptWritten,
+          ...blockedQuestionField,
+          ...changesRequestedField,
+        };
       }
       // Same retainStatusAsk the store already ran: a live request for X
       // plus a write that made X authoritative closes the question.
@@ -7334,9 +7466,17 @@ export function createMessageBus(
           ...promptWritten,
           ...warningField,
           ...blockedQuestionField,
+          ...changesRequestedField,
         };
       }
-      return { ok: true, ...storedStatusFields, ...promptWritten, ...warningField, ...blockedQuestionField };
+      return {
+        ok: true,
+        ...storedStatusFields,
+        ...promptWritten,
+        ...warningField,
+        ...blockedQuestionField,
+        ...changesRequestedField,
+      };
     }
 
     if (req.cmd === "list_tasks") {

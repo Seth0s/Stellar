@@ -157,6 +157,38 @@ describe("decideStatusWrite (decisão 8 — status híbrido com precedência)", 
       }),
     ).toMatchObject({ status: "failed", statusChanged: true, divergedStatus: null, warnAgent: false });
   });
+
+  it("última escrita do orquestrador NÃO segura o done do revisor (agente)", () => {
+    expect(
+      decideStatusWrite({
+        previousActor: "orchestrator",
+        previousStatus: "pending",
+        proposedStatus: "done",
+        newActor: "agent",
+        ...noDivergence,
+      }),
+    ).toEqual({
+      status: "done",
+      statusChanged: true,
+      divergedStatus: null,
+      divergedActor: null,
+      recordDeclaration: false,
+      warnAgent: false,
+      declaredStatus: null,
+    });
+  });
+
+  it("orquestrador como escritor ainda aplica (assinatura delegada)", () => {
+    expect(
+      decideStatusWrite({
+        previousActor: "agent",
+        previousStatus: "pending",
+        proposedStatus: "changes_requested",
+        newActor: "orchestrator",
+        ...noDivergence,
+      }),
+    ).toMatchObject({ status: "changes_requested", statusChanged: true, divergedStatus: null });
+  });
 });
 
 describe("decideStatusAsk (terceiro caminho — agente pede, humano decide)", () => {

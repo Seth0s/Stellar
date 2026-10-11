@@ -1223,7 +1223,7 @@ export function createMcpServer(options: {
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session. SUPERSEDED: status \"superseded\" marks the task as REPLACED by another — it REQUIRES supersededBy (an existing task of the SAME board, refused otherwise naming the field) and only the board's marked orchestrator or the human may write it (an implementer of the task NEVER can). It is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents; the orchestrator is notified to swap any dependent's dependency. THE RESPONSE CARRIES THE STATUS THAT WAS STORED whenever you propose one: `status:\"running\"` is accepted and never stored (the row keeps `pending`, and the response says so in `warning`) — whether a card is on the task right now is a separate fact (`cardAlive`), read from get_task/list_tasks, never a status you can write.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. RETURN-FOR-REWORK: status \"changes_requested\" + requestChanges:{reason} — board orchestrator, linked reviewer, or human may write it even with review=\"wanted\"; implementer is refused. A reviewer report verdict \"aprovado\" writes done and \"reprovado\" writes changes_requested. Writing status when a HUMAN last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled (an orchestrator last move, including answer_blocked_task, does NOT create that hold). prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session. SUPERSEDED: status \"superseded\" marks the task as REPLACED by another — it REQUIRES supersededBy (an existing task of the SAME board, refused otherwise naming the field) and only the board's marked orchestrator or the human may write it (an implementer of the task NEVER can). It is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents; the orchestrator is notified to swap any dependent's dependency. THE RESPONSE CARRIES THE STATUS THAT WAS STORED whenever you propose one: `status:\"running\"` is accepted and never stored (the row keeps `pending`, and the response says so in `warning`) — whether a card is on the task right now is a separate fact (`cardAlive`), read from get_task/list_tasks, never a status you can write.",
         inputSchema: {
           taskId: z.string().describe("The task's id, or a UNIQUE prefix of it (>= 8 chars) — every tool that takes a taskId accepts the short form used in reports; an ambiguous prefix is refused, naming the candidates"),
           // Fechado por ENUM (task b41ac547): `status` era `z.string()` livre, e
@@ -1234,10 +1234,10 @@ export function createMcpServer(options: {
           // `pending` (`coerceStoredTaskStatus`): `running` nunca é coluna
           // autoritativa, participação se lê de card vivo, não de status.
           status: z
-            .enum(["pending", "running", "done", "failed", "blocked", "superseded"])
+            .enum(["pending", "running", "done", "failed", "blocked", "changes_requested", "superseded"])
             .optional()
             .describe(
-              "New status — one of: pending, running, done, failed, blocked, superseded. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`). `blocked` REQUIRES `question` (see below) — a blocked task with no question is refused, because a silent hang is exactly what `blocked` exists to eliminate. `superseded` marks the task as REPLACED by another one and REQUIRES `supersededBy` (see below); it is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents. Only the board's marked orchestrator or the human may write it — an implementer of the task never can.",
+              "New status — one of: pending, running, done, failed, blocked, changes_requested, superseded. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`). `blocked` REQUIRES `question` (see below) — a blocked task with no question is refused, because a silent hang is exactly what `blocked` exists to eliminate. `changes_requested` is return-for-rework (not terminal judgment): REQUIRES `requestChanges: { reason }`; the board's marked orchestrator, a linked reviewer, or the human may write it even when review=\"wanted\"; an implementer is refused. A reviewer report verdict \"reprovado\" also writes this status; \"aprovado\" writes done. `superseded` marks the task as REPLACED by another one and REQUIRES `supersededBy` (see below); it is terminal, counts as no failure, releases the task's reservations/territory and stops blocking dependents. Only the board's marked orchestrator or the human may write it — an implementer of the task never can.",
             ),
           supersededBy: z
             .string()
@@ -1263,6 +1263,14 @@ export function createMcpServer(options: {
             .optional()
             .describe(
               "Structured question carried by status \"blocked\" (text + at least two options), rendered on the Queue task card so the HUMAN answers directly — and readable/answerable by an agent via get_task / answer_blocked_task. Required when status is \"blocked\"; when you move OUT of blocked it is cleared. The answer comes back into your terminal through the same delivery path as send_to_card.",
+            ),
+          requestChanges: z
+            .object({
+              reason: z.string().describe("Short reason the work is returned for rework — shown on get_task as changesRequested"),
+            })
+            .optional()
+            .describe(
+              "Required when status is \"changes_requested\": `{ reason }` — return-for-rework note. Cleared when the task leaves that status (new concluding implementer report, done, etc.).",
             ),
           cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
           cwd: z
@@ -1332,6 +1340,7 @@ export function createMcpServer(options: {
         supersededBy,
         overrideTerritory,
         question,
+        requestChanges,
         cardId,
         cwd,
         result,
@@ -1353,6 +1362,7 @@ export function createMcpServer(options: {
           status,
           supersededBy,
           question,
+          requestChanges,
           cardId,
           cwd,
           result,

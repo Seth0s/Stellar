@@ -30,6 +30,7 @@ const rows: Row[] = [
   ["report com o card já saído → awaiting_review (a revisão continua pendente)", { status: "pending", implementerReportedSinceLastDelivery: true }, "awaiting_review"],
   ["reviewer pediu mudanças depois do último report → changes_requested", { status: "pending", implementerReportedSinceLastDelivery: true, reviewerChangesRequested: true }, "changes_requested"],
   ["changes_requested vence running", { status: "pending", hasActiveImplementer: true, reviewerChangesRequested: true }, "changes_requested"],
+  ["status changes_requested vence awaiting_review", { status: "changes_requested", implementerReportedSinceLastDelivery: true }, "changes_requested"],
 ];
 
 describe("deriveTaskPhase — tabela", () => {

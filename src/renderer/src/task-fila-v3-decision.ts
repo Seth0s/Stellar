@@ -84,6 +84,8 @@ export type QueueTaskFacts = {
   /** Gate red is outside this task's territory (measured). */
   gateRedOutsideTerritory?: boolean | null;
   gateFailedFilesOutside?: number | null;
+  /** Short return-for-rework reason when the board/MCP exposed it. */
+  changesRequestedReason?: string | null;
 };
 
 /** Start of the local calendar day — used by the Done column "today" filter. */
@@ -112,8 +114,11 @@ export function columnForQueueTask(task: QueueTaskFacts): QueueColumn {
       return "ready";
     case "running":
       return task.cardAlive ? "running" : "ready";
-    case "awaiting_review":
     case "changes_requested":
+      // Return-for-rework is work again, not a review wait — same columns as
+      // running (alive) / ready (no live card). No new Queue column.
+      return task.cardAlive ? "running" : "ready";
+    case "awaiting_review":
       return "review";
     case "done":
       return "done";
@@ -152,10 +157,7 @@ export function taskNeedsYou(task: QueueTaskFacts): boolean {
   if (
     task.review === "wanted" &&
     !cardHasReviewer(task.cards.map((c) => c.role)) &&
-    (task.phase === "awaiting_review" ||
-      task.phase === "ready" ||
-      task.phase === "reserved" ||
-      task.phase === "changes_requested")
+    (task.phase === "awaiting_review" || task.phase === "ready" || task.phase === "reserved")
   ) {
     return true;
   }
@@ -245,7 +247,11 @@ export function deriveTileStatusPhrase(task: QueueTaskFacts): string {
     const action = task.recentAction?.trim();
     return action ? `${who} ${action}` : `${who} trabalhando`;
   }
-  if (task.phase === "awaiting_review" || task.phase === "changes_requested") {
+  if (task.phase === "changes_requested") {
+    const reason = task.changesRequestedReason?.trim();
+    return reason ? `Devolvida · ${reason}` : "Devolvida · mudanças pedidas";
+  }
+  if (task.phase === "awaiting_review") {
     // Gate commands render as tile chips; the status line is only the wait.
     const who =
       task.reviewerLabel?.trim() ||
@@ -399,7 +405,20 @@ export function deriveAgoraBanner(task: QueueTaskFacts, now: number): AgoraBanne
     };
   }
 
-  if (task.phase === "awaiting_review" || task.phase === "changes_requested") {
+  if (task.phase === "changes_requested") {
+    const reason = task.changesRequestedReason?.trim();
+    return {
+      variant: "amber",
+      title: "Devolvida · mudanças pedidas",
+      subtitle: reason ?? null,
+      actions: [
+        { id: "open-card", label: "Abrir o card" },
+        { id: "ask-status", label: "Pedir status" },
+      ],
+    };
+  }
+
+  if (task.phase === "awaiting_review") {
     const gate = task.gateRun;
     const outside =
       task.gateRedOutsideTerritory === true ||

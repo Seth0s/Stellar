@@ -13,6 +13,7 @@
  */
 
 import { isDependencySettled } from "../task-status-derive";
+import { CHANGES_REQUESTED_STATUS } from "./task-changes-requested-decision";
 import { declaredTaskIdFromReportBody } from "./report-task-link-decision";
 import { reportConcludesTask } from "./report-estado-decision";
 
@@ -62,6 +63,9 @@ export function deriveTaskPhase(facts: TaskPhaseFacts): TaskPhase {
   // replaced, and the engine only notifies the orchestrator to swap the edge —
   // it never leaves the dependent stuck forever (see `isDependencySettled`).
   if (facts.deps.some((d) => !isDependencySettled(d.status))) return "waiting_deps";
+  // Stored return-for-rework (update_task / reviewer reprovado) wins over
+  // awaiting_review so the Queue leaves the review column without inventing one.
+  if (facts.status === CHANGES_REQUESTED_STATUS) return "changes_requested";
   if (facts.reviewerChangesRequested) return "changes_requested";
   // O report do implementer é o gatilho da revisão — vale mesmo que o card já
   // tenha saído (o veredito pendente continua sendo do orquestrador).

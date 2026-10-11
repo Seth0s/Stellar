@@ -46,10 +46,14 @@ describe("columnForQueueTask (DADOS §3)", () => {
 
   it("maps review/done/failed/superseded", () => {
     expect(columnForQueueTask(facts({ phase: "awaiting_review" }))).toBe("review");
-    expect(columnForQueueTask(facts({ phase: "changes_requested" }))).toBe("review");
     expect(columnForQueueTask(facts({ phase: "done" }))).toBe("done");
     expect(columnForQueueTask(facts({ phase: "failed" }))).toBe("failed");
     expect(columnForQueueTask(facts({ phase: "superseded" }))).toBe("superseded");
+  });
+
+  it("puts changes_requested with the running/ready columns, never review", () => {
+    expect(columnForQueueTask(facts({ phase: "changes_requested", cardAlive: true }))).toBe("running");
+    expect(columnForQueueTask(facts({ phase: "changes_requested", cardAlive: false }))).toBe("ready");
   });
 });
 

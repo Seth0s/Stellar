@@ -86,10 +86,7 @@ function NeedsYouStrip({
           !facts.cards.some((c) => c.role === "reviewer") &&
           !blocked &&
           !facts.requestedStatus &&
-          (facts.phase === "awaiting_review" ||
-            facts.phase === "ready" ||
-            facts.phase === "reserved" ||
-            facts.phase === "changes_requested");
+          (facts.phase === "awaiting_review" || facts.phase === "ready" || facts.phase === "reserved");
         const ageMs = blocked?.askedAt ? now - blocked.askedAt : task.requestedAt ? now - task.requestedAt : null;
         const ageH = ageMs != null && ageMs > 0 ? Math.max(1, Math.floor(ageMs / 3_600_000)) : null;
         const bodyRaw = blocked?.text ?? task.requestedReason ?? boardItemTitle(task);
@@ -316,7 +313,7 @@ function QueueTile({
         {live && <span className={styles.live} aria-hidden="true" />}
         {!live && phraseAmber && <span className={styles.phraseDot} aria-hidden="true" />}
         {facts.phase === "reserved" && <span className={`${styles.avatar} ${styles.avatarCl}`}>CL</span>}
-        {(facts.phase === "awaiting_review" || facts.phase === "changes_requested") && (
+        {facts.phase === "awaiting_review" && (
           <span className={`${styles.avatar} ${styles.avatarRv}`}>RV</span>
         )}
         <span className={live ? styles.tilePhraseLive : undefined}>{phrase}</span>

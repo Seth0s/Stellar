@@ -32,15 +32,16 @@ existe fica **ausente** na tela, nunca inventado.
 | Coluna | Entra quando | Precedência |
 |---|---|---|
 | Esperando | `blockedQuestion` presente; `requestedStatus` presente; `phase = waiting_deps` | pergunta e pedido de status vencem qualquer fase |
-| Pronta | `phase = ready` ou `reserved` | |
-| Rodando | `phase = running` e card vivo | |
-| Revisão | `phase = awaiting_review` ou `changes_requested` | |
+| Pronta | `phase = ready` ou `reserved`; `phase = changes_requested` sem card vivo | |
+| Rodando | `phase = running` e card vivo; `phase = changes_requested` e card vivo | devolvida é retrabalho, não espera de revisão |
+| Revisão | `phase = awaiting_review` | |
 | Concluída | `phase = done` (mostra as de hoje, link para o resto) | |
 | Falhas (trilho) | `phase = failed` | |
 | Substituídas (trilho) | `phase = superseded` | |
 
 `phase = running` com card morto vai para **Pronta** com a frase "card encerrou sem
-report", nunca para Rodando.
+report", nunca para Rodando. `phase = changes_requested` segue a mesma regra de
+coluna que `running` (card vivo → Rodando; card morto → Pronta).
 
 ## 4. Frase de estado do tile (regra pura)
 
@@ -55,11 +56,13 @@ Ordem de avaliação; vale a primeira que casar:
    está esgotada.
 6. `running` → "<card> <última ação>" (ex.: "IMPL · Claude escrevendo testes"), e
    "<card> trabalhando" se não houver última ação (lacuna 3).
-7. `awaiting_review` → gates em falha, quando houver, dizendo de quem é o vermelho
+7. `changes_requested` → "Devolvida · <motivo>" quando o motivo existir; senão
+   "Devolvida · mudanças pedidas".
+8. `awaiting_review` → gates em falha, quando houver, dizendo de quem é o vermelho
    ("check:types ✕ outro card"), e depois "Esperando <revisor | você>".
-8. `done` → "✓ aprovada por <revisor | Master | você> · N rodadas".
-9. `failed` → "✕ <failureKind> · <data>".
-10. `superseded` → "→ #<substituta>" e "concluída", se a substituta já fechou.
+9. `done` → "✓ aprovada por <revisor | Master | você> · N rodadas".
+10. `failed` → "✕ <failureKind> · <data>".
+11. `superseded` → "→ #<substituta>" e "concluída", se a substituta já fechou.
 
 ## 5. Faixa "Agora" do detalhe
 
