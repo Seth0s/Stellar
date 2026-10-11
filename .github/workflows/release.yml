@@ -237,7 +237,7 @@ jobs:
           # universal: os DOIS alvos darwin (o runner é arm64; x64 é add-on).
           targets: x86_64-apple-darwin, aarch64-apple-darwin
 
-      - name: build MCP relay stub (macOS universal: x64 + arm64, lipo)
+      - name: "build MCP relay stub (macOS universal: x64 + arm64, lipo)"
         run: node resources/relay/build.mjs --universal
         env:
           STELLAR_REQUIRE_RELAY: "1"
