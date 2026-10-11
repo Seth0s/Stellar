@@ -3,13 +3,13 @@
  * role gates (mirrors main/import-decision.ts without crossing the preload wall).
  */
 
-export type ImportSourceId = "slack" | "linear" | "jira" | "github" | "csv";
+export type ImportSourceId = "slack" | "linear" | "jira" | "github" | "csv" | "local";
 
 export type ImportSourceOption = {
   id: ImportSourceId;
   letter: string;
   labelKey: string;
-  tone: "slack" | "linear" | "jira" | "github" | "csv";
+  tone: "slack" | "linear" | "jira" | "github" | "csv" | "local";
 };
 
 export const IMPORT_SOURCES: readonly ImportSourceOption[] = [
@@ -18,6 +18,7 @@ export const IMPORT_SOURCES: readonly ImportSourceOption[] = [
   { id: "jira", letter: "J", labelKey: "teamImport.source.jira", tone: "jira" },
   { id: "github", letter: "G", labelKey: "teamImport.source.github", tone: "github" },
   { id: "csv", letter: "csv", labelKey: "teamImport.source.csv", tone: "csv" },
+  { id: "local", letter: "B", labelKey: "teamImport.source.local", tone: "local" },
 ];
 
 export type ImportPreviewRow = {
@@ -91,7 +92,8 @@ export function apiMappingFromRows(rows: readonly MappingRow[]): Record<string, 
   };
 }
 
-export function wizardStepState(current: 1 | 2 | 3 | 4, step: 1 | 2 | 3 | 4): "done" | "active" | "todo" {
+/** `current` may be 5 when the last step already finished (every step done). */
+export function wizardStepState(current: number, step: 1 | 2 | 3 | 4): "done" | "active" | "todo" {
   if (step < current) return "done";
   if (step === current) return "active";
   return "todo";

@@ -632,7 +632,13 @@ export function TeamPage({
 
   if (sub === "import" && selected) {
     return (
-      <ImportWizard teamId={selected} teamName={team?.name ?? ""} role={myRole} onBack={() => setTeamSub("overview")} />
+      <ImportWizard
+        teamId={selected}
+        teamName={team?.name ?? ""}
+        role={myRole}
+        onBack={() => setTeamSub("overview")}
+        onOpenTeamBoard={() => setTeamSub("board")}
+      />
     );
   }
 

@@ -22,6 +22,7 @@ import {
   type MappingTarget,
 } from "./import-decisions";
 import { findByKind, isConnected } from "./integration-decisions";
+import { LocalBoardImport, type LocalImportStep } from "./LocalBoardImport";
 import styles from "./ImportWizard.module.css";
 
 export type ImportWizardProps = {
@@ -29,6 +30,8 @@ export type ImportWizardProps = {
   teamName: string;
   role: TeamRole | null;
   onBack: () => void;
+  /** Opens the team board; the local-board import offers it when it ends. */
+  onOpenTeamBoard?: () => void;
 };
 
 const STEP_LABELS = [
@@ -38,15 +41,24 @@ const STEP_LABELS = [
   { n: 4 as const, key: "teamImport.step.review" as const },
 ];
 
+/** The local-board source has its own steps: it connects nothing and maps nothing. */
+const LOCAL_STEP_LABELS = [
+  { n: 1 as const, key: "teamImport.step.source" as const },
+  { n: 2 as const, key: "teamImport.local.step.boards" as const },
+  { n: 3 as const, key: "teamImport.local.step.preview" as const },
+  { n: 4 as const, key: "teamImport.local.step.run" as const },
+];
+
 function logoClass(tone: string): string {
   if (tone === "slack") return styles.logoSlack;
   if (tone === "linear") return styles.logoLinear;
   if (tone === "jira") return styles.logoJira;
   if (tone === "github") return styles.logoGithub;
+  if (tone === "local") return styles.logoLocal;
   return styles.logoCsv;
 }
 
-export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardProps) {
+export function ImportWizard({ teamId, teamName, role, onBack, onOpenTeamBoard }: ImportWizardProps) {
   const canManage = canManageImport(role);
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [source, setSource] = useState<ImportSourceId>("slack");
@@ -63,6 +75,12 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
   const [job, setJob] = useState<TeamImportJobInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Local-board source: the panel owns its steps and reports them for the aside.
+  const [localStep, setLocalStep] = useState<LocalImportStep>(2);
+  const [localFinished, setLocalFinished] = useState(false);
+  const [localBoardCount, setLocalBoardCount] = useState<number | null>(null);
+  const isLocal = source === "local";
+  const inLocalFlow = isLocal && step >= 2;
 
   const loadIntegrations = useCallback(async () => {
     const res = await window.team.listIntegrations(teamId);
@@ -73,8 +91,8 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
     void loadIntegrations();
   }, [loadIntegrations]);
 
-  const kindForApi = source === "csv" ? (fileData.trim().startsWith("[") || fileData.trim().startsWith("{") ? "json" : "csv") : source;
-  const integKind = source === "csv" ? null : source;
+  const kindForApi = source === "local" ? "json" : source === "csv" ? (fileData.trim().startsWith("[") || fileData.trim().startsWith("{") ? "json" : "csv") : source;
+  const integKind = source === "csv" || source === "local" ? null : source;
   const connected = integKind ? isConnected(findByKind(integrations, integKind)) : true;
 
   const buildBody = (): Record<string, unknown> => {
@@ -169,8 +187,9 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
       <div className={styles.body}>
         <aside className={styles.aside} aria-label={t("teamImport.stepsAria")}>
           <div className={styles.steps}>
-            {STEP_LABELS.map((s) => {
-              const state = wizardStepState(step, s.n);
+            {(isLocal ? LOCAL_STEP_LABELS : STEP_LABELS).map((s) => {
+              const asideStep = inLocalFlow ? (localFinished && localStep === 4 ? 5 : localStep) : step;
+              const state = wizardStepState(asideStep, s.n);
               return (
                 <div
                   key={s.n}
@@ -198,6 +217,13 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
                     workspace idy · #{channel}
                   </small>
                 ) : null}
+                {isLocal ? (
+                  <small>
+                    {localBoardCount !== null && step >= 2
+                      ? t("teamImport.local.chosenSub", { n: String(localBoardCount) })
+                      : t("teamImport.local.sourceSub")}
+                  </small>
+                ) : null}
               </span>
             </div>
             <span className={styles.asideLabel} style={{ marginTop: 8 }}>
@@ -215,6 +241,7 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
                   setStep(1);
                   setPreview([]);
                   setJob(null);
+                  setLocalBoardCount(null);
                   if (s.id === "slack") setMapping(defaultSlackMapping());
                 }}
               >
@@ -225,6 +252,20 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
           </div>
         </aside>
 
+        {inLocalFlow ? (
+          <LocalBoardImport
+            teamId={teamId}
+            teamName={teamName}
+            canManage={canManage}
+            onProgress={(next, finished) => {
+              setLocalStep(next);
+              setLocalFinished(finished);
+            }}
+            onBoardCount={setLocalBoardCount}
+            onBack={() => setStep(1)}
+            onOpenTeamBoard={onOpenTeamBoard ?? onBack}
+          />
+        ) : (
         <main className={styles.main}>
           <div className={styles.scroll}>
             {!canManage ? <div className={styles.readonlyBanner}>{t("teamImport.memberReadonly")}</div> : null}
@@ -440,6 +481,10 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
                 disabled={busy || (step === 2 && source !== "csv" && !connected)}
                 onClick={() => {
                   const next = (step + 1) as 1 | 2 | 3 | 4;
+                  if (isLocal) {
+                    setLocalStep(2);
+                    setLocalFinished(false);
+                  }
                   setStep(next);
                   if (next === 3) void runPreview();
                 }}
@@ -465,6 +510,7 @@ export function ImportWizard({ teamId, teamName, role, onBack }: ImportWizardPro
             ) : null}
           </div>
         </main>
+        )}
       </div>
     </div>
   );

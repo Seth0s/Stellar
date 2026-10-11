@@ -1,0 +1,320 @@
+/* Local-board import states. Spec: the "local-*" states of Import.dc.html. */
+
+.panel {
+  /* Callout tones with no shared token yet (same hexes as the prototype). */
+  --lbi-warn-box-bg: #2a2414; /* sd:allow: Import.dc.html warning box */
+  --lbi-warn-box-line: #3a3218; /* sd:allow: Import.dc.html warning box */
+  --lbi-info-box-bg: #181e36; /* sd:allow: Import.dc.html info box */
+  --lbi-info-box-line: #2a3358; /* sd:allow: Import.dc.html info box */
+  --lbi-ok-box-bg: #12261b; /* sd:allow: Import.dc.html result box */
+  --lbi-ok-box-line: #1d3a2a; /* sd:allow: Import.dc.html result box */
+  --lbi-rule: #1d2130; /* sd:allow: Import.dc.html row rule and bar track */
+
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.card {
+  flex: none;
+}
+
+.listHead {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--v2-s5);
+  padding: var(--v2-s5) var(--v2-s7);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.06em; /* sd:allow: Import.dc.html list head tracking */
+  color: var(--v2-text-5);
+}
+
+.board {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+  padding: var(--v2-s7);
+  border-top: var(--v2-hair) solid var(--lbi-rule);
+  cursor: pointer;
+}
+
+.boardOff {
+  opacity: 0.5; /* sd:allow: Import.dc.html disabled board row */
+  cursor: not-allowed;
+}
+
+.boardText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+  min-width: 0;
+}
+
+.boardName {
+  font-size: var(--v2-f13h);
+}
+
+.boardSub {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  padding: var(--v2-s1h) var(--v2-s4);
+  border-radius: var(--v2-r6);
+  font-size: var(--v2-f11h);
+  font-weight: 600;
+  letter-spacing: 0.02em; /* sd:allow: Import.dc.html pill tracking */
+  flex: none;
+}
+
+.pillInfo {
+  color: var(--v2-accent-soft2);
+  background: var(--v2-accent-bg2);
+}
+
+.pillOk {
+  color: var(--v2-av-fg-2);
+  background: var(--v2-av-bg-2);
+}
+
+.pillMute {
+  color: var(--v2-text-3);
+  background: var(--v2-ctl-hover);
+}
+
+.pillBad {
+  color: var(--v2-danger);
+  background: var(--v2-danger-bg);
+}
+
+.box {
+  flex: none;
+  padding: var(--v2-s6) var(--v2-s7);
+  border-radius: var(--v2-r10);
+  font-size: var(--v2-f13);
+  line-height: 1.45; /* sd:allow: Import.dc.html callout leading */
+  border: var(--v2-hair) solid transparent;
+}
+
+.boxInfo {
+  color: var(--v2-accent-soft2);
+  background: var(--lbi-info-box-bg);
+  border-color: var(--lbi-info-box-line);
+}
+
+.boxWarn {
+  color: var(--v2-warn);
+  background: var(--lbi-warn-box-bg);
+  border-color: var(--lbi-warn-box-line);
+}
+
+.boxOk {
+  color: var(--v2-av-fg-2);
+  background: var(--lbi-ok-box-bg);
+  border-color: var(--lbi-ok-box-line);
+}
+
+.boxError {
+  color: var(--v2-danger);
+  background: var(--v2-danger-bg);
+  border-color: var(--v2-danger-bg);
+}
+
+.box strong {
+  font-weight: 600;
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-5);
+  line-height: 1.45; /* sd:allow: Import.dc.html hint leading */
+}
+
+.stats {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-s7);
+}
+
+.stat {
+  padding: var(--v2-s7) var(--v2-s8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+}
+
+.statValue {
+  font-size: var(--v2-f26);
+  font-weight: 600;
+}
+
+.statLabel {
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-3);
+}
+
+.toneGood {
+  color: var(--v2-av-fg-2);
+}
+
+.toneWarn {
+  color: var(--v2-warn);
+}
+
+.toneMute {
+  color: var(--v2-text-3);
+}
+
+.cardTitle {
+  padding: var(--v2-s6) var(--v2-s7);
+  font-size: var(--v2-f13);
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s4);
+  padding: 0 var(--v2-s7) var(--v2-s7);
+}
+
+.mapRowLocal {
+  display: grid;
+  grid-template-columns: 190px 32px minmax(0, 1fr); /* sd:allow: Import.dc.html local map columns */
+  gap: var(--v2-s5);
+  align-items: center;
+  padding: var(--v2-s5) var(--v2-s7);
+  border-top: var(--v2-hair) solid var(--lbi-rule);
+  font-size: var(--v2-f13);
+}
+
+.mapHeadRow {
+  border-top: 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.06em; /* sd:allow: Import.dc.html map head tracking */
+  color: var(--v2-text-5);
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.monoId {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f12);
+  color: var(--v2-accent-soft2);
+}
+
+.rowMetaMono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}
+
+.sampleHead {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+}
+
+.sampleHead h2 {
+  margin: 0;
+  flex: 1;
+  font-size: var(--v2-f15);
+  font-weight: 600;
+}
+
+.stack {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s5);
+}
+
+.progressHead {
+  display: flex;
+  align-items: center;
+}
+
+.progressLabel {
+  flex: 1;
+  font-size: var(--v2-f13);
+  font-weight: 600;
+}
+
+.progressCount {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.bar {
+  flex: none;
+  height: var(--v2-s4);
+  border-radius: var(--v2-s2);
+  background: var(--lbi-rule);
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  background: var(--v2-primary);
+  border-radius: var(--v2-s2);
+}
+
+.batch {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+  padding: var(--v2-s7);
+  border-top: var(--v2-hair) solid var(--lbi-rule);
+}
+
+.batch:first-child {
+  border-top: 0;
+}
+
+.batchText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s1h);
+  min-width: 0;
+}
+
+.footNote {
+  flex: 1;
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-2);
+}
+
+.footNoteMute {
+  flex: 1;
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-5);
+}
+
+@media (max-width: 900px) {
+  .stats {
+    grid-template-columns: 1fr;
+  }
+
+  .mapRowLocal {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sampleRow {
+  border-top-color: var(--lbi-rule);
+}

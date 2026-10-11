@@ -149,6 +149,11 @@
   color: var(--v2-text);
 }
 
+.logoLocal {
+  background: var(--v2-team-bg);
+  color: var(--v2-team-fg);
+}
+
 .logoCsv {
   background: var(--v2-line-soft);
   color: var(--v2-text-2);
