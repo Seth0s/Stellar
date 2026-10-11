@@ -172,6 +172,9 @@ jobs:
         env:
           STELLAR_REQUIRE_RELAY: "1"
 
+      - name: "build peer-credentials addon (card identity on the MCP socket)"
+        run: npm run build:peer-credentials && test -f resources/bin/stellar-peer-credentials.node
+
       - run: npm run build
 
       - name: gera .deb, .rpm e AppImage (sem publicar em lugar nenhum)
@@ -241,6 +244,9 @@ jobs:
         run: node resources/relay/build.mjs --universal
         env:
           STELLAR_REQUIRE_RELAY: "1"
+
+      - name: "build peer-credentials addon (card identity on the MCP socket)"
+        run: npm run build:peer-credentials && test -f resources/bin/stellar-peer-credentials.node
 
       - run: npm run build
 
