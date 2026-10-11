@@ -885,6 +885,8 @@ export function App() {
    * (`pointSlot`), captured once at open time so panning/zooming while the
    * menu is open doesn't retarget the spawn. */
   const [radialMenu, setRadialMenu] = useState<{ screen: Point; world: Point } | null>(null);
+  /** Last cursor position for Q → open radial under the pointer. */
+  const lastPointerRef = useRef<Point>({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   /** Right-click list menu (Nova task aqui); long-press still opens the radial. */
   const [canvasMenu, setCanvasMenu] = useState<{ screen: Point; world: Point } | null>(null);
   /** Screen 15 — Ctrl+K palette + quick create + full form reuse. */
@@ -1489,6 +1491,15 @@ export function App() {
       void window.winControls.toggleFullscreen();
     },
     "overlay.shortcuts.toggle": () => setSettingsPage((p) => (p === "shortcuts" ? null : "shortcuts")),
+    "overlay.radial.toggle": () => {
+      if (radialMenu) {
+        setRadialMenu(null);
+        return;
+      }
+      const screen = lastPointerRef.current;
+      setCanvasMenu(null);
+      setRadialMenu({ screen, world: clientToWorld(screen.x, screen.y) });
+    },
     // Achado 2 da revisão da fase A: o critério certo pra "Ctrl+D duplica
     // ou é EOF do terminal" é foco REAL (escopo), não "qual card está no
     // topo do z-order" — um card de terminal no topo mas sem foco de
@@ -1525,8 +1536,15 @@ export function App() {
       if (GLOBAL_SHORTCUTS_BY_ID[id]?.preventDefault) e.preventDefault();
       shortcutHandlersRef.current[id]?.();
     }
+    function onPointerMove(e: PointerEvent) {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("pointermove", onPointerMove);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointermove", onPointerMove);
+    };
   }, []);
 
   // Item 4 (atalhos, fase A) — Ctrl+Plus/Ctrl+Minus eram o zoom NATIVO do
@@ -3494,6 +3512,7 @@ export function App() {
       __stellarOpenQuickTask?: (seed: Partial<QuickTaskState>) => void;
       __stellarSelectCardIds?: (ids: string[]) => void;
       __stellarOpenCanvasMenu?: (x: number, y: number) => void;
+      __stellarOpenRadial?: (x: number, y: number) => void;
     };
     w.__stellarOpenQuickTask = openQuickTask;
     w.__stellarSelectCardIds = (ids) => setSelectedIds(new Set(ids));
@@ -3501,10 +3520,15 @@ export function App() {
       setRadialMenu(null);
       setCanvasMenu({ screen: { x, y }, world: clientToWorld(x, y) });
     };
+    w.__stellarOpenRadial = (x, y) => {
+      setCanvasMenu(null);
+      setRadialMenu({ screen: { x, y }, world: clientToWorld(x, y) });
+    };
     return () => {
       delete w.__stellarOpenQuickTask;
       delete w.__stellarSelectCardIds;
       delete w.__stellarOpenCanvasMenu;
+      delete w.__stellarOpenRadial;
     };
   }, [openQuickTask, setSelectedIds, clientToWorld]);
 

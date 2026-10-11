@@ -1,0 +1,67 @@
+{
+  "defaultProviderId": "claude",
+  "providers": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "quota": "77% semana",
+      "tone": "ok",
+      "dim": false,
+      "stats": {
+        "provider": "claude",
+        "supported": true,
+        "source": "local-cache",
+        "segments": [{ "key": "week", "percent": 77 }],
+        "capturedAtMs": 1
+      }
+    },
+    {
+      "id": "antigravity",
+      "label": "Antigravity",
+      "quota": "só Gemini",
+      "tone": "ok",
+      "dim": false,
+      "stats": {
+        "provider": "antigravity",
+        "supported": false,
+        "reason": "só Gemini"
+      }
+    },
+    {
+      "id": "bash",
+      "label": "Shell",
+      "quota": "",
+      "tone": "muted",
+      "dim": false,
+      "stats": {
+        "provider": "bash",
+        "supported": false,
+        "reason": ""
+      }
+    },
+    {
+      "id": "commandcode",
+      "label": "Command Code",
+      "quota": "sem cota",
+      "tone": "warn",
+      "dim": true,
+      "stats": {
+        "provider": "commandcode",
+        "supported": false,
+        "reason": "sem cota"
+      }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "quota": "sem crédito",
+      "tone": "warn",
+      "dim": true,
+      "stats": {
+        "provider": "codex",
+        "supported": false,
+        "reason": "sem crédito"
+      }
+    }
+  ]
+}

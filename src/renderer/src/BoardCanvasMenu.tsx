@@ -51,7 +51,7 @@ export function BoardCanvasMenu({ x, y, onNewTaskHere, onClose }: BoardCanvasMen
           onClose();
         }}
       >
-        {t("radial.quickTask")}
+        {t("boardCanvasMenu.newTask")}
       </button>
     </div>,
     document.body,

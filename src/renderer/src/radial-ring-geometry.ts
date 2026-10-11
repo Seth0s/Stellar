@@ -1,79 +1,73 @@
 /**
- * Pure ring-sizing math for the radial menu (RadialMenu.tsx): how big the
- * ring's radius wants to be for a given item count, where the ring's
- * center actually lands once the viewport is taken into account, and how
- * big each item renders. Extracted into its own module for the same
- * reason radial-indicator.ts and radial-providers.ts already are:
- * testable head-on in `environment: "node"` (vitest.config.ts), no
- * DOM/`window` mock needed — every function here takes the viewport's
- * width/height as plain parameters instead of reading
- * `window.innerWidth`/`innerHeight` itself; RadialMenu.tsx passes those
- * in.
+ * Pure ring-sizing math for the dual-ring radial menu (RadialMenu.tsx).
+ * Radii and node sizes match docs/design/app-v3/prototipo/Radial.dc.html.
+ * Viewport clamp takes the outer spawn ring (and optional provider arc) so
+ * the menu stays on-screen near window edges.
  */
 
-export const BASE_RADIUS = 88;
+/** Inner dashed tool ring (V/P/C/S). */
+export const INNER_RADIUS = 95;
+/** Outer spawn ring (actions 1–8). */
+export const OUTER_RADIUS = 180;
+/** Provider arc radius when the agent submenu is open. */
+export const PROVIDER_RADIUS = 285;
+/** @deprecated Use OUTER_RADIUS — kept for smoke scripts that imported BASE_RADIUS. */
+export const BASE_RADIUS = OUTER_RADIUS;
 
-// Review achado 2 — the root ring is always exactly 11 fixed items
-// (never overlaps at BASE_RADIUS, see RadialMenu.tsx's ACTIONS), but
-// item 2's provider submenu is only as long as `providers` — today 6
-// (+ "voltar" = 7), comfortable, but nothing caps it. Past ~16 items at
-// a fixed BASE_RADIUS the 40px icons start overlapping (circumference /
-// count drops below the icon's own footprint). Rather than an arbitrary
-// count cap that silently drops/hides providers past some N (which
-// would also make item positions depend on which providers are
-// installed — the exact "menu shifts under muscle memory" problem the
-// disabled-not-hidden decision in RadialMenu.tsx's `renderProviderItems`
-// already avoids), the ring's radius grows to keep a minimum arc length
-// per item; it never shrinks below BASE_RADIUS, so today's actual counts
-// (11 root, 7 provider) render identically to before this change.
-export const MIN_ITEM_ARC = 44; // px of ring circumference per item — the 40px icon footprint plus a visible gap
+export const TOOL_ITEM_SIZE = 38;
+export const SPAWN_ITEM_SIZE = 54;
+export const PROVIDER_ITEM_SIZE = 40;
+export const CENTER_HUB_SIZE = 112;
 
-export function idealRadiusFor(itemCount: number): number {
-  return Math.max(BASE_RADIUS, (MIN_ITEM_ARC * itemCount) / (Math.PI * 2));
+/** Provider arc span (prototype: −40° … +40°). */
+export const PROVIDER_ARC_START_DEG = -40;
+export const PROVIDER_ARC_END_DEG = 40;
+/** Step when there are exactly five providers (prototype P[]). */
+export const PROVIDER_ARC_STEP_DEG = 20;
+
+export const EDGE_MARGIN = 8;
+
+/** Convert prototype degrees (0° = top) to canvas position relative to center. */
+export function polarOffset(radius: number, deg: number): { x: number; y: number } {
+  const a = ((deg - 90) * Math.PI) / 180;
+  return { x: radius * Math.cos(a), y: radius * Math.sin(a) };
 }
 
-export const BASE_ITEM_SIZE = 40; // px — matches `.radial-item`'s own base width/height in layout.css
-export const ITEM_GAP = 4; // px of breathing room between two adjacent items' edges
-export const EDGE_MARGIN = 8; // px between an item's outer edge and the window's edge
+export function toolAngleDeg(index: number): number {
+  return 45 + index * 90;
+}
+
+export function spawnAngleDeg(index: number): number {
+  return index * 45;
+}
 
 /**
- * Review round 3 (the round that mattered): rounds 2's fix capped the
- * ring's RADIUS to whatever the viewport allowed near an edge, floored
- * so it wouldn't collapse to 0 — except the floor didn't stop overlap,
- * it just guaranteed a small, EVENLY OVERLAPPING ring instead (11 items
- * at a 28px floor radius: ~16px between centers, but each item is
- * itself 28px wide — 12px of real, measured overlap). A floor on the
- * radius alone can't fix that; the fix has to change WHERE the ring's
- * center goes, not just how small it's allowed to get.
- *
- * So: clamp the OPENING POINT inward instead, far enough from every edge
- * that a `radius`-sized ring (plus half an item's own footprint, plus
- * `EDGE_MARGIN`) fits entirely on-screen from wherever it ends up. Same
- * trade-off any context menu already makes when you right-click near a
- * screen edge: it opens offset from the cursor, not centered under it.
- *
- * Consequence, worth documenting because it's surprising: this means
- * the ring's center — where the item-1 indicator LINE starts — is no
- * longer guaranteed to be the point the user actually clicked, once
- * that click was near an edge. Someone will notice the line doesn't
- * originate exactly under their cursor near a window edge and wonder if
- * that's a bug; it's this clamp, on purpose.
- *
- * If a viewport axis is itself too small to fit `radius` even from its
- * own center (a genuinely tiny window, not just a click near the edge of
- * a normal one), clamping alone can't help — that axis centers as a
- * best effort, and `resolveRingGeometry` below is the one that actually
- * shrinks `radius` (and, critically, the item size along with it) for
- * that remaining case.
+ * Evenly space `count` providers across −40°…+40°. With five items this
+ * matches the prototype's −40 + i×20; with more/fewer it stays inside the
+ * arc instead of walking past +40° (which pushed later nodes above Claude).
  */
+export function providerAngleDeg(index: number, count = 5): number {
+  if (count <= 1) return 0;
+  return PROVIDER_ARC_START_DEG + (index / (count - 1)) * (PROVIDER_ARC_END_DEG - PROVIDER_ARC_START_DEG);
+}
+
+/**
+ * Farthest radial extent from center (node edge) for clamp math.
+ * When the provider arc is open, that ring wins; otherwise the spawn ring.
+ */
+export function menuExtentRadius(providerArcOpen: boolean): number {
+  if (providerArcOpen) return PROVIDER_RADIUS + PROVIDER_ITEM_SIZE / 2;
+  return OUTER_RADIUS + SPAWN_ITEM_SIZE / 2;
+}
+
 export function clampOpenPoint(
   x: number,
   y: number,
-  radius: number,
+  extentRadius: number,
   viewportWidth: number,
   viewportHeight: number,
 ): { x: number; y: number } {
-  const margin = radius + BASE_ITEM_SIZE / 2 + EDGE_MARGIN;
+  const margin = extentRadius + EDGE_MARGIN;
   return {
     x: clampAxis(x, margin, viewportWidth),
     y: clampAxis(y, margin, viewportHeight),
@@ -81,75 +75,44 @@ export function clampOpenPoint(
 }
 
 function clampAxis(pos: number, margin: number, viewportSize: number): number {
-  // The axis itself is narrower than what two margins would need — no
-  // clamp position keeps the whole ring on-screen along this axis, so
-  // center it as the least-bad option; `resolveRingGeometry`'s radius
-  // shrink is what actually keeps items from overlapping in this case.
   if (viewportSize <= margin * 2) return viewportSize / 2;
   return Math.min(Math.max(pos, margin), viewportSize - margin);
 }
 
-/** The largest radius that fits entirely within the viewport from a
- * given (already clamped, in the normal case) center point — the
- * distance to the nearest of the four edges, minus half an item's
- * footprint and `EDGE_MARGIN`. No floor: unlike round 2's
- * `viewportMaxRadius`, flooring this is exactly what produced the
- * overlapping ring — see `clampOpenPoint`'s doc comment above for why
- * moving the CENTER is the fix instead. Can legitimately return a small
- * or even ~0 value for a genuinely tiny viewport; `itemSizeFor` is what
- * keeps items from overlapping at whatever radius this ends up being. */
-export function maxRadiusFrom(x: number, y: number, viewportWidth: number, viewportHeight: number): number {
-  const clearance = Math.min(x, viewportWidth - x, y, viewportHeight - y);
-  return Math.max(0, clearance - BASE_ITEM_SIZE / 2 - EDGE_MARGIN);
-}
+export type RingGeometry = {
+  x: number;
+  y: number;
+  innerRadius: number;
+  outerRadius: number;
+  providerRadius: number;
+  toolSize: number;
+  spawnSize: number;
+  providerSize: number;
+  hubSize: number;
+};
 
 /**
- * Item diameter for `itemCount` items evenly spaced around a ring of
- * `radius`. The one invariant that actually matters — `itemSize` never
- * exceeds the arc of ring circumference available to each item (minus
- * `ITEM_GAP` breathing room) — holds unconditionally, by construction:
- * there is no floor pushing the returned size back UP past what the arc
- * can hold, unlike round 2's version of this function (which had exactly
- * that bug — `Math.max(ITEM_SIZE_FLOOR, ...)` around this same
- * computation, guaranteeing overlap the moment the arc got smaller than
- * the floor). Preferring `BASE_ITEM_SIZE` and only shrinking below it
- * when the arc demands it is as far as this function goes; keeping
- * items comfortably sized in the first place is `resolveRingGeometry`'s
- * job (clamp the point, prefer `idealRadiusFor`), not this one's.
- */
-export function itemSizeFor(itemCount: number, radius: number): number {
-  const arcPerItem = (Math.PI * 2 * radius) / itemCount;
-  return Math.max(0, Math.min(BASE_ITEM_SIZE, arcPerItem - ITEM_GAP));
-}
-
-export type RingGeometry = { x: number; y: number; radius: number; itemSize: number };
-
-/**
- * The full resolution RadialMenu.tsx needs: given where the menu was
- * asked to open (`x`, `y` — e.g. the right-click/long-press point) and
- * how many items it needs to arrange, produce the ACTUAL center to
- * render at, the ring's radius, and each item's size — never
- * overlapping, never off-screen unless the viewport itself is too small
- * to avoid it.
- *
- * Order of preference: (1) `idealRadiusFor`'s comfortable radius, ring
- * centered wherever it was asked to open, if the viewport allows it
- * outright; (2) same radius, center clamped inward near an edge — the
- * normal case this whole module exists for; (3) only if the viewport
- * itself is too small even for a clamped, centered ring — shrink the
- * radius (and therefore, via `itemSizeFor`, the item size) as the last
- * resort, together, so `itemSize <= arcPerItem` never breaks.
+ * Resolve where the dual-ring menu actually renders. Prefer the requested
+ * open point; near an edge, pull the center inward so the active extent fits.
  */
 export function resolveRingGeometry(
   x: number,
   y: number,
-  itemCount: number,
   viewportWidth: number,
   viewportHeight: number,
+  providerArcOpen = false,
 ): RingGeometry {
-  const ideal = idealRadiusFor(itemCount);
-  const center = clampOpenPoint(x, y, ideal, viewportWidth, viewportHeight);
-  const radius = Math.min(ideal, maxRadiusFrom(center.x, center.y, viewportWidth, viewportHeight));
-  const itemSize = itemSizeFor(itemCount, radius);
-  return { x: center.x, y: center.y, radius, itemSize };
+  const extent = menuExtentRadius(providerArcOpen);
+  const center = clampOpenPoint(x, y, extent, viewportWidth, viewportHeight);
+  return {
+    x: center.x,
+    y: center.y,
+    innerRadius: INNER_RADIUS,
+    outerRadius: OUTER_RADIUS,
+    providerRadius: PROVIDER_RADIUS,
+    toolSize: TOOL_ITEM_SIZE,
+    spawnSize: SPAWN_ITEM_SIZE,
+    providerSize: PROVIDER_ITEM_SIZE,
+    hubSize: CENTER_HUB_SIZE,
+  };
 }

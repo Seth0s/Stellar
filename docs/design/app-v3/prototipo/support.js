@@ -39,6 +39,7 @@
       this._host.replaceChildren(frag);
       applyHelmet(this._host);
       bindHandlerClicks(this._host, this._handlers);
+      bindHandlerMouseEnter(this._host, this._handlers);
       const base = document.baseURI || location.href;
       this._importsReady = hydrateImports(this._host, base);
     }
@@ -169,10 +170,15 @@
         parent.removeChild(node);
         return;
       }
+      // Process children in place first. Nested <sc-for> expands into THIS
+      // node and removes itself — so we must NOT re-insert the original kid
+      // references (they may already be detached). Move whatever remains.
       const kids = Array.from(node.childNodes);
       for (const kid of kids) {
         processNode(kid, scope, logic);
-        parent.insertBefore(kid, node);
+      }
+      while (node.firstChild) {
+        parent.insertBefore(node.firstChild, node);
       }
       parent.removeChild(node);
       return;
@@ -231,6 +237,19 @@
             const id = `h${logic._handlerSeq++}`;
             logic._handlers.set(id, fn);
             node.setAttribute("data-dc-click", id);
+          }
+        }
+        continue;
+      }
+      if (name === "onMouseEnter" || name === "onmouseenter") {
+        if (/\{\{/.test(raw)) {
+          const expr = raw.replace(/^\{\{\s*|\s*\}\}$/g, "");
+          const fn = resolveExpr(expr, scope);
+          node.removeAttribute(name);
+          if (typeof fn === "function") {
+            const id = `h${logic._handlerSeq++}`;
+            logic._handlers.set(id, fn);
+            node.setAttribute("data-dc-mouseenter", id);
           }
         }
         continue;
@@ -295,6 +314,17 @@
       if (typeof fn !== "function") return;
       el.addEventListener("click", (ev) => {
         ev.preventDefault();
+        fn(ev);
+      });
+    });
+  }
+
+  function bindHandlerMouseEnter(root, handlers) {
+    root.querySelectorAll("[data-dc-mouseenter]").forEach((el) => {
+      const id = el.getAttribute("data-dc-mouseenter");
+      const fn = handlers.get(id);
+      if (typeof fn !== "function") return;
+      el.addEventListener("mouseenter", (ev) => {
         fn(ev);
       });
     });

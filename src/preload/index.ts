@@ -2166,6 +2166,21 @@ const system = {
       rules: number;
     };
   } | null> => ipcRenderer.invoke("ui:login-v2-fixture"),
+  /**
+   * Isolated fixture for app-v3 radial parity smokes. Main returns null when
+   * packaged (never reads STELLAR_RADIAL_FIXTURE).
+   */
+  getRadialFixture: (): Promise<{
+    defaultProviderId: string;
+    providers: Array<{
+      id: string;
+      label: string;
+      quota: string;
+      tone: "ok" | "warn" | "muted";
+      dim: boolean;
+      stats: Record<string, unknown>;
+    }>;
+  } | null> => ipcRenderer.invoke("ui:radial-fixture"),
   /** Providers DINÂMICOS (task cebaf3c8) — a tela de Settings. O main é
    * dono do arquivo: a tela manda INTENÇÃO (adicionar/remover) e recebe de
    * volta a visão do que o loader registrou. A tela nunca lê nem escreve

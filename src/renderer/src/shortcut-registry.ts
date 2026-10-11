@@ -388,6 +388,16 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     description: "shortcuts.desc.help",
     owner: "App.tsx (atalhos de ferramenta)",
   },
+  {
+    id: "overlay.radial.toggle",
+    group: "shortcuts.group.window",
+    dispatch: "central",
+    combo: { key: "q", ctrlOrCmd: false, alt: false },
+    scopes: ["canvas"],
+    preventDefault: true,
+    description: "shortcuts.desc.radial",
+    owner: "App.tsx (radial menu)",
+  },
 
   // ---- Card --------------------------------------------------------------
   {

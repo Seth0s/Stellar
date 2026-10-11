@@ -20,6 +20,7 @@ import {
   writeCloudLink,
   type CloudLinkViewResult,
 } from "./profiles-cloud";
+import { registerRadialFixtureIpc } from "./radial-fixture";
 
 export type CloudAccountIpcDeps = {
   baseUserDataDir: () => string;
@@ -101,4 +102,6 @@ export function registerCloudAccountIpc(deps: CloudAccountIpcDeps): void {
     if (app.isPackaged) return null;
     return loadLoginV2Fixture({ isPackaged: false });
   });
+  // Radial parity fixture — same packaging gate as the login fixture above.
+  registerRadialFixtureIpc();
 }

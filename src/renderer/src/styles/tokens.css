@@ -237,6 +237,57 @@
   --fila-trail-time: 48px;
   --fila-diff-pad-y: 9px;
 
+  /* Radial creation menu — literals from Radial.dc.html (app-v3 screen 12). */
+  --radial-node-bg: #141823;
+  --radial-node-border: #2f3650;
+  --radial-node-fg: #c9cede;
+  --radial-node-hover-bg: #1d2440;
+  --radial-node-hover-border: #7d8cff;
+  --radial-node-on-bg: #24306a;
+  --radial-node-on-border: #8b99ff;
+  --radial-outer-bg: #0d1018cc;
+  --radial-outer-border: #252b3e;
+  --radial-inner-border: #2a3048;
+  --radial-hub-bg: #12162a;
+  --radial-hub-border: #3b4570;
+  --radial-hub-glow: #7d8cff14;
+  --radial-hub-label-size: 13.5px;
+  --radial-hint: #a3aabb;
+  --radial-label: #c9cede;
+  --radial-key: #8d94a6;
+  --radial-footer-bg: #12151dee;
+  --radial-footer-border: #262b3a;
+  --radial-footer-gap: 18px;
+  --radial-footer-bottom: 28px;
+  --radial-kbd-bg: #12151d;
+  --radial-kbd-border: #2f3546;
+  --radial-pin: #fff;
+  --radial-pin-ring: #05060a;
+  --radial-veil: #05060aaa;
+  --radial-quota-ok: #e6cfae;
+  --radial-quota-warn: #f2a093;
+  --radial-dot-claude: #f0883e;
+  --radial-dot-antigravity: #5b8cff;
+  --radial-dot-bash: #8d94a6;
+  --radial-dot-commandcode: #e85d9b;
+  --radial-dot-codex: #8d94a6;
+  --radial-dot-default: #8d94a6;
+  --radial-tool-size: 38px;
+  --radial-spawn-size: 54px;
+  --radial-provider-size: 40px;
+  --radial-hub-size: 112px;
+  --radial-outer-size: 360px;
+  --radial-inner-size: 190px;
+  --radial-dot-size: 12px;
+  --radial-pin-size: 8px;
+  --radial-label-offset: 6px;
+  --radial-provider-label-x: 30px;
+  --radial-provider-label-y: -14px;
+  --radial-dim-opacity: 0.45;
+  --radial-hover-scale: 1.08;
+  --radial-glyph-tool: 12px;
+  --radial-glyph-spawn: 18px;
+
   /* Dark ink for text sitting on a bright surface (an active rail icon, a
      primary popover button, sticky-note paper) — the one color role that's
      the inverse of --text, so it gets its own token instead of a literal. */

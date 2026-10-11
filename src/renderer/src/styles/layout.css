@@ -3360,125 +3360,230 @@ select.resume-input {
 .radial-backdrop {
   position: fixed;
   inset: 0;
-  /* Acima de todo CONTEÚDO do app (chrome, toast, popover) — antes ele ficava
-     em 900 e titlebar/composer (1000) continuavam ACIMA dele e clicáveis, então
-     um clique na barra não fechava o menu e ainda acionava o controle de baixo.
-     Não cobre a MOLDURA da janela: um menu também não segura a janela. */
   z-index: var(--layer-radial);
-  /* Transparent on purpose — the canvas underneath should still read as
-     "still there", this is a menu, not a modal takeover. */
   background: transparent;
+}
+
+.radial-veil {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 200vmax var(--radial-veil);
+  border-radius: var(--radius-circle);
 }
 
 .radial-menu {
   position: absolute;
   width: 0;
   height: 0;
+  font-family: var(--font-ui);
+  color: var(--card-name);
 }
 
-.radial-item {
-  /* Review round 2 — RadialMenu.tsx's `itemSizeFor` sets this (default
-     40px, matching the pre-existing fixed size) when the ring's radius
-     got capped by the viewport near a window edge and the item count no
-     longer fits comfortably at that radius; floored there so it never
-     goes below a still-clickable circle. Width/height/margin all derive
-     from it so the item stays centered on its `--tx`/`--ty` position at
-     any size. */
-  --item-size: 40px;
+.radial-ring {
   position: absolute;
   left: 0;
   top: 0;
-  width: var(--item-size);
-  height: var(--item-size);
-  margin: calc(var(--item-size) / -2) 0 0 calc(var(--item-size) / -2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--text);
+  border-radius: var(--radius-circle);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.radial-ring--outer {
+  border: 1px solid var(--radial-outer-border);
+  background: var(--radial-outer-bg);
+}
+
+.radial-ring--inner {
+  border: 1px dashed var(--radial-inner-border);
+  background: transparent;
+}
+
+.radial-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-circle);
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  box-shadow: var(--shadow-float);
-  transition: background-color 0.12s ease, color 0.12s ease, width 0.12s ease, height 0.12s ease, margin 0.12s ease;
-  transform: translate(var(--tx), var(--ty));
-  animation: radial-pop 0.14s ease-out;
+  border: 1px solid var(--radial-node-border);
+  background: var(--radial-node-bg);
+  color: var(--radial-node-fg);
+  font: inherit;
+  padding: 0;
+  transition:
+    transform var(--duration-1) ease,
+    background var(--duration-1) ease,
+    border-color var(--duration-1) ease;
 }
 
-.radial-item:hover {
-  background: var(--foam);
-  color: var(--on-accent);
+.radial-node:hover {
+  background: var(--radial-node-hover-bg);
+  border-color: var(--radial-node-hover-border);
+  color: var(--card-name);
+  transform: translate(-50%, -50%) scale(var(--radial-hover-scale));
 }
 
-/* Item 1 revisited — tool-switch items (pointer/pen/connector/select) get
- * a violet ring so the two clusters (tools vs. spawn) read apart at a
- * glance in the single unbroken circle; the tool that's already active
- * fills solid, same "already selected" language the rail's own
- * `.active` button uses. */
-.radial-item--tool {
-  border-color: var(--violet);
+.radial-node.on {
+  background: var(--radial-node-on-bg);
+  border-color: var(--radial-node-on-border);
+  color: var(--card-name);
 }
 
-.radial-item--tool.active {
-  background: var(--violet);
-  color: var(--on-accent);
-  border-color: var(--violet);
+.radial-node.dim {
+  opacity: var(--radial-dim-opacity);
 }
 
-/* Item 2 — terminal's provider submenu (RadialMenu.tsx): a provider the
-   agent-availability check reports as not installed still shows up (so
-   the ring's shape/count stays predictable), just dimmed and inert
-   rather than removed — same "tell, don't hide" spirit as Topbar.tsx's
-   missing-CLI warning. Kept this way ON PURPOSE against review's own
-   suggestion to hide it for space (RadialMenu.tsx's `renderProviderItems`
-   has the full reasoning): hiding shifts every OTHER provider's angle
-   depending on what's installed on this machine, and a radial menu
-   depends on muscle memory — a dead target beats a moving one. */
-.radial-item--disabled {
-  opacity: 0.35;
+.radial-node:disabled {
   cursor: default;
 }
 
-.radial-item--disabled:hover {
-  background: var(--panel);
-  color: var(--text);
+.radial-glyph--tool {
+  font-size: var(--radial-glyph-tool);
+  font-weight: 600;
 }
 
-.radial-item--back {
-  border-color: var(--muted);
+.radial-glyph--spawn {
+  font-size: var(--radial-glyph-spawn);
 }
 
-.radial-center {
+.radial-lab {
   position: absolute;
-  left: -4px;
-  top: -4px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--foam);
+  transform: translate(-50%, 0);
+  font-size: var(--text-4);
+  color: var(--radial-label);
+  white-space: nowrap;
+  pointer-events: none;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.radial-lab--provider {
+  transform: none;
+  text-align: left;
+  max-width: 110px; /* sd:allow: prototype provider label column — keeps quota off neighbours */
+}
+
+.radial-lab-name,
+.radial-quota {
+  display: inline-block;
+  max-width: 110px; /* sd:allow: truncate long readiness phrases to the short quota column */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.radial-lab-key {
+  color: var(--radial-key);
+  font-family: var(--font-mono);
+  font-size: var(--text-3);
+}
+
+.radial-quota {
+  font-size: var(--text-3);
+  color: var(--radial-key);
+}
+
+.radial-quota--ok {
+  color: var(--radial-quota-ok);
+}
+
+.radial-quota--warn {
+  color: var(--radial-quota-warn);
+}
+
+.radial-provider-dot {
+  width: var(--radial-dot-size);
+  height: var(--radial-dot-size);
+  border-radius: var(--radius-circle);
+}
+
+.radial-hub {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--radius-circle);
+  background: var(--radial-hub-bg);
+  border: 1px solid var(--radial-hub-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  text-align: center;
+  box-shadow: 0 0 0 var(--space-3) var(--radial-hub-glow);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.radial-hub-label {
+  font-size: var(--radial-hub-label-size);
+  font-weight: 600;
+  padding: 0 var(--space-5);
+  line-height: 1.2;
+}
+
+.radial-hub-hint {
+  font-size: var(--text-3);
+  color: var(--radial-hint);
+  padding: 0 var(--space-6);
+  line-height: 1.3;
+}
+
+.radial-pin {
+  position: absolute;
+  left: calc(var(--radial-pin-size) / -2);
+  top: calc(var(--radial-pin-size) / -2);
+  width: var(--radial-pin-size);
+  height: var(--radial-pin-size);
+  border-radius: var(--radius-circle);
+  background: var(--radial-pin);
+  box-shadow: 0 0 0 var(--space-1) var(--radial-pin-ring);
   pointer-events: none;
 }
 
-/* DESIGN-BACKLOG.md item 21, ponto 7 asked for an arc riding the ring
-   (never a straight line to the cursor) — that's what originally shipped
-   here. REVERTED 2026-09-09 (repo owner, see RadialMenu.tsx's file
-   comment for the full history): now a straight line from the center,
-   toward the cursor, clipped at the ring's radius (RadialMenu.tsx
-   computes the `<line>`). Still below the items (z-index-wise, source
-   order) so it reads as a glow rather than a mark drawn over the
-   buttons; `pointer-events: none` so it never steals a click meant for
-   the item underneath. */
-.radial-indicator {
+.radial-footer {
   position: absolute;
-  pointer-events: none;
-  overflow: visible;
+  left: 50%;
+  bottom: var(--radial-footer-bottom);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--radial-footer-gap);
+  padding: var(--space-5) var(--space-7);
+  border-radius: var(--card-radius);
+  background: var(--radial-footer-bg);
+  border: 1px solid var(--radial-footer-border);
+  font-size: var(--text-5);
+  color: var(--radial-label);
+  white-space: nowrap;
 }
 
-.radial-indicator line {
-  stroke: var(--foam);
-  stroke-width: 3px;
-  stroke-linecap: round;
-  opacity: 0.85;
+.radial-footer-note {
+  color: var(--radial-key);
+}
+
+.radial-kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--space-8);
+  height: var(--space-8);
+  padding: 0 var(--space-2); /* sd:allow: prototype kbd pad 0 5 — nearest space-2 */
+  box-sizing: border-box;
+  border-radius: var(--radius-2);
+  border: 1px solid var(--radial-kbd-border);
+  border-bottom-width: var(--space-1);
+  background: var(--radial-kbd-bg);
+  font: 500 var(--text-3) var(--font-mono);
+  color: var(--card-name);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radial-node {
+    transition: none;
+  }
 }
 
 /* ---------------------------------------------- remote pairing modal */
@@ -3892,19 +3997,6 @@ select.resume-input {
   font-size: 10px;
   color: var(--muted);
   opacity: 0.8;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  @keyframes radial-pop {
-    from {
-      opacity: 0;
-      transform: translate(var(--tx), var(--ty)) scale(0.4);
-    }
-    to {
-      opacity: 1;
-      transform: translate(var(--tx), var(--ty)) scale(1);
-    }
-  }
 }
 
 /* -------------------------------------------------------- compass (guia de localização) */

@@ -26,20 +26,19 @@ try {
   // size, RadialMenu.tsx) — too close to a window edge clips some items
   // off-screen and makes them unclickable (confirmed the hard way: (1150,
   // 740) opened the menu fine but its bottom items landed past y=800).
-  const point = { x: 1080, y: 400 };
-  await page.click(point.x, point.y, "right");
+  const point = { x: 720, y: 400 };
+  // Right-click opens BoardCanvasMenu; radial opens via Q / long-press / hook.
+  await page.evalJs(`window.__stellarOpenRadial(${point.x}, ${point.y})`);
   await new Promise((r) => setTimeout(r, 300));
   check("radial menu opened", await page.evalJs(`!!document.querySelector(".radial-menu")`), true);
   check(
-    // 4 tool switches (item 1 revisited) + 7 spawn actions (item 12, Fase
-    // B added "chat" to the spawn group).
-    "radial menu has 11 actions (4 tools + 7 spawn)",
-    await page.evalJs(`document.querySelectorAll(".radial-item").length`),
-    11,
+    "radial menu has 4 tools + 8 spawn nodes",
+    await page.evalJs(`document.querySelectorAll(".radial-node--tool").length + document.querySelectorAll(".radial-node--spawn").length`),
+    12,
   );
   check(
     "pointer tool shows as active (default tool on a fresh board)",
-    await page.evalJs(`document.querySelector('.radial-item[title="Ponteiro"]')?.classList.contains("active")`),
+    await page.evalJs(`document.querySelector('.radial-node--tool[data-radial-id="pointer"]')?.classList.contains("is-active-tool") || document.querySelector('.radial-node--tool[data-radial-id="pointer"]')?.getAttribute("aria-current") === "true"`),
     true,
   );
 
@@ -54,7 +53,7 @@ try {
   const penBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = [...document.querySelectorAll(".radial-item")].find(b => b.title === "Caneta");
+        const b = document.querySelector('.radial-node[data-radial-id="pen"]');
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
@@ -71,12 +70,12 @@ try {
   await page.evalJs(`document.querySelector('.rail-btn[title^="Ponteiro"]')?.click()`);
   await new Promise((r) => setTimeout(r, 200));
 
-  await page.click(point.x, point.y, "right");
+  await page.evalJs(`window.__stellarOpenRadial(${point.x}, ${point.y})`);
   await new Promise((r) => setTimeout(r, 300));
   const stickyBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = [...document.querySelectorAll(".radial-item")].find(b => b.title === "Nota");
+        const b = document.querySelector('.radial-node[data-radial-id="sticky"]');
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()

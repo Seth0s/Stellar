@@ -28,6 +28,16 @@ import type {
 } from "../../preload/index";
 
 declare global {
+  interface ImportMetaEnv {
+    readonly DEV: boolean;
+    readonly PROD: boolean;
+    readonly MODE: string;
+  }
+
+  interface ImportMeta {
+    readonly env: ImportMetaEnv;
+  }
+
   interface Window {
     pty: PtyApi;
     clipboardImage: ClipboardImageApi;
