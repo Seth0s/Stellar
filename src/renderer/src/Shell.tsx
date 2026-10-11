@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { BoardRow, BoardCounts, CloudStatusInfo, InboxSnapshotInfo } from "../../preload/index";
 import type { SessionTemplate } from "./useBoardStore";
@@ -10,6 +10,7 @@ import { InboxPage } from "./InboxPage";
 import { CloudLinkPanel } from "./CloudLinkPanel";
 import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries";
 import { consumeTeamBoardFocus } from "./board-quick-task-decisions";
+import { hasCloudAccount, shellNavSections, shouldResetShellSection } from "./account-mode-decision";
 import styles from "./Shell.module.css";
 
 export type ShellSection = "sessions" | "inbox" | "workhome" | "team" | "stats" | "account";
@@ -110,24 +111,36 @@ export function Shell({
   const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
   const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId?: string; unassigned?: boolean } | null>(null);
 
+  const loggedIn = hasCloudAccount(cloud);
+  const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : null;
+
   useEffect(() => {
+    if (!loggedIn) return;
     const focus = consumeTeamBoardFocus();
     if (focus) {
       setTeamFocus({ teamId: focus.teamId, unassigned: focus.unassigned });
       setSection("team");
     }
-  }, []);
+  }, [loggedIn]);
 
   useEffect(() => {
+    if (shouldResetShellSection(section, loggedIn)) setSection("sessions");
+  }, [loggedIn, section]);
+
+  useEffect(() => {
+    if (!loggedIn) {
+      setHasInvite(false);
+      return;
+    }
     void window.team
       .pendingInvite()
       .then((r) => setHasInvite(r.token !== null))
       .catch(() => {});
     return window.team.onInvite(() => setHasInvite(true));
-  }, []);
+  }, [loggedIn]);
 
   useEffect(() => {
-    if (!window.inbox?.snapshot) return;
+    if (!loggedIn || !window.inbox?.snapshot) return;
     void window.inbox
       .snapshot()
       .then(setInboxSnap)
@@ -145,21 +158,30 @@ export function Shell({
       offSnap();
       offNav();
     };
-  }, [onOpenBoard]);
+  }, [onOpenBoard, loggedIn]);
 
-  const loggedIn = cloud?.state === "logged-in";
-  const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : null;
   const summaries = useBoardSummaries(boards);
   const background = useBoardBackgroundStatus(boards);
   const inboxBadge = inboxSnap?.counts.all ?? boards.reduce((n, b) => n + (summaries[b.id]?.tasksAwaitingReview ?? 0), 0);
 
-  const items: { id: ShellSection; label: string; count?: number; sub?: string; badge?: number }[] = [
-    { id: "sessions", label: t("shell.sessions"), count: boards.length },
-    { id: "inbox", label: t("shell.inbox"), badge: inboxBadge > 0 ? inboxBadge : hasInvite ? 1 : undefined },
-    { id: "workhome", label: t("shell.workhome"), sub: loggedIn ? t("shell.workhome.synced") : t("shell.workhome.local") },
-    { id: "team", label: t("shell.team"), sub: loggedIn ? t("shell.team.withAccount") : undefined },
-    { id: "stats", label: t("shell.stats") },
-  ];
+  const items = useMemo(() => {
+    const byId: Record<
+      ShellSection,
+      { id: ShellSection; label: string; count?: number; sub?: string; badge?: number }
+    > = {
+      sessions: { id: "sessions", label: t("shell.sessions"), count: boards.length },
+      inbox: {
+        id: "inbox",
+        label: t("shell.inbox"),
+        badge: inboxBadge > 0 ? inboxBadge : hasInvite ? 1 : undefined,
+      },
+      workhome: { id: "workhome", label: t("shell.workhome"), sub: t("shell.workhome.synced") },
+      team: { id: "team", label: t("shell.team"), sub: t("shell.team.withAccount") },
+      stats: { id: "stats", label: t("shell.stats") },
+      account: { id: "account", label: t("shell.account") },
+    };
+    return shellNavSections(loggedIn).map((id) => byId[id]);
+  }, [boards.length, hasInvite, inboxBadge, loggedIn]);
 
   return (
     <div className={styles.shell}>
@@ -276,30 +298,28 @@ export function Shell({
             onCreateBoard={onCreateBoard}
             onUpdateBoard={onUpdateBoard}
             onDeleteBoard={onDeleteBoard}
-            onOpenInbox={() => setSection("inbox")}
+            onOpenInbox={loggedIn ? () => setSection("inbox") : undefined}
           />
-        ) : section === "workhome" ? (
+        ) : loggedIn && section === "workhome" ? (
           <WorkHomePage />
-        ) : section === "team" ? (
+        ) : loggedIn && section === "team" ? (
           <TeamPage
             boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             initialTeamId={teamFocus?.teamId}
             initialTaskId={teamFocus?.taskId}
             initialUnassigned={teamFocus?.unassigned === true}
           />
-        ) : section === "account" ? (
+        ) : loggedIn && section === "account" ? (
           <div className={styles.page}>
-            <div className={styles.sectionSub}>{cloud?.state === "logged-in" ? cloud.account.displayName : t("shell.signIn.action")}</div>
+            <div className={styles.sectionSub}>{accountLabel ?? t("shell.signIn.action")}</div>
             <CloudLinkPanel />
-            {loggedIn ? (
-              <div>
-                <button type="button" className={styles.ghostBtn} onClick={onSignOut}>
-                  {t("cloud.signOut")}
-                </button>
-              </div>
-            ) : null}
+            <div>
+              <button type="button" className={styles.ghostBtn} onClick={onSignOut}>
+                {t("cloud.signOut")}
+              </button>
+            </div>
           </div>
-        ) : section === "inbox" ? (
+        ) : loggedIn && section === "inbox" ? (
           <InboxPage
             boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             onOpenBoard={onOpenBoard}

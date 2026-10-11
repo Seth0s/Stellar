@@ -128,9 +128,19 @@ export function filterBoardCommands(query: string): BoardCmd[] {
   return BOARD_TASK_COMMANDS.filter((c) => c.tokens.some((t) => t.includes(q) || q.includes(t)));
 }
 
-/** Drop Distribuir when no team is connected (prototype: row disappears). */
-export function visibleBoardCommands(query: string, opts: { teamConnected: boolean }): BoardCmd[] {
+/**
+ * Ctrl+K rows visible for the current account mode.
+ * Without a cloud account, team/import/distribute disappear. With an account
+ * but no connected team, Distribuir still disappears (prototype).
+ */
+export function visibleBoardCommands(
+  query: string,
+  opts: { teamConnected: boolean; hasCloudAccount: boolean },
+): BoardCmd[] {
   const cmds = filterBoardCommands(query);
+  if (!opts.hasCloudAccount) {
+    return cmds.filter((c) => c.id !== "new-team" && c.id !== "distribute" && c.id !== "import");
+  }
   if (opts.teamConnected) return cmds;
   return cmds.filter((c) => c.id !== "distribute");
 }

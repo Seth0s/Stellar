@@ -151,6 +151,7 @@ describe("SettingsModal V7", () => {
     expect(screen.getByText(/Este board · Maestro/)).toBeTruthy();
     expect(screen.getByPlaceholderText("Buscar configuração")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Conta e plano/ }).getAttribute("aria-current")).toBe("page");
+    // Local account: Team settings stay hidden until cloud login.
     expect(
       Array.from(dialog.querySelectorAll("[data-settings-page]")).map((b) => b.getAttribute("data-settings-page")),
     ).toEqual([
@@ -164,8 +165,28 @@ describe("SettingsModal V7", () => {
       "general",
       "mode",
       "rules",
-      "team",
     ]);
+  });
+
+  it("shows Team settings nav when cloud account is signed in", async () => {
+    const loggedIn = {
+      state: "logged-in" as const,
+      apiBaseUrl: "",
+      account: { displayName: "Ana", identities: [] as { kind: string; subject: string; login: string | null }[] },
+      plan: null,
+      expiresAtMs: Date.now() + 60_000,
+    };
+    window.cloud = {
+      ...window.cloud,
+      status: vi.fn(async () => loggedIn),
+      onStatusChanged: vi.fn((cb: (s: typeof loggedIn) => void) => {
+        cb(loggedIn);
+        return () => {};
+      }),
+    };
+    renderSettings("account");
+    expect(await screen.findByRole("button", { name: /Time/ })).toBeTruthy();
+    expect(document.querySelector('[data-settings-page="team"]')).toBeTruthy();
   });
 
   it("scope chip says app vs board", () => {
@@ -246,8 +267,22 @@ describe("SettingsModal V7", () => {
     expect(onPageChange).toHaveBeenCalledWith("providers");
   });
 
-  it("Dispositivos shows celular em breve", () => {
+  it("Dispositivos hides celular cloud stub without a cloud account", () => {
     renderSettings("devices");
-    expect(screen.getByText(/em breve/i)).toBeTruthy();
+    expect(screen.queryByText(/em breve/i)).toBeNull();
+    expect(document.querySelector("[data-settings-devices-mobile-cloud]")).toBeNull();
+  });
+
+  it("Dispositivos shows celular em breve with a cloud account", async () => {
+    (window.cloud.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+      state: "logged-in",
+      apiBaseUrl: "",
+      account: { displayName: "Ana", identities: [] },
+      plan: null,
+      expiresAtMs: Date.now() + 60_000,
+    });
+    renderSettings("devices");
+    expect(await screen.findByText(/em breve/i)).toBeTruthy();
+    expect(document.querySelector("[data-settings-devices-mobile-cloud]")).toBeTruthy();
   });
 });

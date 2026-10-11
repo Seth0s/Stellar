@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { CloudStatusInfo, WorkHomeTool } from "../../preload/index";
+import { isSignupClosedError } from "./account-mode-decision";
 import { AppLogo } from "./AppLogo";
 import styles from "./LoginScreen.module.css";
 
@@ -58,9 +59,17 @@ export function LoginScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function applyCloud(next: CloudStatusInfo) {
+    setCloud(next);
+    if (next.state === "logged-out" && isSignupClosedError(next.lastError)) {
+      setError(t("cloud.error.signupClosed"));
+      setMode("choose");
+    }
+  }
+
   useEffect(() => {
-    void window.cloud.status().then(setCloud).catch(() => {});
-    return window.cloud.onStatusChanged(setCloud);
+    void window.cloud.status().then(applyCloud).catch(() => {});
+    return window.cloud.onStatusChanged(applyCloud);
   }, []);
 
   const loggedIn = cloud?.state === "logged-in";
@@ -85,7 +94,11 @@ export function LoginScreen({
     setMode(0);
     setExpiresSec(initialExpiresSec ?? 5 * 60);
     try {
-      setCloud(await window.cloud.login(p, p === "email" ? email.trim() : undefined));
+      // Prefer live status pushes over the login() return value: a fast
+      // callback can land (and emit logged-out + lastError) before this
+      // await resolves with the pending snapshot from beginLogin.
+      await window.cloud.login(p, p === "email" ? email.trim() : undefined);
+      setCloud(await window.cloud.status());
     } catch {
       setError(t("cloud.error.generic"));
     }
@@ -285,7 +298,11 @@ export function LoginScreen({
             </div>
           )}
 
-          {error ? <div className={styles.error}>{error}</div> : null}
+          {error ? (
+            <div className={styles.error} data-role="login-error">
+              {error}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -399,6 +416,9 @@ export function LoginScreen({
               {t("LoginScreen.sendLink")}
             </button>
             <p className={styles.terms}>{t("LoginScreen.terms")}</p>
+            <button type="button" className={styles.noAccount} disabled data-role="signup-soon" title={t("cloud.signup.soonHint")}>
+              {t("cloud.signup.soon")}
+            </button>
             <div className={styles.hr} />
             <button type="button" className={styles.noAccount} onClick={onDone}>
               {t("LoginScreen.localOnly")}
@@ -406,7 +426,11 @@ export function LoginScreen({
                 <path d="M3 7h8M7.5 3.5L11 7l-3.5 3.5" />
               </svg>
             </button>
-            {error ? <div className={styles.error}>{error}</div> : null}
+            {error ? (
+              <div className={styles.error} data-role="login-error">
+                {error}
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

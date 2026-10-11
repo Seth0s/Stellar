@@ -78,21 +78,26 @@ export function isLoopbackRedirectUri(raw: string): boolean {
 // Callback do loopback.
 // ---------------------------------------------------------------------------
 
+/** Machine code for lastError when the server refuses unknown identities. */
+export const SIGNUP_CLOSED_ERROR = "signup_closed";
+
 export type CallbackOutcome =
   | { kind: "ok"; code: string }
-  | { kind: "error"; reason: "state-mismatch" | "provider-error" | "missing-code" };
+  | { kind: "error"; reason: "state-mismatch" | "provider-error" | "signup-closed" | "missing-code" };
 
 /**
  * Decide o que fazer com a query que chegou em `/cb`. O STATE É CHECADO
  * PRIMEIRO — sem isso, um callback forjado (ou de outro fluxo) entregaria um
  * code. `error` do provedor e `code` ausente são recusas distintas, para a UI
- * poder dizer qual foi.
+ * poder dizer qual foi. `signup_closed` is the test-period refusal for
+ * unknown identities (server redirects with that error query).
  */
 export function decideCallback(
   query: { state?: string | null; code?: string | null; error?: string | null },
   expectedState: string,
 ): CallbackOutcome {
   if (!query.state || query.state !== expectedState) return { kind: "error", reason: "state-mismatch" };
+  if (query.error === "signup_closed") return { kind: "error", reason: "signup-closed" };
   if (query.error) return { kind: "error", reason: "provider-error" };
   if (!query.code) return { kind: "error", reason: "missing-code" };
   return { kind: "ok", code: query.code };

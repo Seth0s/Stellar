@@ -118,7 +118,7 @@ export function Home({
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
-  onOpenInbox: () => void;
+  onOpenInbox?: () => void;
 }) {
   const [modal, setModal] = useState<ModalState>(null);
   /** Session awaiting confirmation before it is stopped (an agent is running
@@ -300,7 +300,7 @@ export function Home({
             <div className={styles.waitingCard}>
               <div className={styles.waitingHead}>
                 {t("shell.inbox")}
-                {awaitingTotal > 0 ? (
+                {awaitingTotal > 0 && onOpenInbox ? (
                   <button type="button" className={styles.waitingHeadLink} onClick={onOpenInbox}>
                     {t("home.viewAll")}
                   </button>

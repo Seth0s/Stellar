@@ -33,6 +33,8 @@ export type BoardQuickTaskProps = {
   boardName: string;
   teamName: string | null;
   teamAvailable: boolean;
+  /** Local account mode hides the team destination entirely. */
+  hasCloudAccount?: boolean;
   initial: Partial<QuickTaskState>;
   busy?: boolean;
   error?: string | null;
@@ -49,6 +51,7 @@ export function BoardQuickTask({
   boardName,
   teamName,
   teamAvailable,
+  hasCloudAccount = false,
   initial,
   busy = false,
   error = null,
@@ -177,19 +180,21 @@ export function BoardQuickTask({
                 {t("boardQuick.dest.boardHint")}
               </span>
             </button>
-            <button
-              type="button"
-              className={`${styles.destBtn}${state.destination === "team" ? ` ${styles.destBtnOn}` : ""}`}
-              aria-pressed={state.destination === "team"}
-              data-part="board-quick-dest-team"
-              disabled={busy || !teamAvailable}
-              onClick={() => teamAvailable && set("destination", "team" as TaskDestination)}
-            >
-              <span className={styles.destTitle}>
-                {t("boardQuick.dest.team", { team: teamName ?? "—" })}
-              </span>
-              <span className={styles.destHint}>{t("boardQuick.dest.teamHint")}</span>
-            </button>
+            {hasCloudAccount ? (
+              <button
+                type="button"
+                className={`${styles.destBtn}${state.destination === "team" ? ` ${styles.destBtnOn}` : ""}`}
+                aria-pressed={state.destination === "team"}
+                data-part="board-quick-dest-team"
+                disabled={busy || !teamAvailable}
+                onClick={() => teamAvailable && set("destination", "team" as TaskDestination)}
+              >
+                <span className={styles.destTitle}>
+                  {t("boardQuick.dest.team", { team: teamName ?? "—" })}
+                </span>
+                <span className={styles.destHint}>{t("boardQuick.dest.teamHint")}</span>
+              </button>
+            ) : null}
           </div>
         </div>
         {state.territory[0] ? (

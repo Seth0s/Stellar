@@ -437,6 +437,7 @@ export function AboutPage() {
 }
 
 export function DevicesPage() {
+  const { loggedIn } = useCloudPlan();
   return (
     <>
       <section className={styles.sec} data-settings-devices-machines="">
@@ -450,16 +451,18 @@ export function DevicesPage() {
         </div>
         <RemotePairingModal />
       </section>
-      <section className={styles.sec}>
-        <h3 className={styles.sh}>{t("settings.devices.mobile")}</h3>
-        <div className={styles.row}>
-          <div className={styles.lbl}>
-            <span>{t("settings.devices.mobilePair")}</span>
-            <span className={styles.hint}>{t("settings.devices.mobileHint")}</span>
+      {loggedIn ? (
+        <section className={styles.sec} data-settings-devices-mobile-cloud="">
+          <h3 className={styles.sh}>{t("settings.devices.mobile")}</h3>
+          <div className={styles.row}>
+            <div className={styles.lbl}>
+              <span>{t("settings.devices.mobilePair")}</span>
+              <span className={styles.hint}>{t("settings.devices.mobileHint")}</span>
+            </div>
+            <span className={styles.pillInfo}>{t("settings.devices.comingSoon")}</span>
           </div>
-          <span className={styles.pillInfo}>{t("settings.devices.comingSoon")}</span>
-        </div>
-      </section>
+        </section>
+      ) : null}
     </>
   );
 }

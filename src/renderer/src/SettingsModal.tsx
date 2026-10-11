@@ -18,6 +18,8 @@ import {
   type SettingsPageId,
   type SettingsPageRef,
 } from "./settings-nav-decision";
+import { settingsNavForAccountMode } from "./account-mode-decision";
+import { useHasCloudAccount } from "./PlanHooks";
 import {
   AboutPage,
   AccountPage,
@@ -82,6 +84,7 @@ export function SettingsModal({
   }, []);
   const { modalProps } = useModal({ onClose: handleClose });
   const titleId = "settings-modal-title";
+  const hasAccount = useHasCloudAccount();
 
   const [query, setQuery] = useState("");
   const current = normalizeSettingsPage(page);
@@ -90,15 +93,15 @@ export function SettingsModal({
   const labelFor = useCallback((e: { labelKey: string }) => t(e.labelKey as MessageKey), [locale]);
 
   const appNav = useMemo(() => {
-    const base = settingsNavForScope("app");
+    const base = settingsNavForAccountMode(settingsNavForScope("app"), hasAccount);
     return filterSettingsNav(query, base, labelFor);
-  }, [query, labelFor]);
+  }, [query, labelFor, hasAccount]);
 
   const boardNav = useMemo(() => {
     if (!board) return [];
-    const base = settingsNavForScope("board");
+    const base = settingsNavForAccountMode(settingsNavForScope("board"), hasAccount);
     return filterSettingsNav(query, base, labelFor);
-  }, [query, board, labelFor]);
+  }, [query, board, labelFor, hasAccount]);
 
   useEffect(() => {
     if (!board && entry.scope === "board") onPageChange("providers");

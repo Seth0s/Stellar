@@ -64,6 +64,7 @@ export function TeamTaskForm({
   editing = null,
   editingContract = "",
   seed = null,
+  hasCloudAccount = true,
   onClose,
   onCreateTeamTask,
   onUpdateTeamTask,
@@ -79,17 +80,21 @@ export function TeamTaskForm({
   editingContract?: string;
   /** Prefill when opening from the board quick-create dialog. */
   seed?: Partial<TeamTaskFormState> | null;
+  /** Local account mode hides the team destination and forces board. */
+  hasCloudAccount?: boolean;
   onClose: () => void;
   onCreateTeamTask: (body: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
   onUpdateTeamTask: (task: TeamTaskInfo, body: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
   onCreateLocalTask: (boardId: string, prompt: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const boardId = boards[0]?.id ?? "";
-  const [form, setForm] = useState<TeamTaskFormState>(() =>
-    editing
-      ? { ...formFromTask(editing), contract: editingContract }
-      : { ...emptyTaskForm(), destination: "team", ...(seed ?? {}) },
-  );
+  const [form, setForm] = useState<TeamTaskFormState>(() => {
+    if (editing) return { ...formFromTask(editing), contract: editingContract };
+    const baseDest: TaskDestination = hasCloudAccount ? "team" : "board";
+    const next = { ...emptyTaskForm(), destination: baseDest, ...(seed ?? {}) };
+    if (!hasCloudAccount) next.destination = "board";
+    return next;
+  });
   const [territoryDraft, setTerritoryDraft] = useState("");
   const [gateDraft, setGateDraft] = useState("");
   const [showPreview, setShowPreview] = useState(false);
@@ -208,7 +213,7 @@ export function TeamTaskForm({
       <div className={styles.dialog} role="dialog" aria-modal="true" aria-label={editing ? t("teamTask.form.editTitle") : t("teamTask.form.title")}>
         <header className={styles.head}>
           <h1 className={styles.headTitle}>{editing ? t("teamTask.form.editTitle") : t("teamTask.form.title")}</h1>
-          {!editing ? (
+          {!editing && hasCloudAccount ? (
             <div className={styles.segments} role="group" aria-label={t("teamTask.form.destination")}>
               <button
                 type="button"

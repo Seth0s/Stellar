@@ -67,13 +67,19 @@ describe("board-quick-task-decisions", () => {
       "import",
       "selection-to-task",
     ]);
-    expect(visibleBoardCommands("task", { teamConnected: false }).map((c) => c.id)).toEqual([
+    expect(visibleBoardCommands("task", { teamConnected: false, hasCloudAccount: true }).map((c) => c.id)).toEqual([
       "new-board",
       "new-team",
       "import",
       "selection-to-task",
     ]);
-    expect(visibleBoardCommands("task", { teamConnected: true }).map((c) => c.id)).toContain("distribute");
+    expect(visibleBoardCommands("task", { teamConnected: true, hasCloudAccount: true }).map((c) => c.id)).toContain(
+      "distribute",
+    );
+    expect(visibleBoardCommands("task", { teamConnected: false, hasCloudAccount: false }).map((c) => c.id)).toEqual([
+      "new-board",
+      "selection-to-task",
+    ]);
     expect(filterBoardCommands("#c0ffee12").map((c) => c.id)).toEqual(["open-by-id"]);
     expect(countUnassignedTeamTasks([{ state: "sem_dono" }, { state: "rodando" }, { state: "sem_dono" }])).toBe(2);
     const tasks = [

@@ -118,6 +118,10 @@ export function AppShell({
       setPhase("login");
       return;
     }
+    // Stay on the login screen until the user closes or finishes — a cloud
+    // status push (pending → logged-out with lastError) must not bounce them
+    // back to the shell mid-flow.
+    if (phase === "login") return;
     if (fixture?.invite && !fixture.login) {
       setPhase("ready");
       return;
@@ -128,7 +132,7 @@ export function AppShell({
     } else {
       setPhase("ready");
     }
-  }, [booted, profileId, boards.length, cloud, fixture]);
+  }, [booted, profileId, boards.length, cloud, fixture, phase]);
 
   function decideFirstRun() {
     try {

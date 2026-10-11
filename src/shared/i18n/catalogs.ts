@@ -125,6 +125,11 @@ export const ptBR = {
   "cloud.signOut": "Sair",
   "cloud.apiLabel": "API",
   "cloud.error.generic": "não deu — tente de novo",
+  "cloud.error.signupClosed":
+    "Cadastro em breve — o Stellar está em período de testes. Se você já tem conta, entre com o mesmo GitHub ou e-mail.",
+  "cloud.signup.soon": "Criar conta — em breve",
+  "cloud.signup.soonHint": "Cadastro fechado durante o período de testes",
+  "account.needLogin": "Entre com uma conta para usar isso",
   "workhome.title": "Casa de trabalho",
   "workhome.syncNow": "Sincronizar agora",
   "workhome.preview": "Prévia",
@@ -2491,6 +2496,11 @@ export const en: Record<MessageKey, string> = {
   "cloud.signOut": "Sign out",
   "cloud.apiLabel": "API",
   "cloud.error.generic": "failed — try again",
+  "cloud.error.signupClosed":
+    "Sign-up coming soon — Stellar is in a testing period. If you already have an account, sign in with the same GitHub or email.",
+  "cloud.signup.soon": "Create account — coming soon",
+  "cloud.signup.soonHint": "Sign-up is closed during the testing period",
+  "account.needLogin": "Sign in with an account to use this",
   "workhome.title": "Work home",
   "workhome.syncNow": "Sync now",
   "workhome.preview": "Preview",

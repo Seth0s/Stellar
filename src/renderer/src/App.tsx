@@ -58,6 +58,8 @@ import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
 import { AppShell } from "./AppShell";
+import { gateCloudFeature } from "./account-mode-decision";
+import { useHasCloudAccount } from "./PlanHooks";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
@@ -759,6 +761,7 @@ export function App() {
   const [cards, setCards] = useState<Card[]>([]);
   const [order, setOrder] = useState<string[]>([]);
   const [newProvider, setNewProvider] = useState("bash");
+  const hasCloudAccount = useHasCloudAccount();
   // Ids oferecidos pelos dois pickers (rail e menu radial) — do registro vivo
   // do main, não de uma lista literal: um CLI dinâmico (cline/commandcode,
   // carregado no boot) aparece aqui como qualquer nativo.
@@ -3611,6 +3614,13 @@ export function App() {
       openQuickTask({ destination: "board" });
       return;
     }
+    if (id === "new-team" || id === "import" || id === "distribute") {
+      const gate = gateCloudFeature(hasCloudAccount);
+      if (!gate.ok) {
+        toast(t(gate.noticeKey));
+        return;
+      }
+    }
     if (id === "new-team") {
       const ctx = await ensureTeamCtx();
       if (!ctx) {
@@ -4592,6 +4602,7 @@ export function App() {
         <BoardCommandPalette
           selectionCount={selectedIds.size}
           unassignedCount={teamCtx ? countUnassignedTeamTasks(teamCtx.tasks) : null}
+          hasCloudAccount={hasCloudAccount}
           onClose={() => setBoardCmdOpen(false)}
           onCommand={(id, query) => void onBoardCommand(id, query)}
         />
@@ -4602,6 +4613,7 @@ export function App() {
           boardName={boards.find((b) => b.id === activeBoardId)?.name ?? ""}
           teamName={teamCtx?.teamName ?? null}
           teamAvailable={teamCtx != null}
+          hasCloudAccount={hasCloudAccount}
           initial={quickTaskOpen}
           busy={quickBusy}
           error={quickError}
@@ -4619,6 +4631,7 @@ export function App() {
           tasks={teamCtx?.tasks ?? []}
           sprints={teamCtx?.sprints ?? []}
           seed={fullTaskSeed}
+          hasCloudAccount={hasCloudAccount}
           onClose={() => setFullTaskSeed(null)}
           onCreateTeamTask={async (body) => {
             const ctx = await ensureTeamCtx();

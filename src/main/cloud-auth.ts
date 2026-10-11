@@ -26,6 +26,7 @@ import {
   decideTokenRenewal,
   loopbackRedirectForPort,
   pkceChallengeS256,
+  SIGNUP_CLOSED_ERROR,
   type CloudAccount,
 } from "./cloud-auth-decision";
 import { createCloudApi, type CloudApi } from "./cloud-api";
@@ -218,11 +219,13 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     stopPending();
     if (outcome.kind === "error") {
       lastError =
-        outcome.reason === "state-mismatch"
-          ? "callback com state inválido — recusado"
-          : outcome.reason === "provider-error"
-            ? "o provedor recusou o login"
-            : "callback sem code";
+        outcome.reason === "signup-closed"
+          ? SIGNUP_CLOSED_ERROR
+          : outcome.reason === "state-mismatch"
+            ? "callback com state inválido — recusado"
+            : outcome.reason === "provider-error"
+              ? "o provedor recusou o login"
+              : "callback sem code";
       emit();
       return CALLBACK_ERR_HTML;
     }

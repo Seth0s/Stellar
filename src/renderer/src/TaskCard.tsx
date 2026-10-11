@@ -65,6 +65,7 @@ import { describeGateChip, type GateChipTone } from "./task-gate-view";
 import { groupDiffFiles, type DiffRow } from "./task-gate-detail";
 import styles from "./TaskCard.module.css";
 import { TeamQueueSection } from "./TeamQueueSection";
+import { useHasCloudAccount } from "./PlanHooks";
 import { getLocale, t } from "../../shared/i18n";
 
 /** RODADA 3 (contrato de partes §2.3, item 1) — "a diferença visual mais
@@ -1101,6 +1102,7 @@ function TaskCardInner({
   const [activeSprintLabel, setActiveSprintLabel] = useState<string | null>(null);
   const [activeSprint, setActiveSprint] = useState<{ name: string | null; startedAt: number } | null>(null);
   const [frozenTasks, setFrozenTasks] = useState<TaskBoardItem[] | null>(null);
+  const hasCloudAccount = useHasCloudAccount();
 
   const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
   const boardTasks = viewingFrozen ? frozenTasks : tasks;
@@ -1570,9 +1572,9 @@ function TaskCardInner({
           />
         </div>
       )}
-      {!chartsOpen && !sprintsOpen && (
+      {!chartsOpen && !sprintsOpen && hasCloudAccount ? (
         <TeamQueueSection boardId={activeBoardId} onOpenTask={(id) => setOpenTaskId(id)} />
-      )}
+      ) : null}
       {openTask && (
         <TaskDetailV3
           task={openTask}

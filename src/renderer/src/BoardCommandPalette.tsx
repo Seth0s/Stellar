@@ -12,6 +12,8 @@ export type BoardCommandPaletteProps = {
   selectionCount: number;
   /** null = no team connected → Distribuir row hidden. */
   unassignedCount: number | null;
+  /** When false, team/import/distribute rows disappear (local account mode). */
+  hasCloudAccount: boolean;
   onClose: () => void;
   onCommand: (id: BoardCmdId, query: string) => void;
 };
@@ -77,15 +79,24 @@ function labelFor(id: BoardCmdId, unassignedCount: number | null): string {
   return t("boardCmd.openById");
 }
 
-export function BoardCommandPalette({ selectionCount, unassignedCount, onClose, onCommand }: BoardCommandPaletteProps) {
+export function BoardCommandPalette({
+  selectionCount,
+  unassignedCount,
+  hasCloudAccount,
+  onClose,
+  onCommand,
+}: BoardCommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const teamConnected = unassignedCount !== null;
-  const cmds = useMemo(() => visibleBoardCommands(query, { teamConnected }), [query, teamConnected]);
+  const cmds = useMemo(
+    () => visibleBoardCommands(query, { teamConnected, hasCloudAccount }),
+    [query, teamConnected, hasCloudAccount],
+  );
 
   useEffect(() => {
     setActive(0);
-  }, [query, teamConnected]);
+  }, [query, teamConnected, hasCloudAccount]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

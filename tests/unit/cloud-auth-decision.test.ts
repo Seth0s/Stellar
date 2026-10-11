@@ -78,6 +78,13 @@ describe("decideCallback", () => {
     expect(decideCallback({ state, error: "access_denied" }, state)).toEqual({ kind: "error", reason: "provider-error" });
     expect(decideCallback({ state }, state)).toEqual({ kind: "error", reason: "missing-code" });
   });
+
+  it("signup_closed is a distinct refusal (test-period closed registration)", () => {
+    expect(decideCallback({ state, error: "signup_closed" }, state)).toEqual({
+      kind: "error",
+      reason: "signup-closed",
+    });
+  });
 });
 
 describe("parseTokenPair", () => {
