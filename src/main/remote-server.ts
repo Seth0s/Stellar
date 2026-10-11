@@ -8,7 +8,57 @@ import { safeStorage } from "electron";
 import { WebSocketServer, type WebSocket } from "ws";
 import QRCode from "qrcode";
 
-export type TerminalSummary = { id: string; label: string | null; provider: string; cwd: string };
+/** Live agent/terminal row for the LAN client. Optional fields are filled
+ * when the host wires richer data; clients that only read id/label/provider/cwd
+ * keep working unchanged. */
+export type TerminalSummary = {
+  id: string;
+  label: string | null;
+  provider: string;
+  cwd: string;
+  boardId?: string | null;
+  boardName?: string | null;
+  machineName?: string | null;
+  machineOffline?: boolean;
+  machineOfflineSince?: string | null;
+  awaitingHuman?: boolean;
+  status?: "running" | "waiting" | "idle";
+  preview?: string | null;
+  taskTitle?: string | null;
+  /** Optional Agora need card kind; absent means no need card. */
+  needKind?: "question" | "review" | "gate_fail" | "none" | null;
+  needMeta?: string | null;
+  questionText?: string | null;
+  ageLabel?: string | null;
+  badgeCount?: number | null;
+};
+
+/** Compact Fila row — only sent when `listTasks` is wired on the host. */
+export type RemoteTaskSummary = {
+  id: string;
+  title: string;
+  phase: string;
+  provider?: string | null;
+  cardId?: string | null;
+  gatesOk?: number | null;
+  gatesTotal?: number | null;
+  updatedAt?: number | null;
+  needKind?: "question" | "review" | "gate_fail" | "none" | null;
+  needMeta?: string | null;
+  gateDetail?: string | null;
+  badge?: string | null;
+  chips?: string[] | null;
+  section?: "running" | "ready" | "blocked" | "review" | null;
+  canVerdict?: boolean;
+};
+
+export type RemoteTaskDetail = RemoteTaskSummary & {
+  reportPreview?: string | null;
+  contractPreview?: string | null;
+  canVerdict?: boolean;
+};
+
+export type RemoteWriteContext = { deviceId: string; deviceLabel: string };
 
 /** A single paired phone (DESIGN-BACKLOG.md item 2 revisited — per-device
  * revocation). `token` never leaves `pairNewDevice`'s own return value —
@@ -33,6 +83,10 @@ const MIME: Record<string, string> = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
 };
 
 /**
@@ -126,8 +180,14 @@ export function createRemoteServer(opts: {
   mobileClientDir: string;
   userDataDir: string;
   listTerminals: () => TerminalSummary[];
-  onWrite: (id: string, data: string) => void;
+  /** Optional third arg names the paired device for the host trail. Existing
+   * two-arg callers (current index.ts) stay valid. */
+  onWrite: (id: string, data: string, ctx?: RemoteWriteContext) => void;
   onResize: (id: string, cols: number, rows: number) => void;
+  listTasks?: () => RemoteTaskSummary[];
+  getTask?: (id: string) => RemoteTaskDetail | null;
+  onTaskVerdict?: (id: string, verdict: "approve" | "return") => void;
+  getScrollback?: (id: string) => string | null;
 }) {
   const devices = loadDevices(opts.userDataDir);
   const clients = new Set<WebSocket>();
@@ -231,10 +291,29 @@ export function createRemoteServer(opts: {
         clients.add(ws);
         clientDevice.set(ws, device.id);
         ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
+        // Additive: older clients ignore unknown message types.
+        ws.send(
+          JSON.stringify({
+            type: "hello",
+            device: { id: device.id, label: device.label },
+            capabilities: {
+              tasks: typeof opts.listTasks === "function",
+              scrollback: typeof opts.getScrollback === "function",
+              verdict: typeof opts.onTaskVerdict === "function",
+            },
+          }),
+        );
+        if (opts.listTasks) {
+          ws.send(JSON.stringify({ type: "tasks", tasks: opts.listTasks() }));
+        }
         return;
       }
+      const device = devices.get(deviceId);
+      const writeCtx: RemoteWriteContext | undefined = device
+        ? { deviceId: device.id, deviceLabel: device.label }
+        : undefined;
       if (msg.type === "pty:write" && typeof msg.id === "string" && typeof msg.data === "string") {
-        opts.onWrite(msg.id, msg.data);
+        opts.onWrite(msg.id, msg.data, writeCtx);
       } else if (
         msg.type === "pty:resize" &&
         typeof msg.id === "string" &&
@@ -244,6 +323,20 @@ export function createRemoteServer(opts: {
         opts.onResize(msg.id, msg.cols, msg.rows);
       } else if (msg.type === "list") {
         ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
+      } else if (msg.type === "tasks:list") {
+        ws.send(JSON.stringify({ type: "tasks", tasks: opts.listTasks ? opts.listTasks() : [] }));
+      } else if (msg.type === "task:get" && typeof msg.id === "string") {
+        const task = opts.getTask ? opts.getTask(msg.id) : null;
+        ws.send(JSON.stringify({ type: "task", task }));
+      } else if (
+        msg.type === "task:verdict" &&
+        typeof msg.id === "string" &&
+        (msg.verdict === "approve" || msg.verdict === "return")
+      ) {
+        if (opts.onTaskVerdict) opts.onTaskVerdict(msg.id, msg.verdict);
+      } else if (msg.type === "pty:subscribe" && typeof msg.id === "string") {
+        const scrollback = opts.getScrollback ? opts.getScrollback(msg.id) : null;
+        if (scrollback) ws.send(JSON.stringify({ type: "pty:scrollback", id: msg.id, data: scrollback }));
       }
     });
     ws.on("close", () => {
