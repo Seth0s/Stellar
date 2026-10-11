@@ -565,7 +565,8 @@ export async function settleHome(evalJs, { timeoutMs = 12_000 } = {}) {
  * attributes that already exist. */
 export const SEL = {
   railAddCard: '[data-role="rail-add-card"]',
-  popoverKind: (kind) => `.popover-row[data-kind="${kind}"]`,
+  /** Docked rail panel tiles (and legacy popover rows). */
+  popoverKind: (kind) => `[data-role="rail-panel"] [data-kind="${kind}"], .popover-row[data-kind="${kind}"], [data-kind="${kind}"]`,
   cardKind: (kind) => `[data-kind="${kind}"]`,
   homeNewSession: ".home button.primary",
   sessionName: ".modal input.resume-input",
@@ -674,21 +675,37 @@ export async function bootIntoFreshSession(page, name = "Sessão de Teste", { sp
       })()
     `),
   );
-  if (!terminalOption) throw new Error("terminal option not found in add-card popover");
+  if (!terminalOption) throw new Error("terminal option not found in add-card panel");
   await page.click(terminalOption.x, terminalOption.y);
   await delay(250);
+
+  // Docked rail: terminal opens step 1 (provider). Pick bash (always present) then open.
+  const pickedProvider = await page.evalJs(`
+    (() => {
+      const step = document.querySelector('[data-role="rail-dock"]')?.getAttribute('data-rail-step');
+      if (step !== 'terminal1') return false;
+      const buttons = [...document.querySelectorAll('[data-role="rail-panel"] button')];
+      const bash = buttons.find((b) => /bash|Terminal/i.test(b.textContent || ""));
+      if (!bash) return false;
+      bash.click();
+      return true;
+    })()
+  `);
+  if (pickedProvider) await delay(250);
 
   const createTerminalBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.popover-actions button.primary');
+        const buttons = [...document.querySelectorAll('[data-role="rail-panel"] button, .popover-actions button.primary')];
+        const b = buttons.find((el) => /Abrir o card|Criar terminal|Open the card|Create terminal/i.test(el.textContent || ""))
+          || document.querySelector('.popover-actions button.primary');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
     `),
   );
-  if (!createTerminalBtn) throw new Error("terminal popover's submit button not found");
+  if (!createTerminalBtn) throw new Error("terminal panel submit button not found");
   await page.click(createTerminalBtn.x, createTerminalBtn.y);
   await delay(400);
 }

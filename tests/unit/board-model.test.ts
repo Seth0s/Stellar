@@ -110,7 +110,7 @@ describe("board-model geometry", () => {
 
   it("generates slots for initial cards, centered slots, and point slots", () => {
     const cSlot = cascadeSlot(0);
-    expect(cSlot.x).toBeGreaterThanOrEqual(70); // D1 protection gutter
+    expect(cSlot.x).toBeGreaterThanOrEqual(40); // board-viewport already clears docked rail
 
     const visible: Rect = { x: 0, y: 0, w: 1000, h: 1000 };
     const centSlot = centeredSlot(visible, 0);

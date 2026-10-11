@@ -63,8 +63,8 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     if (!vp || !box) return;
     const vw = vp.clientWidth;
     const vh = vp.clientHeight;
-    // D1 — Calha de proteção contra sobreposição da Rail (48px + 12px margin + margem de respiro)
-    const PAD_LEFT = 96;
+    // Docked rail lives outside `.board-viewport`, so fit padding is symmetric.
+    const PAD_LEFT = 60;
     const PAD_RIGHT = 60;
     const PAD_Y = 60;
     const availW = Math.max(100, vw - PAD_LEFT - PAD_RIGHT);
@@ -91,8 +91,8 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     if (!vp || !card) return;
     const vw = vp.clientWidth;
     const vh = vp.clientHeight;
-    // D1 — Calha de proteção contra sobreposição da Rail
-    const PAD_LEFT = 96;
+    // Docked rail lives outside `.board-viewport`, so focus padding is symmetric.
+    const PAD_LEFT = 60;
     const PAD_RIGHT = 60;
     const PAD_Y = 60;
     const box = card.rect;

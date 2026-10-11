@@ -783,6 +783,8 @@ export function App() {
   // shouldn't hand the user a value it already knows will be rejected.
   const [newEffort, setNewEffort] = useState("");
   const [newSystemPrompt, setNewSystemPrompt] = useState("");
+  const [newCwd, setNewCwd] = useState("");
+  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("ac.railCollapsed") === "1");
   const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
   // Pedido ao vivo (2026-08-27): o clique num link visto no terminal
   // deixou de abrir o navegador interno direto — agora pede confirmação
@@ -821,7 +823,7 @@ export function App() {
   const [tool, setTool] = useState<Tool>("pointer");
   const [newStrokeColor, setNewStrokeColor] = useState<string>(STROKE_COLORS[0]);
   const [newStrokeWidth, setNewStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
-  const [newStrokeStyle, setNewStrokeStyle] = useState<"solid" | "marker">("solid");
+  const [newStrokeStyle] = useState<"solid" | "marker">("solid");
   const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
   /** Cards mid-close-animation — still rendered (with the .closing class),
    * removed from `cards` only once that finishes (see finalizeCloseCard). */
@@ -1417,6 +1419,9 @@ export function App() {
    * DEFAULT_CWD for a board that predates the `cwd` column (empty string
    * in the DB) or before any board is loaded at all. */
   const activeBoardCwd = boards.find((b) => b.id === activeBoardId)?.cwd || DEFAULT_CWD;
+  useEffect(() => {
+    setNewCwd(activeBoardCwd);
+  }, [activeBoardCwd]);
   // RODADA 3, peça 5 — rodapé de escopo do quadro de tasks. `useMemo`
   // (não um `Object.fromEntries` cru no JSX) pra manter a MESMA
   // referência entre renders enquanto `boards` não muda de verdade —
@@ -1994,7 +1999,7 @@ export function App() {
   }, [activeBoardId]);
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
-  const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected, ungroupSelected } =
+  const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected } =
     useCardSelection(cardsRef, setCards, activeBoardIdRef, nextId, clientToWorld, toRow);
   // Pre-release audit P1 — same stable-handler reasoning as the block
   // near cardsRef/orderRef above; these two specifically can only be
@@ -2130,7 +2135,7 @@ export function App() {
       id,
       kind: "terminal",
       provider: resolvedProvider,
-      cwd: activeBoardCwd,
+      cwd: newCwd.trim() || activeBoardCwd,
       resumeId: newResumeId.trim() || null,
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
@@ -2150,7 +2155,7 @@ export function App() {
         toCardId: id,
         provider: resolvedProvider,
         cardKind: "terminal",
-        cwd: activeBoardCwd,
+        cwd: newCwd.trim() || activeBoardCwd,
       });
     }
     // centeredSlot's collision ring-search (board-model.ts) can walk a new
@@ -3686,11 +3691,7 @@ export function App() {
 
   const selectedCards = cards.filter((c) => selectedIds.has(c.id));
   const canGroup = tool === "select" && selectedCards.length >= 2;
-  const commonGroupId =
-    selectedCards.length > 0 && selectedCards.every((c) => c.groupId && c.groupId === selectedCards[0].groupId)
-      ? selectedCards[0].groupId
-      : null;
-  const canUngroup = tool === "select" && commonGroupId !== null;
+  // Ungroup stays on the keyboard-shortcut path; the docked rail only offers Group.
 
   // Live override for the active board only (see liveStatus's comment) —
   // every other board keeps the structural proxy fetched over IPC.
@@ -3756,19 +3757,81 @@ export function App() {
     : [];
 
   return (
-    <div
-      className="viewport"
-      ref={viewportRef}
-      onWheel={onWheel}
-      onWheelCapture={onViewportWheelCapture}
-      onPointerDownCapture={onViewportPointerDownCapture}
-      onPointerDown={onBackgroundPointerDown}
-      onContextMenu={onBackgroundContextMenu}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={onViewportDrop}
-      style={backgroundStyle}
-    >
+    <div className="viewport" data-rail-collapsed={railCollapsed ? "1" : "0"}>
       <Titlebar />
+      <Rail
+        tool={tool}
+        setTool={setTool}
+        strokeColors={STROKE_COLORS}
+        strokeColor={newStrokeColor}
+        setStrokeColor={setNewStrokeColor}
+        strokeWidth={newStrokeWidth}
+        setStrokeWidth={setNewStrokeWidth}
+        canGroup={canGroup}
+        onGroup={groupSelected}
+        providers={providerOptions}
+        newProvider={newProvider}
+        setNewProvider={(p) => {
+          const nextEffortValues = availableAgentProviders.find((a) => a.id === p)?.effortValues ?? [];
+          if (!nextEffortValues.includes(newEffort)) setNewEffort("");
+          setNewProvider(p);
+        }}
+        newResumeId={newResumeId}
+        setNewResumeId={setNewResumeId}
+        newContinueLast={newContinueLast}
+        setNewContinueLast={setNewContinueLast}
+        newModel={newModel}
+        setNewModel={setNewModel}
+        newEffort={newEffort}
+        setNewEffort={setNewEffort}
+        newSystemPrompt={newSystemPrompt}
+        setNewSystemPrompt={setNewSystemPrompt}
+        newCwd={newCwd}
+        setNewCwd={setNewCwd}
+        onCreateTerminal={addTerminalCard}
+        onCreate={(kind) => addCardOfKind(kind)}
+        onCreateMedia={() => {
+          void addMediaCardFromPicker();
+        }}
+        aiBusy={aiBusy}
+        summarizeDisabled={!availableAgentProviders.some((a) => a.id === newProvider && a.oneShot)}
+        onReorganize={aiReorganize}
+        onSummarize={summarizeBoard}
+        cards={cards.map((c) => {
+          const live = liveStatus[c.id];
+          const label = describeCard(c.id);
+          const status =
+            c.kind === "terminal"
+              ? live === "ok"
+                ? { statusText: t("rail.v3.status.working"), statusTone: "live" as const }
+                : { statusText: t("rail.v3.status.stopped"), statusTone: "idle" as const }
+              : c.kind === "sticky"
+                ? { statusText: t("rail.v3.status.note"), statusTone: "note" as const }
+                : c.kind === "task"
+                  ? { statusText: t("rail.v3.status.queue"), statusTone: "note" as const }
+                  : { statusText: CARD_LABEL[c.kind] ?? c.kind, statusTone: "note" as const };
+          return { id: c.id, kind: c.kind, label, ...status };
+        })}
+        onJumpToCard={jumpToCard}
+        onOpenSettings={() => setSettingsPage("account")}
+        onOpenShortcuts={() => setSettingsPage("shortcuts")}
+        onDockWidthChange={(w) => setRailCollapsed(w <= 56)}
+        summarizeProviderLabel={
+          availableAgentProviders.find((a) => a.id === newProvider)?.label ?? newProvider
+        }
+      />
+      <div
+        className="board-viewport"
+        ref={viewportRef}
+        onWheel={onWheel}
+        onWheelCapture={onViewportWheelCapture}
+        onPointerDownCapture={onViewportPointerDownCapture}
+        onPointerDown={onBackgroundPointerDown}
+        onContextMenu={onBackgroundContextMenu}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onViewportDrop}
+        style={backgroundStyle}
+      >
       <div
         className="world"
         style={{ transform: `translate(${world.panX}px, ${world.panY}px) scale(${world.zoom})` }}
@@ -4454,84 +4517,6 @@ export function App() {
           implies before §0.8 ponto 3 (remover scale(zoom) de .world) can
           be closed. */}
       <div className="cards-layer" ref={setCardsLayerEl} />
-      <Rail
-        tool={tool}
-        setTool={setTool}
-        strokeColors={STROKE_COLORS}
-        strokeColor={newStrokeColor}
-        setStrokeColor={setNewStrokeColor}
-        strokeWidth={newStrokeWidth}
-        setStrokeWidth={setNewStrokeWidth}
-        strokeStyle={newStrokeStyle}
-        setStrokeStyle={setNewStrokeStyle}
-        canGroup={canGroup}
-        canUngroup={canUngroup}
-        onGroup={groupSelected}
-        onUngroup={ungroupSelected}
-        providers={providerOptions}
-        newProvider={newProvider}
-        setNewProvider={(p) => {
-          // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
-          // 2026-09-10 — a value valid for the PREVIOUS provider (e.g.
-          // claude's "medium") can be meaningless or refused for the new
-          // one (antigravity takes only low|medium|high). Clear it here, at
-          // the one place the provider actually changes, rather than letting
-          // a stale value ride along to a provider that never offered it as
-          // an option in the first place.
-          //
-          // Os valores vêm da projeção do canal de disponibilidade (task
-          // 07b05f43) — a MESMA fonte que o Rail usa para montar o select.
-          // Provider sem esforço declarado chega como lista vazia, então
-          // qualquer valor é limpo, que é o comportamento de sempre.
-          const nextEffortValues = availableAgentProviders.find((a) => a.id === p)?.effortValues ?? [];
-          if (!nextEffortValues.includes(newEffort)) setNewEffort("");
-          setNewProvider(p);
-        }}
-        newResumeId={newResumeId}
-        setNewResumeId={setNewResumeId}
-        newContinueLast={newContinueLast}
-        setNewContinueLast={setNewContinueLast}
-        newModel={newModel}
-        setNewModel={setNewModel}
-        newEffort={newEffort}
-        setNewEffort={setNewEffort}
-        newSystemPrompt={newSystemPrompt}
-        setNewSystemPrompt={setNewSystemPrompt}
-        onCreateTerminal={addTerminalCard}
-        // Real bug found and fixed while verifying an unrelated refactor
-        // (see AGENTS.md): `addXCard`'s optional `at?: Point` (added for
-        // the radial menu, item 1) was once wired straight to a native
-        // `onClick`, which React calls with the SyntheticEvent as the
-        // first argument — that event object landed in `at` (truthy, so
-        // the `at ? pointSlot(at) : ...` branch always won), and
-        // `pointSlot(event)` read `event.x`/`.y` — undefined on a React
-        // SyntheticEvent — producing NaN coordinates that render as (0,0).
-        // The explicit `(kind) => addCardOfKind(kind)` wrapper below (not
-        // passing `onCreate={addCardOfKind}` directly) keeps that fix:
-        // Rail's button `onClick` calls `onCreate(kind)` with exactly one
-        // argument, but staying explicit here costs nothing and documents
-        // why it matters.
-        onCreate={(kind) => addCardOfKind(kind)}
-        onCreateMedia={() => {
-          void addMediaCardFromPicker();
-        }}
-        aiBusy={aiBusy}
-        /* O "Resumir" só é oferecido para quem DECLARA a ação (task
-            efc5b6fd). O critério era `newProvider !== "bash"` — e por isso
-            cline e commandcode viam o botão e a execução mandava flags que
-            aquelas CLIs não têm. O fato vem da projeção
-            (`AgentAvailability.oneShot`), a MESMA que o Rail já usa para o
-            seletor de esforço; ausência da declaração = botão desabilitado com
-            o motivo na tela, nunca um clique que falha. */
-        summarizeDisabled={!availableAgentProviders.some((a) => a.id === newProvider && a.oneShot)}
-        onReorganize={aiReorganize}
-        onSummarize={summarizeBoard}
-        cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: describeCard(c.id) }))}
-        kindIcon={CARD_ICON}
-        kindLabel={CARD_LABEL}
-        onJumpToCard={jumpToCard}
-        onOpenSettings={() => setSettingsPage("account")}
-      />
       <Topbar
         boards={boards}
         activeBoardId={activeBoardId!}
@@ -4561,6 +4546,7 @@ export function App() {
         boardMountProgress={boardMountProgress}
       />
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
+      </div>
       <UpdateBanner />
       <ToastHost />
       {settingsPage && (

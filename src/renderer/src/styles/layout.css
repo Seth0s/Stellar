@@ -148,192 +148,24 @@ body {
   color: var(--on-accent);
 }
 
-/* ---------------------------------------------------------------- rail */
+/* ---------------------------------------------------------------- rail (docked — visuals in Rail.module.css) */
 
-.rail-container {
+.board-viewport {
   position: absolute;
-  left: 12px;
-  top: calc(50% + (var(--titlebar-h) + 60px) / 2);
-  transform: translateY(-50%);
-  z-index: var(--layer-chrome);
-  display: flex;
-  align-items: center;
-  pointer-events: none;
-}
-
-.rail {
-  position: relative;
-  width: 48px;
-  max-height: calc(100vh - var(--titlebar-h) - 84px);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  box-shadow: var(--shadow-card);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px 0;
-  gap: 3px;
-  overflow-y: auto;
-  pointer-events: auto;
-  transform: translateX(0);
-  opacity: 1;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
-}
-
-.rail-container.is-collapsed .rail {
-  transform: translateX(-70px);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.rail-btn {
-  width: 36px;
-  height: 36px;
-  flex: none;
-  border-radius: 50%;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease, transform 0.12s ease;
-}
-
-.rail-btn:active {
-  transform: scale(0.9);
-}
-
-.rail-btn:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.rail-btn.active {
-  background: var(--foam);
-  color: var(--on-accent);
-}
-
-.rail-divider {
-  width: 20px;
-  height: 1px;
-  background: var(--border);
-  margin: 3px 0;
-  flex: none;
-  opacity: 0.6;
-}
-
-.rail-group-gap {
-  height: 10px;
-  flex: none;
-}
-
-.rail-toggle {
-  position: absolute;
-  left: 54px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-left: none;
-  background: var(--panel);
-  border-radius: 0 8px 8px 0;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  pointer-events: auto;
-  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.2);
-  opacity: 0.7;
-  transition: left 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-              width 0.15s ease,
-              opacity 0.2s ease,
-              background-color 0.15s ease,
-              color 0.15s ease,
-              border-color 0.15s ease,
-              box-shadow 0.2s ease;
-  /* 1 é LOCAL, não degrau da escala: este toggle vive DENTRO do
-     `.rail-container`, que cria contexto de empilhamento (`transform` + z-index)
-     — de dentro não existe "ficar acima do 500", só acima dos irmãos DAQUI
-     (`.rail` e `.rail-mini`, que não têm z-index). O antigo `501` sugeria a
-     intenção contrária; o efeito sempre foi este. */
-  z-index: 1;
-}
-
-.rail-toggle:hover {
-  opacity: 1;
-  color: var(--foam);
-  background: var(--surface);
-  border-color: var(--foam);
-}
-
-/* Estado recolhido: sutil e discreto na borda esquerda. Alvo de clique
-   igual ao do estado expandido (18x36) — era 14x30 antes, pequeno demais
-   pro alvo principal de reabrir a rail (item 3); a discrição agora vem só
-   da opacidade reduzida, não do tamanho. */
-.rail-container.is-collapsed .rail-toggle {
-  left: 0px;
-  width: 18px;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 6px 6px 0;
-  opacity: 0.35;
-  color: var(--muted);
-  background: var(--panel);
-  box-shadow: none;
-}
-
-.rail-container.is-collapsed .rail-toggle:hover {
-  opacity: 1;
-  color: var(--foam);
-  border-color: var(--foam);
-  background: var(--surface);
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
-}
-
-/* Item 3 — mini-rail: what the collapsed rail becomes instead of just
-   disappearing. Same box as `.rail` (position/size), so it crossfades in
-   exactly where the full rail slides out to, and hides the same way in
-   reverse when expanded — both `position: absolute` inside
-   `.rail-container`, which never changes its own box either way, so the
-   canvas underneath never sees a layout shift. 48px circle: a full,
-   comfortable click target (matches `.rail-btn`'s own row width, not
-   `.rail-toggle`'s much thinner sliver). */
-.rail-mini {
-  position: absolute;
-  left: 0;
   top: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text);
-  cursor: pointer;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(-70px) scale(0.85);
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease, background-color 0.12s ease, color 0.12s ease;
+  left: var(--rail-dock-width);
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: var(--ink);
 }
 
-.rail-container.is-collapsed .rail-mini {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0) scale(1);
+.viewport[data-rail-collapsed="1"] {
+  --rail-dock-width: var(--rail-width-strip);
 }
 
-.rail-mini:hover {
-  background: var(--surface);
-  color: var(--foam);
+.viewport:not([data-rail-collapsed="1"]) {
+  --rail-dock-width: var(--rail-width-open);
 }
 
 .popover-header-with-back {
@@ -368,6 +200,7 @@ body {
 .topbar {
   position: absolute;
   top: calc(var(--titlebar-h) + 12px);
+  /* Offsets are relative to `.board-viewport` (docked rail is outside it). */
   left: 72px;
   right: 12px;
   display: flex;

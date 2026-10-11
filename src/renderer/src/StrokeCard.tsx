@@ -4,7 +4,8 @@ import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import styles from "./StrokeCard.module.css";
 
-export const STROKE_COLORS = ["#f5f5f5", "#ff6b6b", "#6bc5ff", "#6bff9d"] as const;
+/** Pen palette from Rail.dc.html (app-v3) — also mirrored as --rail-pen-*. */
+export const STROKE_COLORS = ["#e8eaf0", "#f0a43e", "#e0846f", "#3fb68b", "#7d8cff"] as const;
 
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */

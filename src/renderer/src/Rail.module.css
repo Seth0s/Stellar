@@ -1,0 +1,575 @@
+/* Docked rail — measures from Rail.dc.html via --rail-* tokens. */
+
+.dock {
+  position: absolute;
+  top: var(--titlebar-h);
+  left: 0;
+  bottom: 0;
+  width: var(--rail-dock-width);
+  display: flex;
+  background: var(--rail-shell);
+  color: var(--rail-text);
+  font-family: var(--font-ui);
+  z-index: var(--layer-chrome);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.strip {
+  width: var(--rail-width-strip);
+  flex: none;
+  border-right: 1px solid var(--rail-line);
+  background: var(--rail-strip-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--rail-pad-strip-y) 0;
+  gap: var(--rail-gap-strip);
+}
+
+.logo {
+  width: var(--rail-logo-size);
+  height: var(--rail-logo-size);
+  border-radius: var(--rail-logo-radius);
+  background: var(--rail-logo-bg);
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--space-4);
+  flex: none;
+}
+
+.logo svg {
+  display: block;
+}
+
+.navBtn {
+  width: var(--rail-nav-btn);
+  height: var(--rail-nav-btn);
+  border-radius: var(--rail-nav-radius);
+  border: 0;
+  background: transparent;
+  color: var(--rail-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  flex: none;
+  padding: 0;
+}
+
+.navBtn:hover {
+  background: var(--rail-item-hover);
+  color: var(--rail-text);
+}
+
+.navBtnOn {
+  background: var(--rail-item-on);
+  color: var(--rail-text);
+  box-shadow: inset 0 0 0 1px var(--rail-chip-on-border);
+}
+
+.stripDivider {
+  width: var(--space-8);
+  height: 1px;
+  background: var(--rail-line);
+  margin: var(--rail-gap-strip) 0;
+  flex: none;
+}
+
+.stripSpacer {
+  flex: 1;
+  min-height: 0;
+}
+
+.helpGlyph {
+  font-size: var(--rail-text-15);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.panel {
+  width: var(--rail-width-panel);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--rail-panel-bg);
+  border-right: 1px solid var(--rail-line);
+  min-width: 0;
+}
+
+.panelHeader {
+  padding: var(--rail-pad-header-t) var(--rail-pad-header-x) var(--rail-pad-header-b);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-strip);
+  border-bottom: 1px solid var(--rail-line);
+  flex: none;
+}
+
+.panelTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: var(--rail-text-16);
+  font-weight: 600;
+  color: var(--rail-text);
+}
+
+.panelHint {
+  font-size: var(--rail-text-12);
+  color: var(--rail-muted);
+}
+
+.panelTitleRow > .panelHint {
+  margin-left: auto;
+}
+
+.stepRow {
+  display: flex;
+  align-items: center;
+  gap: var(--rail-gap-strip);
+  font-size: var(--rail-text-12);
+  color: var(--rail-muted);
+}
+
+.stepDot {
+  width: var(--rail-dot-w);
+  height: var(--rail-dot-h);
+  border-radius: var(--radius-1);
+  background: var(--rail-field-border);
+  flex: none;
+}
+
+.stepDotOn {
+  background: var(--rail-live);
+}
+
+.stepLabel {
+  margin-left: var(--rail-gap-strip);
+}
+
+.panelBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--rail-pad-body) var(--rail-pad-body) var(--rail-pad-body-b);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-body);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sectionHead {
+  margin: 0;
+  padding: 0 var(--space-6) var(--rail-gap-strip);
+  font-size: var(--rail-text-11-5);
+  letter-spacing: var(--rail-track);
+  text-transform: uppercase;
+  color: var(--rail-muted);
+}
+
+/* Cards find: proto `.sh` has no pad-x — aligns with the search field (body pad only). */
+.sectionHeadFlush {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--rail-gap-item);
+  min-height: var(--rail-item-height);
+  padding: 0 var(--space-6);
+  border-radius: var(--rail-item-radius);
+  border: 0;
+  background: transparent;
+  color: var(--rail-text);
+  font: inherit;
+  font-size: var(--rail-text-14);
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.item:hover {
+  background: var(--rail-item-hover);
+}
+
+.itemOn {
+  background: var(--rail-item-on);
+}
+
+.itemGrow {
+  flex: 1;
+  min-width: 0;
+}
+
+.itemStack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.itemSub {
+  font-size: var(--rail-text-12);
+  color: var(--rail-muted);
+}
+
+.itemSubWarn {
+  color: var(--rail-quota-ok);
+}
+
+.kbdRow {
+  display: flex;
+  gap: 3px; /* sd:allow: prototype kbd cluster gap (Rail.dc.html) */
+  flex: none;
+}
+
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--rail-kbd-size);
+  height: var(--rail-kbd-size);
+  padding: 0 5px; /* sd:allow: prototype kbd padding (Rail.dc.html) */
+  box-sizing: border-box;
+  border-radius: var(--rail-kbd-radius);
+  border: 1px solid var(--rail-kbd-border);
+  border-bottom-width: 2px;
+  background: var(--rail-kbd-bg);
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-11);
+  font-weight: 500;
+  color: var(--rail-kbd-fg);
+}
+
+.tip {
+  margin-top: auto;
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--rail-tip-radius);
+  background: var(--rail-kbd-bg);
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-soft);
+  line-height: 1.5;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-strip);
+  padding: var(--space-6);
+  border-radius: var(--rail-tile-radius);
+  border: 1px solid var(--rail-tile-border);
+  background: var(--rail-panel-bg);
+  color: var(--rail-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tile:hover {
+  border-color: var(--rail-tile-hover-border);
+  background: var(--rail-tile-hover-bg);
+}
+
+.tileHero {
+  border-color: var(--rail-hero-border);
+  background: var(--rail-hero-bg);
+}
+
+.tileHeroTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  font-size: var(--rail-text-15);
+  font-weight: 600;
+}
+
+.tileTitle {
+  font-size: var(--rail-text-14);
+  font-weight: 600;
+}
+
+.tileDesc {
+  font-size: var(--rail-text-12);
+  color: var(--rail-soft);
+}
+
+.tileDescHero {
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-soft);
+}
+
+.tileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rail-gap-tile);
+}
+
+.tileRow {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.tileRowDisabled {
+  opacity: 0.55;
+}
+
+.providerDot {
+  width: var(--rail-provider-dot);
+  height: var(--rail-provider-dot);
+  border-radius: var(--radius-circle);
+  flex: none;
+}
+
+.providerDotBash {
+  border-radius: var(--radius-1);
+  background: var(--rail-bash-swatch);
+}
+
+.providerName {
+  flex: 1;
+  font-size: var(--rail-text-14-5);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerQuota {
+  font-size: var(--rail-text-12);
+  color: var(--rail-quota-ok);
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.providerQuotaWarn {
+  color: var(--rail-quota-warn);
+}
+
+.back {
+  border: 0;
+  background: transparent;
+  color: var(--rail-link);
+  font: inherit;
+  font-size: var(--rail-text-13);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  align-self: flex-start;
+}
+
+.fieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-strip);
+  font-size: var(--rail-text-13);
+  color: var(--rail-kbd-fg);
+}
+
+.fieldOptional {
+  color: var(--rail-muted);
+}
+
+.field {
+  min-height: var(--rail-field-height);
+  padding: 0 var(--space-6);
+  border-radius: var(--rail-field-radius);
+  border: 1px solid var(--rail-field-border);
+  background: var(--rail-field-bg);
+  color: var(--rail-text);
+  font: inherit;
+  font-size: var(--rail-text-14);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.fieldMono {
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-12-5);
+}
+
+.fieldArea {
+  min-height: 80px; /* sd:allow: prototype textarea min-height (Rail.dc.html) */
+  padding: var(--space-5) var(--space-6);
+  resize: vertical;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rail-gap-form);
+}
+
+.sessionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-strip);
+  font-size: var(--rail-text-13-5);
+}
+
+.sessionOption {
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.btn {
+  min-height: var(--rail-field-height);
+  padding: 0 14px; /* sd:allow: prototype button pad-x (Rail.dc.html) */
+  border-radius: var(--rail-field-radius);
+  border: 1px solid var(--rail-field-border);
+  background: var(--rail-btn-bg);
+  color: var(--rail-text);
+  font: inherit;
+  font-size: var(--rail-text-13-5);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--rail-gap-strip);
+}
+
+.btnPrimary {
+  background: var(--rail-primary);
+  border-color: var(--rail-primary);
+  color: var(--rail-on-primary);
+  font-weight: 600;
+  flex: 2;
+}
+
+.btnSecondary {
+  flex: 1;
+}
+
+.btnKbd {
+  background: transparent;
+  border-color: #8a97f0; /* sd:allow: prototype primary kbd border on #4a5fe0 (Rail.dc.html) */
+  color: var(--rail-on-primary);
+}
+
+.footnote {
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-muted);
+  padding: 0;
+  margin: 0;
+  align-self: stretch;
+}
+
+.penSwatches {
+  display: flex;
+  gap: var(--space-5);
+}
+
+.penSwatch {
+  width: var(--rail-swatch);
+  height: var(--rail-swatch);
+  border-radius: var(--radius-circle);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.penSwatchOn {
+  box-shadow: 0 0 0 2px var(--rail-panel-bg), 0 0 0 4px var(--rail-pen-ring);
+}
+
+.penWidths {
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+}
+
+.penWidthBtn {
+  width: 44px; /* sd:allow: prototype pen width button (Rail.dc.html) */
+  padding: 0;
+}
+
+.penWidthBtnOn {
+  border-color: #5a6be0; /* sd:allow: prototype selected width border (Rail.dc.html) */
+}
+
+.penBar {
+  display: block;
+  width: 18px; /* sd:allow: prototype pen bar width (Rail.dc.html) */
+  background: var(--rail-text);
+}
+
+.penBarThin {
+  height: 2px;
+}
+
+.penBarMid {
+  height: var(--space-2);
+  border-radius: var(--radius-1);
+}
+
+.penBarThick {
+  height: 7px; /* sd:allow: prototype thick pen bar (Rail.dc.html) */
+  border-radius: 3px; /* sd:allow: prototype thick pen bar radius (Rail.dc.html) */
+}
+
+.statusDot {
+  width: var(--rail-status-dot);
+  height: var(--rail-status-dot);
+  border-radius: var(--radius-circle);
+  flex: none;
+}
+
+.statusDotSquare {
+  border-radius: var(--radius-1);
+  background: var(--rail-bash-swatch);
+}
+
+.statusLive {
+  background: var(--rail-live);
+}
+
+.statusWait {
+  background: var(--fila-dot-review);
+}
+
+.statusIdle {
+  background: var(--rail-dot-idle);
+}
+
+.aiTileTitle {
+  font-size: var(--rail-text-14-5);
+  font-weight: 600;
+}
+
+.aiTileDesc {
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-soft);
+}
+
+.aiTileMeta {
+  font-size: var(--rail-text-12);
+  color: var(--rail-muted);
+}
