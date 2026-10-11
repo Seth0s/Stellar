@@ -1,0 +1,114 @@
+/* Ctrl+K palette on the board — BoardQuickTask.dc.html command dialog. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: var(--v2-s18);
+  background: rgba(0, 0, 0, 0.35); /* sd:allow: BoardQuickTask.dc.html veil */
+}
+
+.dialog {
+  width: 560px; /* sd:allow: BoardQuickTask.dc.html palette width */
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--v2-r14);
+  background: var(--v2-menu);
+  border: var(--v2-hair) solid var(--v2-line-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); /* sd:allow: BoardQuickTask.dc.html shadow */
+  overflow: hidden;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  color: var(--v2-text);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+  padding: 0 var(--v2-s7);
+  height: var(--v2-s19);
+  border-bottom: var(--v2-hair) solid var(--v2-line-mid);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f14h);
+  outline: none;
+}
+
+.k {
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--v2-f10h);
+  color: var(--v2-text-5);
+  border: var(--v2-hair) solid var(--v2-line-input);
+  border-radius: var(--v2-r5);
+  padding: 1px var(--v2-s2); /* sd:allow: BoardQuickTask.dc.html kbd pad */
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--v2-s4);
+}
+
+.section {
+  padding: var(--v2-s3) var(--v2-s6);
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.08em;
+  color: var(--v2-text-5);
+}
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+  padding: var(--v2-s5) var(--v2-s6);
+  border-radius: var(--v2-r9);
+  font-size: var(--v2-f13h);
+  color: var(--v2-text-2b);
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+
+.cmd:hover,
+.cmdActive {
+  background: #1a1f2c; /* sd:allow: BoardQuickTask.dc.html cmd hover */
+  color: var(--v2-bright);
+}
+
+.cmdIcon {
+  flex: none;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  color: inherit;
+}
+
+.cmdLabel {
+  flex: 1;
+}
+
+.cmdMeta {
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}

@@ -925,8 +925,16 @@ export function TaskDetailModal({
   );
 }
 
-/** Formulário pra o humano criar task na coluna "a fazer". */
-function CreateTaskForm({ boardId, onCreated }: { boardId: string; onCreated: (taskId: string) => void }) {
+/** Title + Enter quick create on the Fila card; "more options" opens the full form. */
+function CreateTaskForm({
+  boardId,
+  onCreated,
+  onMoreOptions,
+}: {
+  boardId: string;
+  onCreated: (taskId: string) => void;
+  onMoreOptions?: () => void;
+}) {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
@@ -956,6 +964,11 @@ function CreateTaskForm({ boardId, onCreated }: { boardId: string; onCreated: (t
         disabled={busy}
         aria-label={t("task.create")}
       />
+      {onMoreOptions ? (
+        <button type="button" data-no-drag data-part="create-task-more" className={styles.createTaskSubmit} disabled={busy} onClick={onMoreOptions}>
+          {t("boardQuick.moreOptions")}
+        </button>
+      ) : null}
       <button type="submit" data-no-drag data-part="create-task-submit" className={styles.createTaskSubmit} disabled={busy || !prompt.trim()}>
         {t("common.create").toLowerCase()}
       </button>
@@ -989,6 +1002,8 @@ function TaskCardInner({
   onApproveCompletion: _onApproveCompletion,
   openTaskRequestId,
   onOpenTaskHandled,
+  onRequestFullTaskForm,
+  onRequestQuickTask,
   screenProjected,
   panX,
   panY,
@@ -1035,6 +1050,10 @@ function TaskCardInner({
    * App precisa saber para não reabrir a mesma task em todo re-render. */
   openTaskRequestId?: string | null;
   onOpenTaskHandled?: () => void;
+  /** Opens the full TeamTaskForm (screen 14) seeded from the board. */
+  onRequestFullTaskForm?: () => void;
+  /** Header "+ Nova task" opens the screen-15 quick dialog; inline input stays. */
+  onRequestQuickTask?: () => void;
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
@@ -1489,20 +1508,33 @@ function TaskCardInner({
           setSprintsOpen(true);
           setChartsOpen(false);
         }}
-        onCreateTask={() => setCreatingTask(true)}
+        onCreateTask={() => {
+          if (onRequestQuickTask) onRequestQuickTask();
+          else setCreatingTask(true);
+        }}
         totalDoneCount={groups.done.length}
         boardId={activeBoardId}
         boardLabel={boardNames[activeBoardId] ?? activeBoardId}
         sprintLabel={activeSprintLabel}
       />
       )}
-      {!chartsOpen && !sprintsOpen && creatingTask && !viewingFrozen && (
+      {/* Header "+ Nova task" opens the quick dialog; the bottom title+Enter
+          form stays available (prototype screen 15 + prior Fila path). */}
+      {!chartsOpen && !sprintsOpen && !viewingFrozen && (creatingTask || onRequestQuickTask) && (
         <div data-part="create-task-inline" style={{ padding: "8px 18px" }}>
           <CreateTaskForm
             boardId={activeBoardId}
             onCreated={() => {
               setCreatingTask(false);
             }}
+            onMoreOptions={
+              onRequestFullTaskForm
+                ? () => {
+                    setCreatingTask(false);
+                    onRequestFullTaskForm();
+                  }
+                : undefined
+            }
           />
         </div>
       )}

@@ -9,6 +9,7 @@ import { TeamPage } from "./TeamPage";
 import { InboxPage } from "./InboxPage";
 import { CloudLinkPanel } from "./CloudLinkPanel";
 import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries";
+import { consumeTeamBoardFocus } from "./board-quick-task-decisions";
 import styles from "./Shell.module.css";
 
 export type ShellSection = "sessions" | "inbox" | "workhome" | "team" | "stats" | "account";
@@ -107,7 +108,15 @@ export function Shell({
   const [section, setSection] = useState<ShellSection>(initialSection);
   const [hasInvite, setHasInvite] = useState(false);
   const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
-  const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId: string } | null>(null);
+  const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId?: string; unassigned?: boolean } | null>(null);
+
+  useEffect(() => {
+    const focus = consumeTeamBoardFocus();
+    if (focus) {
+      setTeamFocus({ teamId: focus.teamId, unassigned: focus.unassigned });
+      setSection("team");
+    }
+  }, []);
 
   useEffect(() => {
     void window.team
@@ -276,6 +285,7 @@ export function Shell({
             boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             initialTeamId={teamFocus?.teamId}
             initialTaskId={teamFocus?.taskId}
+            initialUnassigned={teamFocus?.unassigned === true}
           />
         ) : section === "account" ? (
           <div className={styles.page}>

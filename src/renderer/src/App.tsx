@@ -15,6 +15,25 @@ import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { MediaCard, type MediaView } from "./MediaCard";
 import { TaskCard } from "./TaskCard";
+import { BoardQuickTask } from "./BoardQuickTask";
+import { BoardCommandPalette } from "./BoardCommandPalette";
+import { BoardCanvasMenu } from "./BoardCanvasMenu";
+import { TeamTaskForm } from "./TeamTaskForm";
+import {
+  countUnassignedTeamTasks,
+  emptyQuickTask,
+  matchTaskByQuery,
+  quickLocalPrompt,
+  quickTeamBody,
+  quickToFormState,
+  selectionToContractContext,
+  suggestedTerritory,
+  writeTeamBoardFocus,
+  type QuickTaskState,
+  type SelectionCardLite,
+} from "./board-quick-task-decisions";
+import type { TeamTaskFormState } from "./team-task-form-decisions";
+import type { TeamMemberInfo, TeamSprintInfo, TeamTaskInfo } from "../../preload/index";
 import {
   ChatCard,
   DEFAULT_CHAT_MODEL,
@@ -866,6 +885,21 @@ export function App() {
    * (`pointSlot`), captured once at open time so panning/zooming while the
    * menu is open doesn't retarget the spawn. */
   const [radialMenu, setRadialMenu] = useState<{ screen: Point; world: Point } | null>(null);
+  /** Right-click list menu (Nova task aqui); long-press still opens the radial. */
+  const [canvasMenu, setCanvasMenu] = useState<{ screen: Point; world: Point } | null>(null);
+  /** Screen 15 — Ctrl+K palette + quick create + full form reuse. */
+  const [boardCmdOpen, setBoardCmdOpen] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState<Partial<QuickTaskState> | null>(null);
+  const [fullTaskSeed, setFullTaskSeed] = useState<Partial<TeamTaskFormState> | null>(null);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const [teamCtx, setTeamCtx] = useState<{
+    teamId: string;
+    teamName: string;
+    members: TeamMemberInfo[];
+    tasks: TeamTaskInfo[];
+    sprints: TeamSprintInfo[];
+  } | null>(null);
   /** Item 57.8 — ferramenta "export": recorte livre em coordenadas de
    * TELA (client, não mundo — é exatamente o espaço que
    * `capturePage(rect)` espera, sem nenhuma conversão de zoom/pan
@@ -3334,13 +3368,18 @@ export function App() {
     window.addEventListener("pointerup", cleanup);
   }
 
-  /** Right-click on empty canvas opens the radial menu (item 1) instead of
-   * the OS/Electron context menu — a card only, so a right-click on the
-   * pen/select tools' own drag gestures isn't hijacked mid-drag. */
+  /** Right-click on empty canvas opens the text menu (Nova task aqui).
+   * Long-press still opens the radial. Clicks on cards are ignored. */
   function onBackgroundContextMenu(e: React.MouseEvent) {
-    if (e.target !== e.currentTarget) return;
+    const target = e.target as HTMLElement | null;
+    const onEmpty =
+      target === e.currentTarget ||
+      target?.classList.contains("world") ||
+      target?.classList.contains("viewport");
+    if (!onEmpty) return;
     e.preventDefault();
-    setRadialMenu({ screen: { x: e.clientX, y: e.clientY }, world: clientToWorld(e.clientX, e.clientY) });
+    setRadialMenu(null);
+    setCanvasMenu({ screen: { x: e.clientX, y: e.clientY }, world: clientToWorld(e.clientX, e.clientY) });
   }
 
   /** Empty-canvas media drop. Destination is decided by the surface under
@@ -3405,9 +3444,190 @@ export function App() {
     if (action === "tool-pen") return setTool("pen");
     if (action === "tool-connector") return setTool("connector");
     if (action === "tool-select") return setTool("select");
+    if (action === "quick-task") {
+      openQuickTask({ destination: "board" });
+      return;
+    }
     if (!at) return;
     if (action === "terminal") addTerminalCard(at, providerId);
     else addCardOfKind(action, at);
+  }
+
+  const ensureTeamCtx = useCallback(async () => {
+    if (teamCtx) return teamCtx;
+    try {
+      const overview = await window.team.overview();
+      if (!overview.ok || overview.view.teams.length === 0) return null;
+      const team = overview.view.teams[0]!;
+      const [detail, taskList, sprintList] = await Promise.all([
+        window.team.detail(team.id),
+        window.team.tasks(team.id, { includeArchived: false }),
+        window.team.sprints(team.id),
+      ]);
+      const next = {
+        teamId: team.id,
+        teamName: team.name,
+        members: detail.ok ? detail.detail.members : [],
+        tasks: taskList.ok ? taskList.list.tasks : [],
+        sprints: sprintList.ok ? sprintList.sprints : [],
+      };
+      setTeamCtx(next);
+      return next;
+    } catch {
+      return null;
+    }
+  }, [teamCtx]);
+
+  const openQuickTask = useCallback(
+    (seed: Partial<QuickTaskState>) => {
+      setQuickError(null);
+      const filesPaths = cards.filter((c): c is Extract<Card, { kind: "files" }> => c.kind === "files").map((c) => c.root);
+      const territory = seed.territory ?? suggestedTerritory(filesPaths);
+      setQuickTaskOpen({ ...emptyQuickTask(seed.destination ?? "board"), ...seed, territory: seed.territory ?? territory });
+      void ensureTeamCtx();
+    },
+    [cards, ensureTeamCtx],
+  );
+
+  useEffect(() => {
+    const w = window as unknown as {
+      __stellarOpenQuickTask?: (seed: Partial<QuickTaskState>) => void;
+      __stellarSelectCardIds?: (ids: string[]) => void;
+      __stellarOpenCanvasMenu?: (x: number, y: number) => void;
+    };
+    w.__stellarOpenQuickTask = openQuickTask;
+    w.__stellarSelectCardIds = (ids) => setSelectedIds(new Set(ids));
+    w.__stellarOpenCanvasMenu = (x, y) => {
+      setRadialMenu(null);
+      setCanvasMenu({ screen: { x, y }, world: clientToWorld(x, y) });
+    };
+    return () => {
+      delete w.__stellarOpenQuickTask;
+      delete w.__stellarSelectCardIds;
+      delete w.__stellarOpenCanvasMenu;
+    };
+  }, [openQuickTask, setSelectedIds, clientToWorld]);
+
+  const openFullTaskForm = useCallback(
+    async (seed: Partial<TeamTaskFormState>) => {
+      setQuickTaskOpen(null);
+      await ensureTeamCtx();
+      setFullTaskSeed(seed);
+    },
+    [ensureTeamCtx],
+  );
+
+  useEffect(() => {
+    if (activeBoardId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        if (isAnyModalOpen()) return;
+        const active = document.activeElement;
+        const isFormField =
+          active instanceof HTMLElement &&
+          (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
+        if (isFormField) return;
+        e.preventDefault();
+        setBoardCmdOpen(true);
+        void ensureTeamCtx();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeBoardId, ensureTeamCtx]);
+
+  async function submitQuickTask(state: QuickTaskState) {
+    if (!activeBoardId) return;
+    setQuickBusy(true);
+    setQuickError(null);
+    try {
+      if (state.destination === "board") {
+        const res = await window.tasks.create(activeBoardId, quickLocalPrompt(state));
+        if (!res.ok) {
+          setQuickError(t("teamTask.error"));
+          return;
+        }
+      } else {
+        const ctx = await ensureTeamCtx();
+        if (!ctx) {
+          setQuickError(t("boardCmd.noTeam"));
+          return;
+        }
+        const res = await window.team.createTask(ctx.teamId, quickTeamBody(state));
+        if (!res.ok) {
+          setQuickError(res.error || t("teamTask.error"));
+          return;
+        }
+      }
+      setQuickTaskOpen(null);
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+
+  function selectionCardsLite(): SelectionCardLite[] {
+    return cards
+      .filter((c) => selectedIds.has(c.id))
+      .map((c) => ({
+        id: c.id,
+        kind: c.kind,
+        label: describeCard(c.id),
+        cwd: c.kind === "terminal" ? c.cwd : c.kind === "files" || c.kind === "changes" ? c.root : null,
+      }));
+  }
+
+  async function onBoardCommand(id: import("./board-quick-task-decisions").BoardCmdId, query: string) {
+    setBoardCmdOpen(false);
+    if (id === "new-board") {
+      openQuickTask({ destination: "board" });
+      return;
+    }
+    if (id === "new-team") {
+      const ctx = await ensureTeamCtx();
+      if (!ctx) {
+        toast(t("boardCmd.noTeam"));
+        return;
+      }
+      openQuickTask({ destination: "team" });
+      return;
+    }
+    if (id === "selection-to-task") {
+      const sel = selectionCardsLite();
+      if (sel.length === 0) {
+        toast(t("boardCmd.noSelection"));
+        return;
+      }
+      openQuickTask({
+        destination: "board",
+        contract: selectionToContractContext(sel),
+        title: "",
+      });
+      return;
+    }
+    if (id === "open-by-id") {
+      const list = activeBoardId ? taskBoards[activeBoardId] ?? [] : [];
+      const hit = matchTaskByQuery(query, list.map((x) => ({ id: x.id, prompt: x.promptSnapshot ?? "" })));
+      if (!hit) {
+        toast(t("boardCmd.taskNotFound"));
+        return;
+      }
+      setPendingOpenTaskId(hit.id);
+      return;
+    }
+    if (id === "import") {
+      goHome();
+      toast(t("boardCmd.import"));
+      return;
+    }
+    if (id === "distribute") {
+      const ctx = await ensureTeamCtx();
+      if (!ctx) {
+        toast(t("boardCmd.noTeam"));
+        return;
+      }
+      writeTeamBoardFocus({ teamId: ctx.teamId, unassigned: true });
+      goHome();
+    }
   }
 
   // The home shell (cold start, first run, sessions, profiles, work home,
@@ -4037,6 +4257,8 @@ export function App() {
                 onApproveCompletion={approveTaskCompletion}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
+                onRequestFullTaskForm={() => void openFullTaskForm({ destination: "board" })}
+                onRequestQuickTask={() => openQuickTask({ destination: "board" })}
                 selected={selected}
                 screenProjected
                 panX={world.panX}
@@ -4348,6 +4570,60 @@ export function App() {
           onClose={() => setRadialMenu(null)}
         />
       )}
+      {canvasMenu ? (
+        <BoardCanvasMenu
+          x={canvasMenu.screen.x}
+          y={canvasMenu.screen.y}
+          onClose={() => setCanvasMenu(null)}
+          onNewTaskHere={() => openQuickTask({ destination: "board" })}
+        />
+      ) : null}
+      {boardCmdOpen ? (
+        <BoardCommandPalette
+          selectionCount={selectedIds.size}
+          unassignedCount={teamCtx ? countUnassignedTeamTasks(teamCtx.tasks) : null}
+          onClose={() => setBoardCmdOpen(false)}
+          onCommand={(id, query) => void onBoardCommand(id, query)}
+        />
+      ) : null}
+      {quickTaskOpen ? (
+        <BoardQuickTask
+          boardName={boards.find((b) => b.id === activeBoardId)?.name ?? ""}
+          teamName={teamCtx?.teamName ?? null}
+          teamAvailable={teamCtx != null}
+          initial={quickTaskOpen}
+          busy={quickBusy}
+          error={quickError}
+          onClose={() => setQuickTaskOpen(null)}
+          onCreate={(state) => void submitQuickTask(state)}
+          onDetail={(state) => void openFullTaskForm(quickToFormState(state))}
+        />
+      ) : null}
+      {fullTaskSeed && activeBoardId ? (
+        <TeamTaskForm
+          teamId={teamCtx?.teamId ?? "local"}
+          teamName={teamCtx?.teamName ?? boards.find((b) => b.id === activeBoardId)?.name ?? ""}
+          boards={[{ id: activeBoardId, name: boards.find((b) => b.id === activeBoardId)?.name ?? "" }]}
+          members={teamCtx?.members ?? []}
+          tasks={teamCtx?.tasks ?? []}
+          sprints={teamCtx?.sprints ?? []}
+          seed={fullTaskSeed}
+          onClose={() => setFullTaskSeed(null)}
+          onCreateTeamTask={async (body) => {
+            const ctx = await ensureTeamCtx();
+            if (!ctx) return { ok: false, error: t("boardCmd.noTeam") };
+            const res = await window.team.createTask(ctx.teamId, body);
+            if (res.ok) setFullTaskSeed(null);
+            return res.ok ? { ok: true } : { ok: false, error: res.error };
+          }}
+          onUpdateTeamTask={async () => ({ ok: false, error: t("teamTask.error") })}
+          onCreateLocalTask={async (boardId, prompt) => {
+            const res = await window.tasks.create(boardId, prompt);
+            if (res.ok) setFullTaskSeed(null);
+            return res.ok ? { ok: true } : { ok: false, error: t("teamTask.error") };
+          }}
+        />
+      ) : null}
       {exportSelection && (
         <div
           className="export-selection-box"

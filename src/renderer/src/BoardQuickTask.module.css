@@ -1,0 +1,213 @@
+/* Screen 15 — board quick-create. Values from BoardQuickTask.dc.html. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  /* Above --layer-board (cards-layer); same band as .modal-root. */
+  z-index: var(--layer-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 90px; /* sd:allow: BoardQuickTask.dc.html dialog top offset */
+  background: rgba(0, 0, 0, 0.35); /* sd:allow: BoardQuickTask.dc.html veil */
+}
+
+.dialog {
+  /* content-box + width 400 matches BoardQuickTask.dc.html (border-box was
+     shrinking the inner row and adding ~8px of vertical wrapping slack). */
+  box-sizing: content-box;
+  width: 400px; /* sd:allow: BoardQuickTask.dc.html dialog width */
+  display: flex;
+  flex-direction: column;
+  gap: 12px; /* sd:allow: BoardQuickTask.dc.html gap */
+  padding: 16px; /* sd:allow: BoardQuickTask.dc.html padding */
+  border-radius: 14px; /* sd:allow: BoardQuickTask.dc.html radius */
+  background: var(--v2-menu);
+  border: 1px solid #3a4680; /* sd:allow: BoardQuickTask.dc.html dialog border */
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); /* sd:allow: BoardQuickTask.dc.html shadow */
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  color: var(--v2-text);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.titleInput {
+  height: var(--v2-s18);
+  box-sizing: border-box;
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r9);
+  border: var(--v2-hair) solid #5a6be0; /* sd:allow: BoardQuickTask.dc.html focus border */
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f14);
+  outline: none;
+  width: 100%;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s3);
+}
+
+.pill {
+  height: var(--v2-s13);
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r13);
+  font-family: inherit;
+  font-size: var(--v2-f11h);
+  font-weight: 400;
+  line-height: 1;
+  box-sizing: border-box;
+  cursor: pointer;
+  border: var(--v2-hair) solid var(--v2-line-input);
+  background: var(--v2-field);
+  color: var(--v2-text-3);
+}
+
+.pillOn {
+  border-color: #5a6be0; /* sd:allow: BoardQuickTask.dc.html pillOn border */
+  background: #1b2240; /* sd:allow: BoardQuickTask.dc.html pillOn bg */
+  color: var(--v2-bright);
+}
+
+.destLabel {
+  font-size: 12px; /* sd:allow: BoardQuickTask.dc.html Para label */
+  line-height: 14px; /* sd:allow: BoardQuickTask.dc.html Para line */
+  color: var(--v2-text-2);
+}
+
+.destGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--v2-s4);
+}
+
+.destBtn {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px; /* sd:allow: BoardQuickTask.dc.html dest gap */
+  height: 52px; /* sd:allow: BoardQuickTask.dc.html dest height */
+  padding: 0 10px; /* sd:allow: BoardQuickTask.dc.html dest pad-x */
+  border-radius: var(--v2-r9);
+  border: var(--v2-hair) solid var(--v2-line-input);
+  background: var(--v2-field);
+  color: var(--v2-text-3);
+  font: inherit;
+  line-height: 1.2;
+  box-sizing: border-box;
+  text-align: left;
+  cursor: pointer;
+}
+
+.destBtnOn {
+  border-color: #5a6be0; /* sd:allow: BoardQuickTask.dc.html destOn border */
+  background: #1b2240; /* sd:allow: BoardQuickTask.dc.html destOn bg */
+  color: var(--v2-accent-soft2);
+}
+
+.destTitle {
+  font-size: 12.5px; /* sd:allow: BoardQuickTask.dc.html dest title */
+  color: var(--v2-text-2b);
+}
+
+.destBtnOn .destTitle {
+  color: var(--v2-bright);
+}
+
+.destHint {
+  font-size: 11px; /* sd:allow: BoardQuickTask.dc.html dest hint */
+}
+
+.territory {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}
+
+.territoryPath {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--v2-text-2b);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s4);
+}
+
+.detailLink {
+  font-size: var(--v2-f12h);
+  flex: 1;
+  color: var(--v2-link);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.detailLink:hover {
+  color: #d3dbff; /* sd:allow: BoardQuickTask.dc.html link hover */
+}
+
+.ghost {
+  height: var(--v2-s15);
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r7);
+  border: var(--v2-hair) solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font-family: inherit;
+  font-size: var(--v2-f12);
+  font-weight: 400;
+  line-height: 1;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: #3a4258; /* sd:allow: BoardQuickTask.dc.html ghost hover */
+  color: var(--v2-bright);
+}
+
+.primary {
+  height: var(--v2-s15);
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r7);
+  border: 0;
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font-family: inherit;
+  font-size: var(--v2-f12);
+  font-weight: 600;
+  line-height: 1;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.primary:hover {
+  background: var(--v2-primary-hover);
+}
+
+.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.error {
+  font-size: var(--v2-f12);
+  color: var(--v2-danger);
+}

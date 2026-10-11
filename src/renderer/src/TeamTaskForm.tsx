@@ -63,6 +63,7 @@ export function TeamTaskForm({
   sprints,
   editing = null,
   editingContract = "",
+  seed = null,
   onClose,
   onCreateTeamTask,
   onUpdateTeamTask,
@@ -76,6 +77,8 @@ export function TeamTaskForm({
   sprints: TeamSprintInfo[];
   editing?: TeamTaskInfo | null;
   editingContract?: string;
+  /** Prefill when opening from the board quick-create dialog. */
+  seed?: Partial<TeamTaskFormState> | null;
   onClose: () => void;
   onCreateTeamTask: (body: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
   onUpdateTeamTask: (task: TeamTaskInfo, body: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
@@ -83,7 +86,9 @@ export function TeamTaskForm({
 }) {
   const boardId = boards[0]?.id ?? "";
   const [form, setForm] = useState<TeamTaskFormState>(() =>
-    editing ? { ...formFromTask(editing), contract: editingContract } : { ...emptyTaskForm(), destination: "team" },
+    editing
+      ? { ...formFromTask(editing), contract: editingContract }
+      : { ...emptyTaskForm(), destination: "team", ...(seed ?? {}) },
   );
   const [territoryDraft, setTerritoryDraft] = useState("");
   const [gateDraft, setGateDraft] = useState("");

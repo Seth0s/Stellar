@@ -32,7 +32,8 @@ export type RadialAction =
   | "browser"
   | "chat"
   | "remote-window"
-  | "task";
+  | "task"
+  | "quick-task";
 
 const ACTIONS: { action: RadialAction; icon: IconName; labelKey: MessageKey; group: "tool" | "spawn"; tool?: Tool }[] = [
   { action: "tool-pointer", icon: "pointer", labelKey: "radial.pointer", group: "tool", tool: "pointer" },
@@ -47,6 +48,7 @@ const ACTIONS: { action: RadialAction; icon: IconName; labelKey: MessageKey; gro
   { action: "chat", icon: "chat", labelKey: "radial.chat", group: "spawn" },
   { action: "remote-window", icon: "remoteWindow", labelKey: "radial.remoteWindow", group: "spawn" },
   { action: "task", icon: "task", labelKey: "radial.task", group: "spawn" },
+  { action: "quick-task", icon: "task", labelKey: "radial.quickTask", group: "spawn" },
 ];
 
 // How wide the ring's "hit band" is on either side of the ring's radius,

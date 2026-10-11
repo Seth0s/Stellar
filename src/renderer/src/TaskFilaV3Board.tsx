@@ -657,7 +657,7 @@ export function TaskFilaV3Board({
           {t("task.charts")}
         </button>
         {!viewingFrozen && (
-          <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} data-no-drag onClick={onCreateTask}>
+          <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} data-no-drag data-part="queue-new-task" onClick={onCreateTask}>
             {t("task.queue.newTask")}
           </button>
         )}

@@ -100,12 +100,15 @@ export function TeamPage({
   boards,
   initialTeamId,
   initialTaskId,
+  initialUnassigned = false,
 }: {
   boards: TeamRef[];
   /** Open this team when arriving from the inbox notification click. */
   initialTeamId?: string;
   /** Select this task after the team board loads (inbox deep-link). */
   initialTaskId?: string;
+  /** Ctrl+K Distribuir — open board filtered to unassigned. */
+  initialUnassigned?: boolean;
 }) {
   const [overview, setOverview] = useState<TeamOverviewInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -247,6 +250,12 @@ export function TeamPage({
     if (!initialTeamId) return;
     setSelected(initialTeamId);
   }, [initialTeamId]);
+
+  useEffect(() => {
+    if (!initialUnassigned) return;
+    setFilter((f) => ({ ...f, unassigned: true }));
+    setSub("board");
+  }, [initialUnassigned]);
 
   useEffect(() => {
     if (!initialTaskId || !selected || tasks.length === 0) return;
