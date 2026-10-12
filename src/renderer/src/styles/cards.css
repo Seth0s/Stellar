@@ -351,6 +351,11 @@
   align-items: center;
   gap: var(--card-status-gap);
   flex: none;
+  /* `.card-head button` pins width/height to the 28px icon-button box; the
+     chip is a pill sized by its own text, so without these it clipped the id
+     down to a few digits inside a 28px circle. */
+  width: auto;
+  height: auto;
   padding: var(--card-status-padding);
   border: 0;
   border-radius: var(--radius-pill);
@@ -374,6 +379,8 @@
    abre o primeiro vínculo que não coube no header. */
 .card-head .card-head-task-more {
   flex: none;
+  width: auto;
+  height: auto;
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
