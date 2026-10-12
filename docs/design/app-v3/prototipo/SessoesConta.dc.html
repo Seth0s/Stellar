@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Sessões na conta</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.mono{font-family:'JetBrains Mono',monospace}
+.nav{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:8px;color:#a3aabb;font-size:13.5px;box-sizing:border-box}
+.navOn{background:#182037;color:#fff}
+.navSub{margin-left:auto;font-size:11.5px;color:#8d94a6}
+.av{width:34px;height:34px;flex:none;border-radius:9px;display:grid;place-items:center;font-size:14px;font-weight:700}
+.avA{background:#2b2350;color:#d9ccff}
+.card{border-radius:12px;background:#12151d;border:1px solid #20242f;padding:14px;display:flex;flex-direction:column;gap:6px}
+.btn{height:34px;padding:0 14px;border-radius:9px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap}
+.btnG{background:#12151d;border:1px solid #2a2f3d;color:#d6dae4;font-weight:400}
+.btnS{height:28px;padding:0 10px;font-size:12.5px;border-radius:8px}
+.btnDanger{background:#12151d;border:1px solid #5a2f35;color:#ffb4b4;font-weight:400}
+.btnOff{opacity:.45;cursor:not-allowed}
+.top{height:44px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:#0e1016;border-bottom:1px solid #1a1e28;box-sizing:border-box}
+.ib{width:30px;height:30px;border-radius:8px;border:0;background:transparent;color:#a3aabb;display:grid;place-items:center;cursor:pointer}
+.ib:hover{background:#1c2130}
+.pill{font-size:11.5px;padding:3px 9px;border-radius:7px;white-space:nowrap}
+.canvas{position:relative;flex:1;min-height:0;background-color:#07080d;background-image:radial-gradient(#1c2230 1px, transparent 1px);background-size:22px 22px;overflow:hidden}
+.frame{position:absolute;box-sizing:border-box;background:#0b0d12;border:1px solid #1d2230;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;color:#e8eaf0}
+.frameHead{height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1d2230;background:#12151d;font-size:13px}
+.chip{font-size:11.5px;padding:2px 8px;border-radius:999px;background:#161a24;color:#a9b8ff;font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.statePill{font-size:11.5px;padding:2px 8px;border-radius:999px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.pop{position:absolute;z-index:5;border-radius:14px;background:#151924;border:1px solid #2a3042;box-shadow:0 18px 50px rgba(0,0,0,.55);box-sizing:border-box;padding:16px;display:flex;flex-direction:column;gap:12px}
+.scrim{position:absolute;inset:0;background:rgba(5,6,10,.62);z-index:4}
+.modal{position:absolute;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:16px;background:#161a24;border:1px solid #2a2f3d;box-shadow:0 24px 60px rgba(0,0,0,.45);box-sizing:border-box;padding:24px;display:flex;flex-direction:column;gap:16px}
+.k{font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:.08em;color:#8d94a6}
+.li{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5;color:#c9cede}
+.dot{width:6px;height:6px;border-radius:50%;margin-top:7px;flex:none}
+.inp{height:40px;border-radius:10px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:13px;padding:0 12px;display:flex;align-items:center;box-sizing:border-box;flex:1;min-width:0}
+.opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid #232838;background:#12151d;font-size:13px}
+.optOn{border-color:#4a5fe0;background:#161c33}
+.colBox{flex:1;min-width:0;border-radius:12px;border:1px solid #232838;background:#12151d;padding:16px;display:flex;flex-direction:column;gap:10px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #05060a; padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 10px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <sc-for list="{{scenes}}" as="s" hint-placeholder-count="8"><button type="button" class="{{s.cls}}" onClick="{{s.go}}">{{s.label}}</button></sc-for>
+  </div>
+  <div style="height: 16px; flex: none; font-size: 12px; color: #8d94a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis" data-part="scene-label">{{cenaLabel}}</div>
+
+  <!-- ===== Lista de sessões da conta: #abrir, #plano-necessario ===== -->
+  <sc-if value="{{showList}}" hint-placeholder-val="{{ true }}">
+  <div data-part="app" data-state="{{cena}}" style="flex: 1; min-height: 0; display: flex; border-radius: 12px; overflow: hidden; border: 1px solid #1a1e28; background: #0b0d12; position: relative">
+    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 14px; padding: 18px 14px; box-sizing: border-box; background: #0e1016; border-right: 1px solid #1a1e28">
+      <div style="display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: #141823; border: 1px solid #232838">
+        <span class="av avA">{{profInitials}}</span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 14px; font-weight: 600">{{profName}}</span>
+          <span style="font-size: 12px; color: #8d94a6">{{profSub}}</span>
+        </span>
+      </div>
+      <nav aria-label="Seções" style="display: flex; flex-direction: column; gap: 2px">
+        <div class="nav navOn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z"></path></svg><span>Sessões</span><span class="navSub">{{navCount}}</span></div>
+        <div class="nav"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2 1.3"></path></svg><span>Caixa de entrada</span></div>
+        <div class="nav"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8zM6.3 13.8V9.6h3.4v4.2"></path></svg><span>Casa de trabalho</span></div>
+        <div class="nav"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5"></path></svg><span>Estatísticas</span></div>
+      </nav>
+      <span style="flex: 1"></span>
+      <div class="nav"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6"></path></svg><span>Configurações</span></div>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; padding: 26px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+      <div style="display: flex; align-items: center; gap: 14px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <h1 style="margin: 0; font-size: 22px; font-weight: 600">Sessões</h1>
+            <span class="pill" data-part="context-pill" style="{{pillStyle}}">{{pill}}</span>
+          </div>
+          <span style="font-size: 13px; color: #8d94a6">{{subtitle}}</span>
+        </div>
+        <span style="flex: 1"></span>
+        <span style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #232838; border-radius: 9px; width: 300px; box-sizing: border-box; color: #8d94a6; font-size: 13px">Buscar sessão ou pasta<span style="flex: 1"></span><span class="mono" style="font-size: 11px; border: 1px solid #2a2f3d; border-radius: 5px; padding: 1px 6px">Ctrl K</span></span>
+        <span class="btn">+ Nova sessão</span>
+      </div>
+
+      <sc-if value="{{showSessions}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 10px" data-part="session-list">
+        <span class="k">NA CONTA</span>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px">
+          <sc-for list="{{sessions}}" as="s" hint-placeholder-count="3">
+            <div class="card" data-part="account-session" data-revision="{{s.revision}}" style="{{s.border}}">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <span style="font-size: 14.5px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.name}}</span>
+                <span class="chip">{{s.rev}}</span>
+              </div>
+              <span class="mono" style="font-size: 12px; color: #8d94a6">{{s.ref}}</span>
+              <span style="font-size: 12.5px; color: #9aa1b2; margin-top: 6px">{{s.meta}}</span>
+              <span style="font-size: 12px; color: {{s.noteColor}}; min-height: 16px">{{s.note}}</span>
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px">
+                <span class="btn btnS" data-part="open-session">Abrir</span>
+                <span class="btn btnS btnG">Arquivar</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div class="card" data-part="local-save-hint" style="flex-direction: row; align-items: center; gap: 12px; margin-top: 8px">
+          <span style="width: 32px; height: 32px; border-radius: 9px; background: #161b2e; color: #b9c4ff; display: grid; place-items: center; flex: none"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4.6 11.5a3 3 0 0 1 .3-5.9A3.8 3.8 0 0 1 12 6.4a2.6 2.6 0 0 1-.6 5.1M8 8.2v5M6.2 9.9L8 8.2l1.8 1.7"></path></svg></span>
+          <span style="font-size: 13px; color: #c9cede; line-height: 1.5">Para trazer uma sessão desta máquina, abra-a e use <strong>Salvar na conta</strong> no topo. O que vai junto: cards, conexões e tasks. A conversa dos agentes fica neste computador.</span>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{showPlan}}" hint-placeholder-val="{{ false }}">
+        <div data-part="plan-required" style="margin: 36px auto 0; width: 560px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center">
+          <span class="av" style="width: 56px; height: 56px; background: #12151d; border: 1px dashed #2a3042; color: #7c8cff"><svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M4.6 11.5a3 3 0 0 1 .3-5.9A3.8 3.8 0 0 1 12 6.4a2.6 2.6 0 0 1-.6 5.1"></path><path d="M6 11.5h4"></path></svg></span>
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600">Sessões na conta precisam do plano Pro ou de um Time</h2>
+          <span style="font-size: 13.5px; color: #9aa1b2; line-height: 1.55">Com o plano certo você salva o canvas na conta e abre em qualquer computador. Suas sessões locais continuam como estão, sem limite e sem conta.</span>
+          <div class="card" style="width: 100%; text-align: left; gap: 10px; box-sizing: border-box">
+            <span class="k">O QUE VAI PARA A CONTA</span>
+            <div class="li"><span class="dot" style="background: #5fd08a"></span>Cards, posição, conexões e tasks do board</div>
+            <div class="li"><span class="dot" style="background: #5fd08a"></span>Provider, modelo, esforço e nome de cada card</div>
+            <span class="k" style="margin-top: 4px">O QUE FICA NESTA MÁQUINA</span>
+            <div class="li"><span class="dot" style="background: #8d94a6"></span>O texto dos terminais e a conversa dos agentes</div>
+            <div class="li"><span class="dot" style="background: #8d94a6"></span>Segredos e caminhos das pastas</div>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 4px"><span class="btn" data-part="see-plans">Ver planos</span><span class="btn btnG">Continuar só nesta máquina</span></div>
+        </div>
+      </sc-if>
+    </main>
+  </div>
+  </sc-if>
+
+  <!-- ===== Board aberto: #salvar, #salvo, #conflito, #outra-maquina, #escolher-pasta, #offline ===== -->
+  <sc-if value="{{showBoard}}" hint-placeholder-val="{{ false }}">
+  <div data-part="board" data-state="{{cena}}" style="flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; border: 1px solid #1a1e28; background: #0b0d12; position: relative">
+    <header class="top" data-part="topbar">
+      <button type="button" class="ib" aria-label="Voltar às sessões"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8zM6.3 13.8V9.6h3.4v4.2"></path></svg></button>
+      <span style="font-size: 14px; font-weight: 600">plataforma-web</span>
+      <span class="pill" style="background: #1b2242; color: #b9c4ff">conta · Pro</span>
+      <sc-if value="{{foreign}}" hint-placeholder-val="{{ false }}"><span class="pill" data-part="opened-from" style="background: #161a24; color: #a3aabb">aberta da conta · salva no Notebook</span></sc-if>
+      <span style="flex: 1"></span>
+      <span class="statePill" data-part="sync-state" style="{{stateStyle}}"><span style="width: 6px; height: 6px; border-radius: 50%; background: currentColor"></span>{{stateText}}</span>
+      <button type="button" class="btn btnG btnS" data-part="save-button" aria-expanded="{{saveOpen}}" style="{{saveStyle}}"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4.6 11.5a3 3 0 0 1 .3-5.9A3.8 3.8 0 0 1 12 6.4a2.6 2.6 0 0 1-.6 5.1M8 8.2v5M6.2 9.9L8 8.2l1.8 1.7"></path></svg>{{saveLabel}}</button>
+    </header>
+
+    <div class="canvas" data-part="canvas">
+      <div class="frame" data-part="agent-card" style="left: 40px; top: 36px; width: 600px; height: 420px">
+        <div class="frameHead">
+          <span style="width: 22px; height: 22px; border-radius: 6px; background: #3a2a18; display: grid; place-items: center"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#f0a46b" stroke-width="1.6" aria-hidden="true"><path d="M3 4l3 3-3 3M7.5 10H11"></path></svg></span>
+          <span style="font-weight: 600">Claude 1°</span>
+          <span style="color: #8d94a6; font-size: 12px" class="mono">{{cwdLabel}}</span>
+          <span style="flex: 1"></span>
+          <span class="statePill" style="{{cardPillStyle}}">{{cardPill}}</span>
+        </div>
+        <sc-if value="{{foreign}}" hint-placeholder-val="{{ false }}">
+          <div role="status" data-part="no-conversation" style="margin: 14px; padding: 12px 14px; border-radius: 10px; background: #1a2036; border: 1px solid #2b3460; display: flex; gap: 12px; align-items: flex-start">
+            <span style="width: 22px; height: 22px; border-radius: 50%; background: #262d52; color: #c7d0ff; display: grid; place-items: center; flex: none; font-size: 13px; font-weight: 700">i</span>
+            <span style="display: flex; flex-direction: column; gap: 4px">
+              <span style="font-size: 13.5px; font-weight: 600">A conversa não está neste computador</span>
+              <span style="font-size: 12.5px; color: #b6bdd0; line-height: 1.5">Este card foi usado em outra máquina. O que ele conversou fica lá; aqui ele abre limpo, com o mesmo agente, modelo e pasta.</span>
+            </span>
+          </div>
+        </sc-if>
+        <div class="mono" style="flex: 1; padding: 12px 14px; font-size: 12.5px; line-height: 1.65; color: #8d94a6">{{bodyLine1}}<br>{{bodyLine2}}</div>
+      </div>
+
+      <div class="frame" style="left: 672px; top: 36px; width: 360px; height: 220px">
+        <div class="frameHead"><span style="width: 8px; height: 8px; border-radius: 50%; background: #7d8cff"></span>Fila<span style="flex: 1"></span><span class="chip">12 tasks</span></div>
+        <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+          <div style="border: 1px solid #1f2433; border-radius: 10px; background: #11141c; padding: 8px 10px">Migrar rotas para o novo roteador</div>
+          <div style="border: 1px solid #1f2433; border-radius: 10px; background: #11141c; padding: 8px 10px">Cobrir o fluxo de convite com teste</div>
+        </div>
+      </div>
+
+      <div class="frame" style="left: 672px; top: 288px; width: 240px; height: 168px; background: #2a2514; border-color: #4a4120">
+        <div style="padding: 14px; font-size: 13px; line-height: 1.5; color: #f0e3a8">Revisar o contrato da API antes de abrir a fase B.</div>
+      </div>
+
+      <svg width="1400" height="480" style="position: absolute; inset: 0; pointer-events: none" aria-hidden="true"><path d="M640 160 C 656 160 656 150 672 150" stroke="#3a4258" stroke-width="1.5" fill="none"></path></svg>
+
+      <!-- #salvar: o que vai e o que fica -->
+      <sc-if value="{{saveOpen}}" hint-placeholder-val="{{ false }}">
+        <div role="dialog" aria-label="Salvar na conta" data-part="save-popover" style="position: absolute; z-index: 5; right: 14px; top: 8px; width: 380px; border-radius: 14px; background: #151924; border: 1px solid #2a3042; box-shadow: 0 18px 50px rgba(0,0,0,.55); box-sizing: border-box; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 15px; font-weight: 600">Salvar na conta</span><span style="font-size: 12.5px; color: #9aa1b2; line-height: 1.5">{{saveSub}}</span></div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <span class="k">VAI</span>
+            <div class="li"><span class="dot" style="background: #5fd08a"></span>5 cards, 1 conexão e 12 tasks</div>
+            <div class="li"><span class="dot" style="background: #5fd08a"></span>Projeto: <span class="mono" style="font-size: 12px">github.com/exemplo/plataforma-web</span></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <span class="k">FICA NESTA MÁQUINA</span>
+            <div class="li"><span class="dot" style="background: #8d94a6"></span>O texto dos terminais e a conversa dos agentes</div>
+            <div class="li"><span class="dot" style="background: #8d94a6"></span>Segredos e o caminho da pasta</div>
+          </div>
+          <sc-if value="{{offline}}" hint-placeholder-val="{{ false }}">
+            <div role="alert" data-part="save-offline" style="padding: 10px 12px; border-radius: 10px; background: #3a2f12; color: #f2c96a; font-size: 12.5px; line-height: 1.45; display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600">Sem conexão com a conta</span><span style="color: #e8d29a">Nada foi salvo. Suas alterações seguem aqui, no canvas desta máquina.</span></div>
+          </sc-if>
+          <div style="display: flex; gap: 8px; justify-content: flex-end">
+            <span class="btn btnG">Cancelar</span>
+            <span class="btn" data-part="save-confirm">{{confirmLabel}}</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{showToast}}" hint-placeholder-val="{{ false }}">
+        <div role="status" data-part="toast" style="position: absolute; right: 24px; bottom: 24px; display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #14301f; color: #8ee6a8; font-size: 13.5px; box-shadow: 0 12px 40px rgba(0,0,0,.5)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.4 8.4l3 3 6-6.4"></path></svg>Sessão salva na conta · revisão 4</div>
+      </sc-if>
+
+      <!-- #conflito -->
+      <sc-if value="{{showConflict}}" hint-placeholder-val="{{ false }}">
+        <div class="scrim"></div>
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Esta sessão mudou em outro computador" data-part="conflict" style="width: 760px">
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <h2 style="margin: 0; font-size: 20px; font-weight: 600">Esta sessão mudou em outro computador</h2>
+            <span style="font-size: 13.5px; color: #9aa1b2; line-height: 1.5">Você e o Notebook alteraram <strong>plataforma-web</strong> depois da última vez que ela foi salva. Escolha qual versão fica. A outra não é perdida de imediato: a conta guarda as revisões anteriores por um tempo.</span>
+          </div>
+          <div style="display: flex; gap: 14px">
+            <div class="colBox" data-part="conflict-mine">
+              <span class="k">A MINHA · ESTE COMPUTADOR</span>
+              <span style="font-size: 15px; font-weight: 600">5 cards · 12 tasks</span>
+              <span style="font-size: 12.5px; color: #9aa1b2; line-height: 1.5">Partiu da revisão 3. Alterada há 4 min.</span>
+              <span class="btn" data-part="keep-mine" style="align-self: flex-start; margin-top: 6px">Manter a minha</span>
+              <span style="font-size: 12px; color: #8d94a6; line-height: 1.45">Substitui a da conta. Vira a revisão 5.</span>
+            </div>
+            <div class="colBox" data-part="conflict-theirs">
+              <span class="k">A DA CONTA · NOTEBOOK</span>
+              <span style="font-size: 15px; font-weight: 600">7 cards · 14 tasks</span>
+              <span style="font-size: 12.5px; color: #9aa1b2; line-height: 1.5">Revisão 4. Salva há 20 min.</span>
+              <span class="btn btnG" data-part="keep-account" style="align-self: flex-start; margin-top: 6px">Manter a da conta</span>
+              <span style="font-size: 12px; color: #8d94a6; line-height: 1.45">Troca o canvas daqui por ela. As alterações deste computador são descartadas.</span>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 12px; color: #8d94a6">Sem fundir card a card nesta etapa: é uma escolha ou outra.</span><span style="flex: 1"></span><span class="btn btnG">Decidir depois</span></div>
+        </div>
+      </sc-if>
+
+      <!-- #escolher-pasta -->
+      <sc-if value="{{showFolder}}" hint-placeholder-val="{{ false }}">
+        <div class="scrim"></div>
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Onde está o projeto neste computador?" data-part="pick-folder" style="width: 620px">
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <h2 style="margin: 0; font-size: 20px; font-weight: 600">Onde está o projeto neste computador?</h2>
+            <span style="font-size: 13.5px; color: #9aa1b2; line-height: 1.5">A sessão <strong>plataforma-web</strong> aponta para <span class="mono" style="font-size: 12.5px">github.com/exemplo/plataforma-web</span> e não achamos um clone dele aqui. Os terminais e arquivos abrem na pasta que você escolher.</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span class="k">ENCONTRADAS</span>
+            <div class="opt optOn" data-part="folder-suggestion"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#8f9cff" stroke-width="1.6" aria-hidden="true"><path d="M3 8.2l3.2 3.2L13 4.6"></path></svg><span class="mono" style="font-size: 12.5px">~/dev/plataforma-web</span><span style="flex: 1"></span><span style="font-size: 12px; color: #8ee6a8">mesmo remoto git</span></div>
+            <div class="opt"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#8d94a6" stroke-width="1.4" aria-hidden="true"><path d="M2 4.5a1 1 0 0 1 1-1h3l1.4 1.6H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"></path></svg><span class="mono" style="font-size: 12.5px">~/trabalho/plataforma-web-copia</span><span style="flex: 1"></span><span style="font-size: 12px; color: #8d94a6">outro remoto</span></div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center"><span class="inp mono" data-part="folder-input" style="color: #6b7284">Ou digite o caminho de uma pasta</span><span class="btn btnG">Escolher pasta…</span></div>
+          <div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 12px; color: #8d94a6; line-height: 1.45; max-width: 320px">A escolha fica só neste computador, para esta sessão. O caminho não vai para a conta.</span><span style="flex: 1"></span><span class="btn btnG" data-part="open-without-folder">Abrir sem pasta</span><span class="btn" data-part="use-folder">Usar esta pasta</span></div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // `#salvar`, `#salvo`, `#abrir`, `#conflito`, `#outra-maquina`,
+    // `#escolher-pasta`, `#plano-necessario`, `#offline`; `#cena=<name>` and
+    // `?cena=<name>` work too.
+    const raw = (location.hash || "").replace(/^#/, "");
+    const fromHash = raw.startsWith("cena=") ? raw.slice(5) : raw;
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "abrir";
+    this.state = { cena };
+  }
+
+  renderVals() {
+    const cena = this.state.cena;
+    const go = (k) => () => { this.setState({ cena: k }); try { history.replaceState(null, "", "#" + k); } catch (_) {} };
+    const scenes = [
+      ["abrir", "Abrir da conta"],
+      ["salvar", "Salvar"],
+      ["salvo", "Salvo"],
+      ["conflito", "Conflito"],
+      ["outra-maquina", "Outra máquina"],
+      ["escolher-pasta", "Escolher pasta"],
+      ["plano-necessario", "Plano necessário"],
+      ["offline", "Offline"],
+    ].map(([k, label]) => ({ label, cls: cena === k ? "scene sceneOn" : "scene", go: go(k) }));
+
+    const labels = {
+      abrir: "Sessões na conta (perfil Pro): a lista que encaixa na seção Sessões; Abrir traz o canvas para esta máquina",
+      salvar: "Dentro da sessão: Salvar na conta mostra o que vai e o que fica na máquina antes de enviar",
+      salvo: "Depois de salvar: o topo guarda o estado e a revisão; o aviso some sozinho",
+      conflito: "Duas máquinas mudaram a mesma sessão: manter a minha ou manter a da conta, sem fundir",
+      "outra-maquina": "Sessão aberta da conta em outro computador: o card de agente abre limpo, com aviso",
+      "escolher-pasta": "Sem clone do projeto neste computador: escolher a pasta local, ou abrir sem pasta",
+      "plano-necessario": "Perfil Free: sessões na conta pedem Pro ou Time; as locais seguem livres",
+      offline: "Sem conexão ao salvar: nada é enviado, nada se perde, o canvas local segue",
+    };
+
+    const boardScenes = ["salvar", "salvo", "conflito", "outra-maquina", "escolher-pasta", "offline"];
+    const showBoard = boardScenes.includes(cena);
+    const offline = cena === "offline";
+    const saveOpen = cena === "salvar" || offline;
+    const foreign = cena === "outra-maquina" || cena === "escolher-pasta";
+    const saved = cena === "salvo";
+    const conflict = cena === "conflito";
+
+    let stateText = "não salvo na conta";
+    let stateStyle = "background: #232838; color: #a3aabb";
+    if (saved) { stateText = "salvo na conta · r4"; stateStyle = "background: #14301f; color: #8ee6a8"; }
+    if (conflict) { stateText = "mudou em outro computador"; stateStyle = "background: #3a2f12; color: #f2c96a"; }
+    if (offline) { stateText = "não salvo · sem conexão"; stateStyle = "background: #3a2f12; color: #f2c96a"; }
+    if (foreign) { stateText = "r4 · aberta da conta"; stateStyle = "background: #1b2242; color: #b9c4ff"; }
+
+    const planScene = cena === "plano-necessario";
+    const sessions = [
+      { name: "plataforma-web", ref: "github.com/exemplo/plataforma-web", meta: "7 cards · 14 tasks · salva no Notebook · há 20 min", rev: "r4", revision: 4, note: "", noteColor: "#8d94a6", border: "" },
+      { name: "infra", ref: "github.com/exemplo/infra", meta: "3 cards · 5 tasks · salva no Desktop · ontem", rev: "r9", revision: 9, note: "Também aberta nesta máquina", noteColor: "#b9c4ff", border: "border-color: #3a4a8a" },
+      { name: "docs-site", ref: "pasta: docs-site", meta: "2 cards · 0 tasks · salva no Notebook · há 3 dias", rev: "r2", revision: 2, note: "Sem remoto git: a pasta é escolhida ao abrir", noteColor: "#8d94a6", border: "" },
+    ];
+
+    return {
+      cena,
+      cenaLabel: labels[cena] || "",
+      scenes,
+      showList: !showBoard,
+      showSessions: !planScene,
+      showPlan: planScene,
+      showBoard,
+      profInitials: planScene ? "FR" : "PR",
+      profName: planScene ? "Gratuito" : "Pro",
+      profSub: "ana@example.com",
+      navCount: planScene ? "—" : "3",
+      pill: planScene ? "conta · Gratuito" : "conta · Pro",
+      pillStyle: planScene ? "background: #232838; color: #a3aabb" : "background: #1b2242; color: #b9c4ff",
+      subtitle: planScene ? "Sessões na conta não estão no plano gratuito" : "3 sessões nesta conta",
+      sessions,
+      offline,
+      saveOpen,
+      foreign,
+      showToast: saved,
+      showConflict: conflict,
+      showFolder: cena === "escolher-pasta",
+      stateText,
+      stateStyle,
+      saveLabel: saved ? "Salvar de novo" : "Salvar na conta",
+      saveStyle: saveOpen ? "border-color: #4a5fe0; color: #fff" : "",
+      confirmLabel: offline ? "Tentar de novo" : "Salvar",
+      saveSub: offline
+        ? "Não deu para falar com a conta agora."
+        : "Cria a primeira cópia desta sessão na conta Pro. Outros computadores logados poderão abri-la.",
+      cwdLabel: foreign ? "pasta ainda não escolhida" : "~/projetos/plataforma-web",
+      cardPill: foreign ? "limpo · pronto" : "processo vivo",
+      cardPillStyle: foreign ? "background: #232838; color: #c9cede" : "background: #1b2242; color: #b9c4ff",
+      bodyLine1: foreign ? "$ claude --model sonnet" : "● Edit(src/routes/convites.ts) +31 −2",
+      bodyLine2: foreign ? "Nova conversa neste computador." : "  ✓ 14 passed",
+    };
+  }
+}
+</script>
+</body>
+</html>
