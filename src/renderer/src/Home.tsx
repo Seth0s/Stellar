@@ -9,6 +9,11 @@ import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { abbreviateHome, filterSessions, pickContinueBoard, recentBadgeId, sortGroupsByName } from "./home-decisions";
 import { decideStopSessionConfirm } from "../../main/session-background";
 import { t, formatRelativeTime, getLocale } from "../../shared/i18n";
+import { AccountSessionsSection } from "./AccountSessionsSection";
+import { AccountSessionSave } from "./AccountSessionSave";
+import { useSessionLinks } from "./account-session-text";
+import { decidePlanAccess, canWrite } from "./PlanAccess";
+import type { CloudPlanInfo } from "../../preload/index";
 import styles from "./Home.module.css";
 
 type ModalState = { mode: "create"; cwd?: string } | { mode: "edit"; board: Board } | null;
@@ -104,6 +109,7 @@ export function Home({
   contextPill,
   accountEmpty,
   staleNotice,
+  accountSessions,
 }: {
   boards: BoardRow[];
   boardCounts: Record<string, BoardCounts>;
@@ -129,6 +135,8 @@ export function Home({
   accountEmpty?: { onImport?: () => void };
   /** Set when the account's data on screen is stale (no connection): says since when. */
   staleNotice?: string;
+  /** Set in an account profile that can hold sessions: the account's own list, and the save of each card. */
+  accountSessions?: { profile: { id: string; name: string }; plan: CloudPlanInfo | null; onLocalOnly?: () => void };
 }) {
   const [modal, setModal] = useState<ModalState>(null);
   /** Session awaiting confirmation before it is stopped (an agent is running
@@ -138,6 +146,11 @@ export function Home({
   const [sort, setSort] = useState<SortMode>("recent");
   const [view, setView] = useState<ViewMode>("grid");
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const [saveTarget, setSaveTarget] = useState<BoardRow | null>(null);
+  /** Bumped after a save so the account list reads the account again. */
+  const [accountListTick, setAccountListTick] = useState(0);
+  const sessionLinks = useSessionLinks(accountSessions ? boards.map((b) => b.id) : []);
+  const canSaveToAccount = accountSessions ? canWrite(decidePlanAccess(accountSessions.plan, "sync")) : false;
   const homeDir = window.system.homeDir;
   const providers = useAvailableAgentProviders();
   const providerLabel = useMemo(() => new Map(providers.map((p) => [p.id, p.label])), [providers]);
@@ -227,6 +240,16 @@ export function Home({
           {t("home.newSessionPlain")}
         </button>
       </div>
+
+      {accountSessions ? (
+        <AccountSessionsSection
+          profile={accountSessions.profile}
+          plan={accountSessions.plan}
+          onOpenBoard={onOpenBoard}
+          onLocalOnly={accountSessions.onLocalOnly}
+          refreshKey={accountListTick}
+        />
+      ) : null}
 
       {boards.length === 0 ? (
         <div className={`${styles.empty} home-empty`}>
@@ -398,6 +421,11 @@ export function Home({
                         <span className={styles.cardTop}>
                           <span className={`${styles.cardName} home-session-name`}>{b.name}</span>
                           {isRecent ? <span className={`${styles.recent} home-session-recent`}>{t("home.recent")}</span> : null}
+                          {accountSessions && sessionLinks.links[b.id] ? (
+                            <span className={styles.accountRev} data-role="account-session-rev" title={t("accountSession.pill.saved", { n: sessionLinks.links[b.id]!.revision })}>
+                              {t("accountSession.revision", { n: sessionLinks.links[b.id]!.revision })}
+                            </span>
+                          ) : null}
                         </span>
                         {summary && summary.providers.length > 0 ? (
                           <span className={styles.cardDots}>
@@ -446,6 +474,24 @@ export function Home({
                         >
                           <Icon name="pen" size={13} />
                         </span>
+                        {accountSessions && canSaveToAccount ? (
+                          <span
+                            className={`${styles.cloud} home-session-cloud`}
+                            data-role="account-session-card-save"
+                            role="button"
+                            tabIndex={0}
+                            title={t("accountSession.save")}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSaveTarget(b);
+                            }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+                              <path d="M4.6 12.5a3 3 0 0 1-.4-5.97A4 4 0 0 1 12 6.6a2.95 2.95 0 0 1-.2 5.9z" />
+                              <path d="M8 6.5v4.5M6.2 8.3L8 6.5l1.8 1.8" />
+                            </svg>
+                          </span>
+                        ) : null}
                         <span
                           className={`${styles.stop} home-session-stop`}
                           data-role="stop-session"
@@ -501,6 +547,19 @@ export function Home({
           onClose={() => setModal(null)}
         />
       )}
+      {saveTarget && accountSessions ? (
+        <AccountSessionSave
+          board={{ id: saveTarget.id, name: saveTarget.name }}
+          profileId={accountSessions.profile.id}
+          profileName={accountSessions.profile.name}
+          onClose={() => setSaveTarget(null)}
+          onSaved={() => {
+            sessionLinks.reload();
+            setAccountListTick((n) => n + 1);
+          }}
+          onOpenBoard={onOpenBoard}
+        />
+      ) : null}
       {stopTarget && (
         <ConfirmModal
           title={t("home.session.stopTitle")}

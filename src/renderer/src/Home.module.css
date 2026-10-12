@@ -688,3 +688,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Sessions on the account: the save button of a card and the revision it holds. */
+.cloud:global(.home-session-cloud) {
+  position: absolute;
+  top: var(--v2-s3);
+  right: 46px;
+  display: flex;
+  padding: var(--v2-s2);
+  border-radius: var(--radius-2);
+  color: var(--v2-text-5);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.card:global(.home-session-card):hover .cloud:global(.home-session-cloud),
+.cloud:global(.home-session-cloud):focus-visible {
+  opacity: 1;
+}
+
+.cloud:global(.home-session-cloud):hover {
+  background: var(--v2-line-mid);
+  color: var(--v2-text);
+}
+
+.accountRev {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f11);
+  color: var(--v2-accent);
+}

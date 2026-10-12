@@ -212,6 +212,7 @@ import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth"
 import { registerWorkHomeIpc } from "./work-home-ipc";
 import { registerTeamIpc, type LocalTeamTaskInput } from "./team-ipc";
 import { registerCloudAccountIpc } from "./cloud-account-ipc";
+import { wireCloudSessions } from "./cloud-sessions-wire";
 import { registerInboxIpc } from "./inbox-ipc";
 import { parseDeepLink } from "./team-decision";
 import { parseIntegrationOAuthDeepLink } from "./integration-decision";
@@ -4832,6 +4833,16 @@ function createWindow() {
   registerCloudAccountIpc({
     baseUserDataDir: () => BASE_USER_DATA,
     activeProfileId: () => activeProfileId,
+    ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
+    apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
+    installId: () => readCloudIdentity()?.installId ?? "",
+  });
+
+  // ---- ACCOUNT SESSIONS (save / open a board on the account, by hand) -----
+  // Flow in `cloud-sessions.ts`; here only the wiring to this machine.
+  wireCloudSessions({
+    store,
+    userDataDir: () => app.getPath("userData"),
     ensureToken: async () => (await cloudAuth?.ensureAccessToken()) ?? null,
     apiBaseUrl: () => resolveCloudApiBaseUrl(process.env),
     installId: () => readCloudIdentity()?.installId ?? "",

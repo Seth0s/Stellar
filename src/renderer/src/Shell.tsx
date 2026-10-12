@@ -25,6 +25,7 @@ import {
 } from "./account-scope-decision";
 import type { AccountProfilesState } from "./account-scope";
 import { AccountSessionImport } from "./AccountSessionImport";
+import { profileCanHoldSessions } from "./account-session-decision";
 import styles from "./Shell.module.css";
 
 const TEAM_SUB_LABEL: Record<TeamSub, MessageKey> = {
@@ -368,6 +369,15 @@ export function Shell({
             accountEmpty={
               scope === "account"
                 ? { onImport: localBoards.length > 0 ? () => setImportOpen(true) : undefined }
+                : undefined
+            }
+            accountSessions={
+              scope === "account" && loggedIn && accountProfile && profileCanHoldSessions(accountProfile.id)
+                ? {
+                    profile: { id: accountProfile.id, name: accountProfile.name },
+                    plan: cloud?.state === "logged-in" ? cloud.plan : null,
+                    onLocalOnly: () => onScopeChange("local"),
+                  }
                 : undefined
             }
             boardCounts={boardCounts}

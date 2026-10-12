@@ -7,6 +7,17 @@ import { homedir } from "node:os";
 import type { ProvidersReloadReport } from "../main/providers-dynamic";
 import type { ProviderUsageStats } from "../main/provider-usage";
 import type { BoardPreset } from "../main/board-preset-decision";
+import type {
+  ConflictInfo as AccountSessionConflictInfo,
+  FolderChoice as AccountSessionFolderChoice,
+  ListResult as AccountSessionListResult,
+  OpenResult as AccountSessionOpenResult,
+  ResolveResult as AccountSessionResolveResult,
+  SaveResult as AccountSessionSaveResult,
+  SessionView as AccountSessionView,
+} from "../main/cloud-sessions";
+import type { SessionFailure as AccountSessionFailure, ProjectRef as AccountSessionProjectRef, SessionSummary as AccountSessionSummary } from "../main/cloud-sessions-decision";
+import type { SessionLink as AccountSessionLink } from "../main/cloud-sessions-links";
 import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
 import type { TaskPhase } from "../main/task-phase-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
@@ -2441,6 +2452,57 @@ const cloud: CloudApi = {
   },
 };
 
+// ---- SESSÕES NA CONTA: salvar / abrir um board na conta, à mão --------------
+// O token fica no main; aqui só passam ids e o resultado já decidido.
+export type {
+  AccountSessionConflictInfo,
+  AccountSessionFailure,
+  AccountSessionFolderChoice,
+  AccountSessionLink,
+  AccountSessionListResult,
+  AccountSessionOpenResult,
+  AccountSessionProjectRef,
+  AccountSessionResolveResult,
+  AccountSessionSaveResult,
+  AccountSessionSummary,
+  AccountSessionView,
+};
+export type AccountSessionPreview =
+  | {
+      ok: true;
+      summary: AccountSessionSummary;
+      connectors: number;
+      omitted: number;
+      overLimit: number;
+      projectRef: AccountSessionProjectRef | null;
+      link: AccountSessionLink | null;
+    }
+  | { ok: false };
+export type AccountSessionsApi = {
+  list: (profileId: string, opts?: { archived?: boolean }) => Promise<AccountSessionListResult>;
+  /** What a save would send, without sending. */
+  preview: (boardId: string) => Promise<AccountSessionPreview>;
+  save: (boardId: string, profileId: string) => Promise<AccountSessionSaveResult>;
+  open: (profileId: string, sessionId: string, folder?: AccountSessionFolderChoice) => Promise<AccountSessionOpenResult>;
+  resolve: (
+    boardId: string,
+    profileId: string,
+    choice: "mine" | "account",
+    folder?: AccountSessionFolderChoice,
+  ) => Promise<AccountSessionResolveResult>;
+  archive: (profileId: string, sessionId: string) => Promise<{ ok: true } | { ok: false; failure: AccountSessionFailure }>;
+  link: (boardId: string) => Promise<AccountSessionLink | null>;
+};
+const accountSessions: AccountSessionsApi = {
+  list: (profileId, opts) => ipcRenderer.invoke("account-sessions:list", profileId, opts),
+  preview: (boardId) => ipcRenderer.invoke("account-sessions:preview", boardId),
+  save: (boardId, profileId) => ipcRenderer.invoke("account-sessions:save", boardId, profileId),
+  open: (profileId, sessionId, folder) => ipcRenderer.invoke("account-sessions:open", profileId, sessionId, folder),
+  resolve: (boardId, profileId, choice, folder) => ipcRenderer.invoke("account-sessions:resolve", boardId, profileId, choice, folder),
+  archive: (profileId, sessionId) => ipcRenderer.invoke("account-sessions:archive", profileId, sessionId),
+  link: (boardId) => ipcRenderer.invoke("account-sessions:link", boardId),
+};
+
 // ---- CASA DE TRABALHO (A3b): sync da casa + copiar do sistema --------------
 export type WorkHomeTool = "claude" | "codex" | "cursor" | "gemini" | "stellar";
 export type WorkHomeStatusInfo = {
@@ -3059,6 +3121,7 @@ contextBridge.exposeInMainWorld("i18n", i18n);
 contextBridge.exposeInMainWorld("bus", bus);
 contextBridge.exposeInMainWorld("profiles", profiles);
 contextBridge.exposeInMainWorld("cloud", cloud);
+contextBridge.exposeInMainWorld("accountSessions", accountSessions);
 contextBridge.exposeInMainWorld("workhome", workhome);
 contextBridge.exposeInMainWorld("team", team);
 contextBridge.exposeInMainWorld("inbox", inbox);

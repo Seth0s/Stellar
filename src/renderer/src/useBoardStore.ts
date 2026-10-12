@@ -193,6 +193,18 @@ export function useBoardStore(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A board written by the main process (a session opened from the account)
+  // announces itself with this event; read the list again so Home shows it.
+  useEffect(() => {
+    function reload() {
+      void window.store.boards.list().then(setBoards, () => undefined);
+      refreshBoardCounts();
+    }
+    window.addEventListener("ac:boards-changed", reload);
+    return () => window.removeEventListener("ac:boards-changed", reload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function switchBoard(id: string, template: SessionTemplate = "empty", seedCwd?: string) {
     if (id === activeBoardIdRef.current) return;
     // The board we are LEAVING has its processes RETAINED: the UI will unmount

@@ -1,0 +1,571 @@
+/* Sessions on the account (SessoesConta.dc.html): list, save dialog, conflict,
+   folder choice, plan card, state pill. */
+
+/* ---- state pill ---------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  padding: var(--v2-s1) var(--v2-s4);
+  border-radius: 999px; /* sd:allow: SessoesConta.dc.html pill */
+  font-size: var(--v2-f11h);
+  white-space: nowrap;
+  background: var(--v2-line-soft);
+  color: var(--v2-text-4);
+}
+
+.pill[data-tone="ok"] {
+  background: var(--v2-ok-bg);
+  color: var(--v2-ok-fg);
+}
+
+.pill[data-tone="warn"] {
+  background: var(--v2-warn-bg);
+  color: var(--v2-warn);
+}
+
+.pill[data-tone="info"] {
+  background: var(--v2-accent-bg);
+  color: var(--v2-accent);
+}
+
+.bar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s4);
+}
+
+.saveBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  min-height: 28px; /* sd:allow: SessoesConta.dc.html button */
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r7);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text);
+  font: inherit;
+  font-size: var(--v2-f12);
+  cursor: pointer;
+}
+
+.saveBtn:hover {
+  border-color: var(--v2-line-strong);
+}
+
+.saveBtn[data-open="true"] {
+  border-color: var(--v2-primary);
+}
+
+/* ---- the account list on Home ---------------------------------------------- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s5);
+  margin-bottom: var(--v2-s9);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+}
+
+.sectionLabel {
+  font-size: var(--v2-f11);
+  letter-spacing: 0.06em;
+  color: var(--v2-text-5);
+}
+
+.sectionSpacer {
+  flex: 1;
+}
+
+.linkBtn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+  cursor: pointer;
+}
+
+.linkBtn:hover {
+  color: var(--v2-text);
+}
+
+.rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--v2-s6);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s5);
+  padding: var(--v2-s7);
+  border-radius: var(--v2-r12);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-soft);
+}
+
+.row[data-here="true"] {
+  border-color: var(--v2-primary-focus);
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+  min-width: 0;
+  flex: 1;
+}
+
+.rowName {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s4);
+  font-size: var(--v2-f13h);
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.rev {
+  margin-left: auto;
+  padding: var(--v2-s1) var(--v2-s3);
+  border-radius: var(--v2-r6);
+  background: var(--v2-line-soft);
+  font-family: var(--font-mono);
+  font-size: var(--v2-f11);
+  font-weight: 400;
+  color: var(--v2-text-4);
+}
+
+.rowRef {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f12);
+  color: var(--v2-text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.rowNote {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.rowNote[data-tone="here"] {
+  color: var(--v2-accent);
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--v2-s3);
+  flex: none;
+}
+
+.ghost {
+  min-height: 28px; /* sd:allow: SessoesConta.dc.html button */
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r7);
+  border: 1px solid var(--v2-line-input);
+  background: transparent;
+  color: var(--v2-text-3);
+  font: inherit;
+  font-size: var(--v2-f12);
+  cursor: pointer;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-text);
+}
+
+.ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.empty {
+  padding: var(--v2-s7);
+  border-radius: var(--v2-r10);
+  border: 1px dashed var(--v2-dashed);
+  color: var(--v2-text-4);
+  font-size: var(--v2-f12h);
+  line-height: 1.5;
+}
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+  padding: var(--v2-s6) var(--v2-s7);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-soft);
+  background: var(--v2-card);
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-3);
+}
+
+.notice[data-tone="warn"] {
+  border-color: var(--v2-warn-line);
+  background: var(--v2-warn-surface);
+}
+
+.notice[data-tone="ok"] {
+  border-color: var(--v2-info-line);
+  background: var(--v2-info-surface);
+}
+
+.noticeTitle {
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.noticeActions {
+  display: flex;
+  gap: var(--v2-s4);
+  margin-top: var(--v2-s2);
+}
+
+/* ---- plan card --------------------------------------------------------------- */
+
+.plan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--v2-s6);
+  max-width: 560px; /* sd:allow: SessoesConta.dc.html plan card */
+  margin: var(--v2-s9) auto;
+  text-align: center;
+}
+
+.planIcon {
+  display: grid;
+  place-items: center;
+  width: 58px; /* sd:allow: SessoesConta.dc.html icon tile */
+  height: 58px; /* sd:allow: SessoesConta.dc.html icon tile */
+  border-radius: var(--v2-r12);
+  border: 1px dashed var(--v2-dashed);
+  color: var(--v2-accent);
+}
+
+.planTitle {
+  margin: 0;
+  font-size: var(--v2-f18);
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.planText {
+  margin: 0;
+  font-size: var(--v2-f13);
+  line-height: 1.5;
+  color: var(--v2-text-4);
+}
+
+.planBox {
+  align-self: stretch;
+  text-align: left;
+  padding: var(--v2-s6) var(--v2-s7);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-soft);
+  background: var(--v2-card);
+}
+
+.planActions {
+  display: flex;
+  gap: var(--v2-s4);
+}
+
+.planLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px; /* sd:allow: SessoesConta.dc.html button */
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r7);
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font-size: var(--v2-f12h);
+  text-decoration: none;
+}
+
+/* ---- dialogs -------------------------------------------------------------------- */
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s6);
+  min-width: 0;
+}
+
+.dialogText.dialogText {
+  margin: 0;
+  font-size: var(--v2-f12h);
+  line-height: 1.5;
+  color: var(--v2-text-4);
+}
+
+.goes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--v2-s6);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+  padding: var(--v2-s6);
+  border-radius: var(--v2-r9);
+  border: 1px solid var(--v2-line-soft);
+  background: var(--v2-inset);
+  font-size: var(--v2-f12);
+  color: var(--v2-text-3);
+}
+
+.boxHead {
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.06em;
+  color: var(--v2-text-5);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  color: var(--v2-text-4);
+  overflow-wrap: anywhere;
+}
+
+.error {
+  font-size: var(--v2-f12);
+  color: var(--v2-danger-text);
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--v2-s6);
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+  padding: var(--v2-s6);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-card);
+}
+
+.choiceHead {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.08em;
+  color: var(--v2-text-5);
+  text-transform: uppercase;
+}
+
+.choiceSummary {
+  font-size: var(--v2-f14);
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.choiceMeta {
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+}
+
+.choiceHint {
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+  line-height: 1.4;
+}
+
+.candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s1);
+  text-align: left;
+  padding: var(--v2-s5) var(--v2-s6);
+  border-radius: var(--v2-r9);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-card);
+  color: var(--v2-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.candidate[aria-pressed="true"] {
+  border-color: var(--v2-primary);
+  background: var(--v2-accent-bg);
+}
+
+.candidatePath {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f12);
+  overflow-wrap: anywhere;
+}
+
+.candidateMeta {
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}
+
+.pathRow {
+  display: flex;
+  gap: var(--v2-s4);
+  margin-top: var(--v2-s3);
+}
+
+.pathInput {
+  flex: 1;
+  min-width: 0;
+  height: 30px; /* sd:allow: SessoesConta.dc.html input */
+  padding: 0 var(--v2-s5);
+  border-radius: var(--v2-r7);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font-family: var(--font-mono);
+  font-size: var(--v2-f12);
+}
+
+.fieldLabel {
+  font-size: var(--v2-f11h);
+  color: var(--v2-text-5);
+}
+
+.hint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--v2-s6);
+  padding: var(--v2-s6) var(--v2-s7);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-soft);
+  background: var(--v2-card);
+  font-size: var(--v2-f12h);
+  line-height: 1.5;
+  color: var(--v2-text-3);
+}
+
+.hintIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px; /* sd:allow: SessoesConta.dc.html icon tile */
+  height: 28px; /* sd:allow: SessoesConta.dc.html icon tile */
+  border-radius: var(--v2-r7);
+  background: var(--v2-line-soft);
+  color: var(--v2-text-4);
+}
+
+.title.title {
+  margin: 0;
+  font-size: var(--v2-f20);
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+/* `.modal p` / `.modal h3` (layout.css) are more specific than one class. */
+.lede.lede,
+.dialogText.dialogText {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.lede.lede {
+  margin: 0;
+  font-size: var(--v2-f13);
+  line-height: 1.5;
+  color: var(--v2-text-3);
+}
+
+.lede strong {
+  color: var(--v2-text);
+}
+
+.lede code {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f12);
+  color: var(--v2-text-2);
+}
+
+.bullets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s3);
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-2);
+}
+
+.bullets li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--v2-s4);
+}
+
+.bullets li::before {
+  content: "";
+  flex: none;
+  width: 6px; /* sd:allow: SessoesConta.dc.html bullet */
+  height: 6px; /* sd:allow: SessoesConta.dc.html bullet */
+  border-radius: 50%; /* sd:allow: SessoesConta.dc.html bullet */
+  background: var(--v2-text-6);
+}
+
+.bullets[data-tone="goes"] li::before {
+  background: var(--v2-good);
+}
+
+.bulletsHead {
+  margin: var(--v2-s3) 0 var(--v2-s2);
+  font-family: var(--font-mono);
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.08em;
+  color: var(--v2-text-5);
+}
+
+:global(.modal).modalNarrow {
+  width: min(440px, 92vw);
+  max-width: min(440px, 92vw);
+}
+
+:global(.modal).modalWide {
+  width: min(760px, 92vw);
+  max-width: min(760px, 92vw);
+}
+
+:global(.modal).modalMid {
+  width: min(620px, 92vw);
+  max-width: min(620px, 92vw);
+}
+
+.colHead {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f10h);
+  letter-spacing: 0.08em;
+  color: var(--v2-text-5);
+  margin-bottom: var(--v2-s3);
+}
