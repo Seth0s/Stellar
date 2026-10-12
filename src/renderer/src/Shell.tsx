@@ -12,7 +12,15 @@ import { CloudLinkPanel } from "./CloudLinkPanel";
 import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries";
 import { consumeTeamBoardFocus } from "./board-quick-task-decisions";
 import { setTeamSub, useTeamNav, type TeamSub } from "./team-nav";
-import { hasCloudAccount, shellNavSections, shouldResetShellSection } from "./account-mode-decision";
+import { hasCloudAccount } from "./account-mode-decision";
+import { isSessionOffline, statusIdentity } from "./account-display-decision";
+import {
+  scopeFooterSubKey,
+  scopeLanding,
+  scopeNavSections,
+  sectionAllowedInScope,
+  type AccountScope,
+} from "./account-scope-decision";
 import styles from "./Shell.module.css";
 
 const TEAM_SUB_LABEL: Record<TeamSub, MessageKey> = {
@@ -100,6 +108,8 @@ export function Shell({
   onOpenSettings,
   onSignIn,
   onSignOut,
+  scope,
+  onScopeChange,
   initialSection = "sessions",
 }: {
   boards: BoardRow[];
@@ -117,9 +127,14 @@ export function Shell({
   onOpenSettings: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
+  /** The scope shared by the profile selector, the footer and the content. */
+  scope: AccountScope;
+  onScopeChange: (next: AccountScope) => void;
   initialSection?: ShellSection;
 }) {
-  const [section, setSection] = useState<ShellSection>(initialSection);
+  const [section, setSection] = useState<ShellSection>(
+    sectionAllowedInScope(initialSection, scope) ? initialSection : scopeLanding(scope),
+  );
   const [hasInvite, setHasInvite] = useState(false);
   const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
   const teamNav = useTeamNav();
@@ -127,19 +142,24 @@ export function Shell({
 
   const loggedIn = hasCloudAccount(cloud);
   const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : null;
+  // One identity, read once: the selector and the footer show the very same name and e-mail/login.
+  const identity = statusIdentity(cloud)?.identity ?? "";
+  const sessionOffline = isSessionOffline(cloud);
 
   useEffect(() => {
     if (!loggedIn) return;
     const focus = consumeTeamBoardFocus();
     if (focus) {
       setTeamFocus({ teamId: focus.teamId, unassigned: focus.unassigned });
+      onScopeChange("account");
       setSection("team");
     }
-  }, [loggedIn]);
+  }, [loggedIn, onScopeChange]);
 
+  // A section that is not part of the scope in view gives way to the scope's landing.
   useEffect(() => {
-    if (shouldResetShellSection(section, loggedIn)) setSection("sessions");
-  }, [loggedIn, section]);
+    if (!sectionAllowedInScope(section, scope)) setSection(scopeLanding(scope));
+  }, [scope, section]);
 
   useEffect(() => {
     if (!loggedIn) {
@@ -161,6 +181,7 @@ export function Shell({
       .catch(() => {});
     const offSnap = window.inbox.onSnapshot(setInboxSnap);
     const offNav = window.inbox.onNavigate((item) => {
+      onScopeChange("account");
       setSection("inbox");
       if (item.source === "local" && item.boardId) onOpenBoard(item.boardId);
       else if (item.teamId && item.taskId) {
@@ -172,11 +193,14 @@ export function Shell({
       offSnap();
       offNav();
     };
-  }, [onOpenBoard, loggedIn]);
+  }, [onOpenBoard, onScopeChange, loggedIn]);
 
   const summaries = useBoardSummaries(boards);
   const background = useBoardBackgroundStatus(boards);
-  const inboxBadge = inboxSnap?.counts.all ?? boards.reduce((n, b) => n + (summaries[b.id]?.tasksAwaitingReview ?? 0), 0);
+  // The account inbox counts what comes from the account; local review rows belong to the local scope.
+  const inboxBadge = inboxSnap
+    ? inboxSnap.items.filter((item) => item.source === "team").length
+    : 0;
 
   const items = useMemo(() => {
     const byId: Record<
@@ -194,13 +218,20 @@ export function Shell({
       stats: { id: "stats", label: t("shell.stats") },
       account: { id: "account", label: t("shell.account") },
     };
-    return shellNavSections(loggedIn).map((id) => byId[id]);
-  }, [boards.length, hasInvite, inboxBadge, loggedIn]);
+    return scopeNavSections(scope).map((id) => byId[id]);
+  }, [boards.length, hasInvite, inboxBadge, scope]);
 
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
-        <ProfileSelector onOpenSettings={onOpenSettings} loggedIn={loggedIn} />
+        <ProfileSelector
+          onOpenSettings={onOpenSettings}
+          loggedIn={loggedIn}
+          accountName={accountLabel}
+          accountIdentity={identity}
+          scope={scope}
+          onScopeChange={onScopeChange}
+        />
 
         <nav className={styles.nav} aria-label={t("shell.sections")}>
           {items.map((item) => (
@@ -283,13 +314,35 @@ export function Shell({
 
         {section !== "inbox" ? (
           loggedIn ? (
-            <button type="button" className={styles.account} data-role="account" onClick={() => setSection("account")} title={t("shell.account")}>
+            <button
+              type="button"
+              className={styles.account}
+              data-role="account"
+              data-scope={scope}
+              data-account-name={accountLabel ?? ""}
+              data-account-identity={identity}
+              onClick={() => {
+                onScopeChange("account");
+                setSection("account");
+              }}
+              title={t("shell.account")}
+            >
               <span className={styles.accountAvatar}>{accountLabel ? initials(accountLabel) : "?"}</span>
               <span className={styles.accountText}>
                 <span className={styles.accountName}>{accountLabel}</span>
-                <span className={styles.accountSub}>{t("shell.accountSub")}</span>
+                {identity !== "" ? (
+                  <span className={styles.accountSub} data-role="account-identity" title={identity}>
+                    {identity}
+                  </span>
+                ) : null}
+                <span className={styles.accountSub}>{t(scopeFooterSubKey(scope))}</span>
               </span>
             </button>
+          ) : sessionOffline ? (
+            <div className={styles.signInCard} data-role="account-offline" role="status">
+              <div className={styles.signInTitle}>{t("account.offline.title")}</div>
+              <div className={styles.signInDesc}>{t("account.offline.desc")}</div>
+            </div>
           ) : (
             <div className={styles.signInCard}>
               <div className={styles.signInTitle}>{t("shell.signIn.title")}</div>
@@ -328,7 +381,6 @@ export function Shell({
             onCreateBoard={onCreateBoard}
             onUpdateBoard={onUpdateBoard}
             onDeleteBoard={onDeleteBoard}
-            onOpenInbox={loggedIn ? () => setSection("inbox") : undefined}
           />
         ) : loggedIn && section === "workhome" ? (
           <WorkHomePage />
@@ -351,6 +403,7 @@ export function Shell({
           </div>
         ) : loggedIn && section === "inbox" ? (
           <InboxPage
+            accountOnly
             boards={boards.map((b) => ({ id: b.id, name: b.name }))}
             onOpenBoard={onOpenBoard}
             onOpenTeamTask={(teamId, taskId) => {

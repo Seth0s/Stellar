@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bootIntoFreshSession, connectPage, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
+import { bootIntoFreshSession, connectPage, makeChecker, pickFreePort, startApp, stopApp, ensureAccountScope } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const OUT_DIR = join(PROJECT_ROOT, "docs/design/app-v2/comparacao");
@@ -186,6 +186,9 @@ async function shot(page, name) {
 
 async function gotoSection(page, section) {
   await page.evalJs(`document.querySelector('.topbar-home')?.click()`);
+  await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
+  // A board created through the Home leaves the profile on the local scope; these sections are the account's.
+  await ensureAccountScope(page);
   await waitFor(page, `!!document.querySelector('[data-section="${section}"]')`);
   await page.evalJs(`document.querySelector('[data-section="${section}"]').click()`);
   await delay(400);

@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { CloudStatusInfo, WorkHomeTool } from "../../preload/index";
-import { isSignupClosedError } from "./account-mode-decision";
+import { decideLoginOutcome, loginErrorForStatus, readPendingExtras } from "./login-flow-decision";
+import type { MessageKey } from "../../shared/i18n";
 import { AppLogo } from "./AppLogo";
 import styles from "./LoginScreen.module.css";
 
@@ -58,27 +59,47 @@ export function LoginScreen({
   const [expiresSec, setExpiresSec] = useState(initialExpiresSec ?? 5 * 60);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The e-mail request is on its way to the server (no step is shown for it).
+  const [sending, setSending] = useState(false);
+  // A login failed on this screen: the send button now reads "try again".
+  const [failedOnce, setFailedOnce] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // True from the moment the user starts a login until it fails, is cancelled or lands.
+  const attemptingRef = useRef(false);
+
+  function failLogin(key: MessageKey) {
+    attemptingRef.current = false;
+    setSending(false);
+    setFailedOnce(true);
+    setError(t(key));
+    setMode("choose");
+  }
 
   function applyCloud(next: CloudStatusInfo) {
     setCloud(next);
-    if (next.state === "logged-out" && isSignupClosedError(next.lastError)) {
-      setError(t("cloud.error.signupClosed"));
-      setMode("choose");
-    }
+    const key = loginErrorForStatus(next, attemptingRef.current);
+    if (key) failLogin(key);
   }
 
   useEffect(() => {
-    void window.cloud.status().then(applyCloud).catch(() => {});
+    // The first read only seeds the status: an error left from an earlier
+    // attempt is not news on a screen that was just opened.
+    void window.cloud.status().then(setCloud).catch(() => {});
     return window.cloud.onStatusChanged(applyCloud);
   }, []);
 
   const loggedIn = cloud?.state === "logged-in";
+  const pendingExtras = readPendingExtras(cloud);
   const displayName =
     fixtureDisplayName ?? (loggedIn && cloud.state === "logged-in" ? cloud.account.displayName : "");
 
   useEffect(() => {
-    if (loggedIn && (mode === 0 || mode === 1)) setMode(2);
-  }, [loggedIn, mode]);
+    if (loggedIn && (mode === 0 || mode === 1 || sending)) {
+      attemptingRef.current = false;
+      setSending(false);
+      setMode(2);
+    }
+  }, [loggedIn, mode, sending]);
 
   useEffect(() => {
     if (mode !== 1) return;
@@ -91,20 +112,49 @@ export function LoginScreen({
   async function start(p: "github" | "email") {
     setProvider(p);
     setError(null);
-    setMode(0);
-    setExpiresSec(initialExpiresSec ?? 5 * 60);
+    setCopied(false);
+    attemptingRef.current = true;
+    if (p === "email") {
+      // No browser step: the link arrives by e-mail. Stay on this screen until
+      // the server has answered, so a failure is shown where the user typed.
+      setSending(true);
+    } else {
+      setMode(0);
+      setExpiresSec(initialExpiresSec ?? 5 * 60);
+    }
     try {
-      // Prefer live status pushes over the login() return value: a fast
-      // callback can land (and emit logged-out + lastError) before this
-      // await resolves with the pending snapshot from beginLogin.
-      await window.cloud.login(p, p === "email" ? email.trim() : undefined);
-      setCloud(await window.cloud.status());
+      const returned = await window.cloud.login(p, p === "email" ? email.trim() : undefined);
+      // A fast callback can land (and push logged-in or "browser did not
+      // open") before this await resolves with the pending snapshot from
+      // beginLogin, so the live status wins over the returned one.
+      const status = await window.cloud.status().catch(() => returned);
+      setCloud(status);
+      const outcome = decideLoginOutcome(p, status);
+      if (outcome.kind === "failed") {
+        failLogin(outcome.errorKey);
+      } else if (outcome.kind === "waiting-email") {
+        setSending(false);
+        setExpiresSec(initialExpiresSec ?? 5 * 60);
+        setMode(1);
+      } else {
+        setSending(false);
+      }
     } catch {
-      setError(t("cloud.error.generic"));
+      failLogin("cloud.error.generic");
+    }
+  }
+
+  async function copyLoginUrl(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      /* clipboard unavailable: the URL stays on screen to select by hand */
     }
   }
 
   async function cancelAndClose() {
+    attemptingRef.current = false;
     try {
       await window.cloud.cancel();
     } catch {
@@ -124,6 +174,22 @@ export function LoginScreen({
       setError(t("workhome.error.generic"));
       setBusy(false);
     }
+  }
+
+  /** From the "waiting" step: GitHub goes back to the browser step; an e-mail
+   *  login has none, so it drops the pending request and returns to the form. */
+  async function backFromWaiting() {
+    if (provider === "github") {
+      setMode(0);
+      return;
+    }
+    attemptingRef.current = false;
+    try {
+      await window.cloud.cancel();
+    } catch {
+      /* nothing to cancel is fine */
+    }
+    setMode("choose");
   }
 
   function toggleTool(tool: WorkHomeTool, on: boolean) {
@@ -159,27 +225,52 @@ export function LoginScreen({
               <Spinner />
               <div>
                 <h1 className={styles.stepTitle}>{t("LoginScreen.browser.title")}</h1>
-                <p className={styles.stepText}>{t("LoginScreen.browser.text")}</p>
+                <p className={styles.stepText}>
+                  {pendingExtras.openFailed ? t("LoginScreen.browser.failed") : t("LoginScreen.browser.text")}
+                </p>
               </div>
+              {pendingExtras.loginUrl && pendingExtras.openFailed ? (
+                <div className={styles.linkBox} data-role="login-link">
+                  <p className={styles.linkUrl} data-role="login-link-url">
+                    {pendingExtras.loginUrl}
+                  </p>
+                </div>
+              ) : null}
               <div className={styles.stepActions}>
                 <button type="button" className={styles.ghostBtn} onClick={() => void start(provider)}>
                   {t("LoginScreen.browser.again")}
                 </button>
+                {pendingExtras.loginUrl ? (
+                  <button type="button" className={styles.ghostBtn} data-role="login-link-copy" onClick={() => void copyLoginUrl(pendingExtras.loginUrl!)}>
+                    {copied ? t("LoginScreen.browser.copied") : t("LoginScreen.browser.copyLink")}
+                  </button>
+                ) : null}
                 <span className={styles.grow} />
-                <button type="button" className={styles.primaryBtn} onClick={() => setMode(1)}>
-                  {t("LoginScreen.browser.opened")}
-                </button>
+                {pendingExtras.openFailed ? null : (
+                  <button type="button" className={styles.primaryBtn} onClick={() => setMode(1)}>
+                    {t("LoginScreen.browser.opened")}
+                  </button>
+                )}
               </div>
             </div>
           )}
 
           {mode === 1 && (
             <div className={styles.stepBody}>
-              <span className={`${styles.stepIcon} ${styles.stepIconGithub}`}>
-                <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 .3a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 .3z" />
-                </svg>
-              </span>
+              {provider === "github" ? (
+                <span className={`${styles.stepIcon} ${styles.stepIconGithub}`}>
+                  <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 .3a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 .3z" />
+                  </svg>
+                </span>
+              ) : (
+                <span className={`${styles.stepIcon} ${styles.stepIconMail}`} data-role="login-mail-icon">
+                  <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+                    <rect x="2" y="3.5" width="12" height="9" rx="1.6" />
+                    <path d="M2.6 4.6L8 8.6l5.4-4" />
+                  </svg>
+                </span>
+              )}
               <div>
                 <h1 className={styles.stepTitle}>
                   {provider === "github" ? t("LoginScreen.authorize.title") : t("LoginScreen.authorize.emailTitle")}
@@ -195,7 +286,7 @@ export function LoginScreen({
                   : t("LoginScreen.waitingEmail", { time: formatCountdown(expiresSec) })}
               </div>
               <div className={styles.stepActions}>
-                <button type="button" className={styles.ghostBtn} onClick={() => setMode(0)}>
+                <button type="button" className={styles.ghostBtn} onClick={() => void backFromWaiting()}>
                   {t("common.back")}
                 </button>
                 <span className={styles.grow} />
@@ -388,7 +479,7 @@ export function LoginScreen({
               <h1 className={styles.title}>{t("cloud.title")}</h1>
               <p className={styles.sub}>{t("LoginScreen.choose.sub")}</p>
             </div>
-            <button type="button" className={styles.githubBtn} onClick={() => void start("github")}>
+            <button type="button" className={styles.githubBtn} disabled={sending} onClick={() => void start("github")}>
               <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                 <path d="M8 .3a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 .3z" />
               </svg>
@@ -410,11 +501,20 @@ export function LoginScreen({
                 placeholder={t("cloud.emailPlaceholder")}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && email.trim() !== "" && !sending) void start("email");
+                }}
+                disabled={sending}
               />
             </div>
-            <button type="button" className={styles.primaryBtn} disabled={email.trim() === ""} onClick={() => void start("email")}>
-              {t("LoginScreen.sendLink")}
+            <button type="button" className={styles.primaryBtn} data-role="send-link" disabled={email.trim() === "" || sending} onClick={() => void start("email")}>
+              {sending ? t("LoginScreen.sending") : failedOnce && error ? t("LoginScreen.retry") : t("LoginScreen.sendLink")}
             </button>
+            {error ? (
+              <div className={styles.error} data-role="login-error" role="alert">
+                {error}
+              </div>
+            ) : null}
             <p className={styles.terms}>{t("LoginScreen.terms")}</p>
             <button type="button" className={styles.noAccount} disabled data-role="signup-soon" title={t("cloud.signup.soonHint")}>
               {t("cloud.signup.soon")}
@@ -426,11 +526,6 @@ export function LoginScreen({
                 <path d="M3 7h8M7.5 3.5L11 7l-3.5 3.5" />
               </svg>
             </button>
-            {error ? (
-              <div className={styles.error} data-role="login-error">
-                {error}
-              </div>
-            ) : null}
           </div>
         </div>
       </section>

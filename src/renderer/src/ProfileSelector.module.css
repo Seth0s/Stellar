@@ -182,6 +182,16 @@
   color: var(--v2-warn);
 }
 
+.retryLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--v2-accent-3);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .saving {
   padding: var(--v2-s2) var(--v2-s5);
   font-size: var(--v2-f11h);

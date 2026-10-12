@@ -81,6 +81,53 @@ export function isLoopbackRedirectUri(raw: string): boolean {
 /** Machine code for lastError when the server refuses unknown identities. */
 export const SIGNUP_CLOSED_ERROR = "signup_closed";
 
+/**
+ * Machine codes written into `CloudStatus.lastError` for a login that did not
+ * happen. The renderer maps each one to a message; anything else it sees there
+ * (a refresh failure, a raw server message) is not a login error to display.
+ */
+export const LOGIN_ERROR = {
+  signupClosed: SIGNUP_CLOSED_ERROR,
+  emailUnavailable: "email_unavailable",
+  rateLimited: "rate_limited",
+  invalidEmail: "invalid_email",
+  network: "network",
+  timeout: "timeout",
+  emailFailed: "email_failed",
+  loginTimeout: "login_timeout",
+  apiUnavailable: "api_unavailable",
+} as const;
+
+/** Codes that mean "the API could not be reached", as opposed to "it said no". */
+export function isConnectivityError(code: string | null | undefined): boolean {
+  return code === LOGIN_ERROR.network || code === LOGIN_ERROR.timeout || code === LOGIN_ERROR.apiUnavailable;
+}
+
+/**
+ * Classify a failed session call (refresh, `/me`). A connectivity failure gets
+ * a machine code so the UI can say "no connection" and the app can retry on
+ * its own; a refusal keeps the server's message.
+ */
+export function classifyAccountError(err: CloudApiError): string {
+  if (err.status === 0) return err.code === "timeout" ? LOGIN_ERROR.timeout : LOGIN_ERROR.network;
+  if (err.status >= 500) return LOGIN_ERROR.apiUnavailable;
+  return err.message;
+}
+
+/**
+ * Classify a failed `POST /v1/auth/email` into a login machine code. Only a
+ * real answer from the server is an HTTP status; `status: 0` means the request
+ * never got one (unreachable, DNS, TLS, aborted by the timeout).
+ */
+export function classifyEmailStartError(err: CloudApiError): string {
+  if (err.code === "signup_closed") return LOGIN_ERROR.signupClosed;
+  if (err.status === 0) return err.code === "timeout" ? LOGIN_ERROR.timeout : LOGIN_ERROR.network;
+  if (err.code === "email_unavailable" || err.status === 503) return LOGIN_ERROR.emailUnavailable;
+  if (err.status === 429) return LOGIN_ERROR.rateLimited;
+  if (err.status === 400 || err.status === 422) return LOGIN_ERROR.invalidEmail;
+  return LOGIN_ERROR.emailFailed;
+}
+
 export type CallbackOutcome =
   | { kind: "ok"; code: string }
   | { kind: "error"; reason: "state-mismatch" | "provider-error" | "signup-closed" | "missing-code" };

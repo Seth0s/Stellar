@@ -96,25 +96,36 @@ export type CloudDevice = {
   lastSeenAt: string | null;
 };
 
-export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch }) {
+/** How long the app waits for the server to accept the sign-in e-mail request. */
+const EMAIL_START_TIMEOUT_MS = 15_000;
+
+export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch; emailStartTimeoutMs?: number }) {
   const baseUrl = opts.baseUrl.replace(/\/+$/, "");
   const doFetch = opts.fetchImpl ?? fetch;
 
-  async function request(method: string, path: string, opts2: { body?: unknown; token?: string } = {}): Promise<
-    ApiResult<unknown>
-  > {
+  async function request(
+    method: string,
+    path: string,
+    opts2: { body?: unknown; token?: string; timeoutMs?: number } = {},
+  ): Promise<ApiResult<unknown>> {
     const headers: Record<string, string> = {};
     if (opts2.body !== undefined) headers["Content-Type"] = "application/json";
     if (opts2.token) headers["Authorization"] = `Bearer ${opts2.token}`;
 
+    // Only calls that pass `timeoutMs` are bounded: blob transfers stay open as long as they need.
+    const timeout = opts2.timeoutMs !== undefined ? AbortSignal.timeout(opts2.timeoutMs) : undefined;
     let response: Response;
     try {
       response = await doFetch(`${baseUrl}${path}`, {
         method,
         headers,
         body: opts2.body === undefined ? undefined : JSON.stringify(opts2.body),
+        signal: timeout,
       });
     } catch (err) {
+      if (timeout?.aborted) {
+        return { ok: false, error: { status: 0, code: "timeout", message: `${method} ${path} timed out` } };
+      }
       return { ok: false, error: { status: 0, code: "network", message: err instanceof Error ? err.message : String(err) } };
     }
 
@@ -190,7 +201,7 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
 
     /** POST /v1/auth/email — pede o link de uso único. */
     async startEmail(body: Record<string, string>): Promise<ApiResult<null>> {
-      const res = await request("POST", "/v1/auth/email", { body });
+      const res = await request("POST", "/v1/auth/email", { body, timeoutMs: opts.emailStartTimeoutMs ?? EMAIL_START_TIMEOUT_MS });
       return res.ok ? { ok: true, value: null } : res;
     },
 

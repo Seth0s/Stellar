@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t, getLocale } from "../../shared/i18n";
 import type {
   WorkHomeConflictChoice,
@@ -12,6 +12,7 @@ import type {
 import { canWrite, decidePlanAccess, describePlanFailure } from "./PlanAccess";
 import { PlanNotice } from "./PlanGate";
 import { useCloudPlan, usePlansUrl } from "./PlanHooks";
+import { isConnectivityFailure } from "./account-display-decision";
 import styles from "./WorkHomePage.module.css";
 
 const TOOLS: WorkHomeTool[] = ["claude", "codex", "cursor", "gemini", "stellar"];
@@ -61,6 +62,10 @@ export function WorkHomePage() {
   const [counts, setCounts] = useState<Partial<Record<WorkHomeTool, WorkHomeToolCounts>>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The status itself could not be read: shown as such (with a retry), never as "not signed in".
+  const [loadFailed, setLoadFailed] = useState(false);
+  // The last action the user ran, so "try again" repeats exactly it.
+  const lastRun = useRef<(() => Promise<unknown>) | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [plan, setPlan] = useState<WorkHomePlanInfo | null>(null);
   const [pullChoices, setPullChoices] = useState<Record<string, WorkHomeConflictChoice>>({});
@@ -83,8 +88,10 @@ export function WorkHomePage() {
   const refresh = useCallback(async () => {
     try {
       setStatus(await window.workhome.status());
+      setLoadFailed(false);
     } catch {
       setStatus(null);
+      setLoadFailed(true);
     }
   }, []);
 
@@ -113,6 +120,7 @@ export function WorkHomePage() {
   }
 
   async function run(fn: () => Promise<unknown>): Promise<void> {
+    lastRun.current = fn;
     setBusy(true);
     setError(null);
     setNote(null);
@@ -233,7 +241,14 @@ export function WorkHomePage() {
 
       {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
 
-      {!loggedIn ? (
+      {loadFailed ? (
+        <div className={styles.error} data-role="workhome-load-error" role="alert">
+          {t("workhome.error.loadFailed")}{" "}
+          <button type="button" className={styles.ghostBtn} data-role="workhome-retry" onClick={() => void refresh()}>
+            {t("account.retry")}
+          </button>
+        </div>
+      ) : !loggedIn ? (
         <div className={styles.muted}>{t("workhome.notLoggedIn")}</div>
       ) : (
         <>
@@ -392,7 +407,22 @@ export function WorkHomePage() {
           </div>
 
           {note ? <div className={styles.note}>{note}</div> : null}
-          {errorDisplay?.kind === "raw" ? <div className={styles.error}>{errorDisplay.error}</div> : null}
+          {errorDisplay?.kind === "raw" ? (
+            <div className={styles.error} data-role="workhome-error" role="alert">
+              {isConnectivityFailure(errorDisplay.error) ? t("workhome.error.offline") : errorDisplay.error}{" "}
+              {lastRun.current ? (
+                <button
+                  type="button"
+                  className={styles.ghostBtn}
+                  data-role="workhome-retry"
+                  disabled={busy}
+                  onClick={() => void run(lastRun.current!)}
+                >
+                  {t("account.retry")}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
     </div>

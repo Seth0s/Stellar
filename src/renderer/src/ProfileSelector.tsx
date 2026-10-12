@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { MessageKey } from "../../shared/i18n";
 import type { ProfileHomeStatus, ProfileKind, ProfilesState, ProviderHomeMode } from "../../preload/index";
+import type { AccountScope } from "./account-scope-decision";
 import styles from "./ProfileSelector.module.css";
 
 const REASON_KEYS: Record<string, MessageKey> = {
@@ -36,7 +37,24 @@ function userName(): string {
  * folders. Switching reopens the app on the chosen profile; the registry and
  * `profiles/` live at the userData root, in the main process.
  */
-export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSettings?: () => void; loggedIn?: boolean }) {
+export function ProfileSelector({
+  onOpenSettings,
+  loggedIn = false,
+  accountName = null,
+  accountIdentity = "",
+  scope = "local",
+  onScopeChange,
+}: {
+  onOpenSettings?: () => void;
+  loggedIn?: boolean;
+  /** Display name of the signed-in account (`null` without one). */
+  accountName?: string | null;
+  /** E-mail or GitHub login the account signed in with — the same line the sidebar footer shows. */
+  accountIdentity?: string;
+  /** The scope the app is in; the same value the sidebar footer and the Home read. */
+  scope?: AccountScope;
+  onScopeChange?: (next: AccountScope) => void;
+}) {
   const [state, setState] = useState<ProfilesState | null>(null);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -46,6 +64,11 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
   const [home, setHome] = useState<ProfileHomeStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [switching, setSwitching] = useState(false);
+  // Name of the account profile linked to the active local profile.
+  const [accountProfileName, setAccountProfileName] = useState<string | null>(null);
+  // Loading that profile failed (no connection, API down): shown with a retry.
+  const [accountLinkFailed, setAccountLinkFailed] = useState(false);
+  const [accountLinkTry, setAccountLinkTry] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -69,6 +92,33 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
     void refresh();
     void refreshHome();
   }, [refresh, refreshHome]);
+
+  // The account's own profile: the one linked to the active local profile.
+  useEffect(() => {
+    if (!loggedIn) {
+      setAccountProfileName(null);
+      setAccountLinkFailed(false);
+      return;
+    }
+    let alive = true;
+    setAccountLinkFailed(false);
+    void window.profiles
+      .cloudLink()
+      .then((res) => {
+        if (!alive) return;
+        const linked = res.ok ? res.view.available.find((p) => p.id === res.view.cloudProfileId) : undefined;
+        setAccountProfileName(linked?.name ?? null);
+        setAccountLinkFailed(!res.ok);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setAccountProfileName(null);
+        setAccountLinkFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [loggedIn, accountLinkTry]);
 
   useEffect(() => {
     if (!open) return;
@@ -94,6 +144,12 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
 
   const profiles = state?.profiles ?? [];
   const active = profiles.find((p) => p.isActive) ?? profiles.find((p) => p.isDefault) ?? null;
+  const inAccount = loggedIn && scope === "account";
+  // Same name and identity line as the sidebar footer; the linked account profile, when known, follows it.
+  const accountRowName = accountName ?? "";
+  const accountRowSub = [accountIdentity, accountProfileName].filter((part) => part && part !== "").join(" · ");
+  // What the trigger shows: the account profile in account scope, else the active local one.
+  const shownName = inAccount ? accountRowName : (active?.name ?? t("profiles.unavailable"));
 
   async function handleSwitch(id: string) {
     setBusy(true);
@@ -146,12 +202,18 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
         onClick={() => setOpen((v) => !v)}
         title={t("profiles.switchHint")}
       >
-        <span className={`${styles.avatar} ${active?.kind === "team" ? styles.avatarTeam : styles.avatarPersonal}`}>
-          {active ? initials(active.name) : "?"}
+        <span className={`${styles.avatar} ${!inAccount && active?.kind === "team" ? styles.avatarTeam : styles.avatarPersonal}`}>
+          {inAccount ? initials(accountRowName) : active ? initials(active.name) : "?"}
         </span>
         <span className={styles.text}>
-          <span className={styles.name}>{active ? active.name : t("profiles.unavailable")}</span>
-          <span className={styles.sub}>{`${userName()} · ${loggedIn ? t("profiles.sub.synced") : t("profiles.sub.local")}`}</span>
+          <span className={styles.name} data-role="profile-name">
+            {shownName}
+          </span>
+          <span className={styles.sub} data-role="profile-sub" data-scope={inAccount ? "account" : "local"}>
+            {inAccount
+              ? [accountIdentity, t("profiles.sub.synced")].filter((part) => part !== "").join(" · ")
+              : `${userName()} · ${t("profiles.sub.local")}`}
+          </span>
         </span>
         <span className={styles.chevron} aria-hidden="true">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -171,10 +233,20 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
                 key={p.id}
                 type="button"
                 role="menuitemradio"
-                aria-checked={p.isActive}
+                aria-checked={p.isActive && !inAccount}
                 className={styles.row}
-                disabled={busy || switching || p.isActive || !p.openable}
-                onClick={() => void handleSwitch(p.id)}
+                data-role="profile-row"
+                data-profile-id={p.id}
+                // The open profile can be re-selected only to leave the account scope.
+                disabled={busy || switching || (p.isActive && !inAccount) || !p.openable}
+                onClick={() => {
+                  if (p.isActive) {
+                    onScopeChange?.("local");
+                    setOpen(false);
+                  } else {
+                    void handleSwitch(p.id);
+                  }
+                }}
               >
                 <span className={`${styles.rowAvatar} ${p.kind === "team" ? styles.avatarTeam : styles.avatarPersonal}`}>
                   {initials(p.name)}
@@ -187,7 +259,7 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
                     {!p.openable ? ` · ${t("profiles.missingDirectory")}` : ""}
                   </span>
                 </span>
-                {p.isActive ? (
+                {p.isActive && !inAccount ? (
                   <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="var(--v2-accent-3)" strokeWidth="1.7" aria-hidden="true">
                     <path d="M3 7.2l2.6 2.6L11 4.4" />
                   </svg>
@@ -195,6 +267,45 @@ export function ProfileSelector({ onOpenSettings, loggedIn = false }: { onOpenSe
               </button>
             ))
           )}
+
+          {loggedIn ? (
+            <>
+              <div className={styles.menuHead}>{t("profiles.menuHead.account", { name: accountName ?? "" })}</div>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={inAccount}
+                className={styles.row}
+                data-role="profile-row-account"
+                data-account-name={accountRowName}
+                data-account-identity={accountIdentity}
+                disabled={busy || switching || inAccount}
+                onClick={() => {
+                  onScopeChange?.("account");
+                  setOpen(false);
+                }}
+              >
+                <span className={`${styles.rowAvatar} ${styles.avatarPersonal}`}>{initials(accountRowName)}</span>
+                <span className={styles.rowText}>
+                  <span className={styles.rowName}>{accountRowName}</span>
+                  <span className={styles.rowSub}>{accountRowSub !== "" ? accountRowSub : t("profiles.account.rowSub")}</span>
+                </span>
+                {inAccount ? (
+                  <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="var(--v2-accent-3)" strokeWidth="1.7" aria-hidden="true">
+                    <path d="M3 7.2l2.6 2.6L11 4.4" />
+                  </svg>
+                ) : null}
+              </button>
+              {accountLinkFailed ? (
+                <div className={styles.error} data-role="account-link-error" role="alert">
+                  {t("profiles.account.loadFailed")}{" "}
+                  <button type="button" className={styles.retryLink} data-role="account-link-retry" onClick={() => setAccountLinkTry((n) => n + 1)}>
+                    {t("account.retry")}
+                  </button>
+                </div>
+              ) : null}
+            </>
+          ) : null}
 
           <div className={styles.sep} />
           <button

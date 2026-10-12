@@ -563,14 +563,18 @@ function readCloudIdentity(): { userId: string; installId: string } | null {
 /** Abre a URL do login no navegador do sistema. `STELLARCLOUD_AUTH_BROWSER=log`
  *  NÃO abre nada: escreve a URL no stderr para o smoke/agente fazer o papel do
  *  navegador (seam de teste, como os providers falsos). */
-function openCloudUrl(url: string): void {
+function openCloudUrl(url: string): Promise<void> | void {
   if (process.env.STELLARCLOUD_AUTH_BROWSER === "log") {
     process.stderr.write(`[cloud-auth] STELLARCLOUD_AUTH_URL=${url}\n`);
     return;
   }
-  void shell.openExternal(url).catch((err) => {
+  // The promise is returned so cloud-auth can tell the UI the browser did not
+  // open; the handler here keeps callers that ignore it from an unhandled rejection.
+  const opened = shell.openExternal(url);
+  opened.catch((err) => {
     console.error("[cloud-auth] não deu para abrir o navegador:", err);
   });
+  return opened;
 }
 
 /** Estado da conta para o IPC; `logged-out` quando o serviço ainda não subiu. */

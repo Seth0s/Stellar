@@ -469,7 +469,7 @@ async function withApp({ seed, S, args = [], body }) {
 async function dismissFirstRun(page) {
   if (await exists(page, '[data-role="firstrun-local"]')) {
     await click(page, '[data-role="firstrun-local"]');
-    await waitFor(page, `!!${q('[data-section="sessions"]')}`);
+    await waitFor(page, `!!${q('[data-role="profile-trigger"]')}`);
   }
 }
 
@@ -482,7 +482,7 @@ async function waitLoggedIn(page) {
 }
 
 async function openTeam(page) {
-  await waitFor(page, `!!(${q('[data-section="sessions"]')} || ${q('[data-role="firstrun-local"]')})`);
+  await waitFor(page, `!!(${q('[data-role="profile-trigger"]')} || ${q('[data-role="firstrun-local"]')})`);
   await dismissFirstRun(page);
   await waitLoggedIn(page);
   await waitFor(page, `!!${q('[data-section="team"]')}`);
@@ -490,7 +490,8 @@ async function openTeam(page) {
 }
 
 async function reopenTeam(page) {
-  await click(page, '[data-section="sessions"]');
+  // Leave the Team screen through another account-scope section.
+  await click(page, '[data-section="workhome"]');
   await delay(250);
   await click(page, '[data-section="team"]');
 }
@@ -719,7 +720,7 @@ try {
     seed: (dir) => seedCloud(dir, ACCOUNTS.owner.refresh),
     S,
     body: async (page) => {
-      await waitFor(page, `!!(${q('[data-section="sessions"]')} || ${q('[data-role="firstrun-local"]')})`);
+      await waitFor(page, `!!(${q('[data-role="profile-trigger"]')} || ${q('[data-role="firstrun-local"]')})`);
       const appUrl = await page.evalJs(`location.href`);
 
       // -- prototype readings first (same page, navigated away and back) --

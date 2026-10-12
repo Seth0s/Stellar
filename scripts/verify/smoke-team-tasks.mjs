@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bootIntoFreshSession, connectPage, makeChecker, pickFreePort, spawnCard, startApp, stopApp } from "./cdp-client.mjs";
+import { bootIntoFreshSession, connectPage, ensureAccountScope, ensureLocalScope, makeChecker, pickFreePort, spawnCard, startApp, stopApp } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROTO_DIR = join(PROJECT_ROOT, "docs/design/app-v2/prototipo");
@@ -574,6 +574,8 @@ try {
   const boardId = memberBoards.find((b) => b.name === "Time tasks")?.id ?? memberBoards[0]?.id;
   check("membro tem um board local para a Fila", typeof boardId === "string" && boardId.length > 0, true);
   await memberPage.evalJs(`document.querySelector('.topbar-home')?.click()`);
+  await waitFor(memberPage, `!!document.querySelector('[data-role="profile-trigger"]')`);
+  await ensureAccountScope(memberPage);
   await waitFor(memberPage, `!!document.querySelector('[data-section="team"]')`);
 
   await memberPage.evalJs(`document.querySelector('[data-section="team"]').click()`);
@@ -603,6 +605,7 @@ try {
   check("o app reporta o estado ao servidor", synced.ok && backend.reports().some((r) => r.state === "aguardando_revisao" && r.report_delivered === true), true);
 
   // Tela 13 — the Fila card's "Do time" section on the canvas board.
+  await ensureLocalScope(memberPage);
   await memberPage.evalJs(`document.querySelector('[data-section="sessions"]')?.click()`);
   await waitFor(memberPage, `!!document.querySelector('.home-session-card') || !!document.querySelector('.home .primary')`);
   await memberPage.evalJs(`

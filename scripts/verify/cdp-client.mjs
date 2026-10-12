@@ -574,8 +574,41 @@ export const SEL = {
   boardTitle: ".topbar-title",
 };
 
+/**
+ * A signed-in profile opens on the ACCOUNT scope, whose sidebar has no local
+ * sessions. A user reaches them by picking the local profile in the profile
+ * menu; this does the same. No-op without an account or when already local.
+ */
+export async function ensureLocalScope(page) {
+  const inAccountScope = await page.evalJs(
+    `document.querySelector('[data-role="profile-sub"]')?.getAttribute('data-scope') === 'account'`,
+  );
+  if (!inAccountScope) return;
+  await page.evalJs(`document.querySelector('[data-role="profile-trigger"]')?.click()`);
+  await delay(250);
+  await page.evalJs(`document.querySelector('[data-role="profile-row"]')?.click()`);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (await page.evalJs(`!!document.querySelector('.home')`)) return;
+    await delay(100);
+  }
+}
+
+/** The reverse of `ensureLocalScope`: pick the account row in the profile menu. */
+export async function ensureAccountScope(page) {
+  const inLocalScope = await page.evalJs(
+    `document.querySelector('[data-role="profile-sub"]')?.getAttribute('data-scope') === 'local' && !!document.querySelector('[data-role="account"]')`,
+  );
+  if (!inLocalScope) return;
+  await page.evalJs(`document.querySelector('[data-role="profile-trigger"]')?.click()`);
+  await delay(250);
+  await page.evalJs(`document.querySelector('[data-role="profile-row-account"]')?.click()`);
+  await delay(300);
+}
+
 export async function bootIntoFreshSession(page, name = "Sessão de Teste", { spawnTerminal = true } = {}) {
   await delay(300);
+  await ensureLocalScope(page);
   const isHome = await page.evalJs(`!!document.querySelector('.home')`);
   if (!isHome) {
     // Already inside an active session/board

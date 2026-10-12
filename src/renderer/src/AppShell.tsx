@@ -7,6 +7,7 @@ import { FirstRun } from "./FirstRun";
 import { LoginScreen } from "./LoginScreen";
 import { InviteDialog, type InvitePreview } from "./InviteDialog";
 import { Shell } from "./Shell";
+import { useAccountScope } from "./account-scope";
 import { shouldShowFirstRun } from "./home-decisions";
 import { writeTeamBoardFocus } from "./board-quick-task-decisions";
 import { maskIdentity, requestTeamSub } from "./team-admin-decisions";
@@ -105,6 +106,7 @@ export function AppShell({
   }, [fixture]);
 
   const profileId = profiles?.activeProfileId ?? null;
+  const { scope, setScope } = useAccountScope(cloud, profileId);
   const profileName = profiles?.profiles.find((p) => p.isActive)?.name ?? null;
   const sessionCount =
     typeof fixture?.boot?.sessionCount === "number" ? fixture.boot.sessionCount : boards.length;
@@ -231,6 +233,8 @@ export function AppShell({
         onOpenSettings={onOpenSettings}
         onSignIn={() => setPhase("login")}
         onSignOut={() => void signOut()}
+        scope={scope}
+        onScopeChange={setScope}
       />
       {inviteToken ? (
         <InviteDialog

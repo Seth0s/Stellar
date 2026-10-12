@@ -23,7 +23,11 @@ import {
   buildStartUrl,
   buildTokenExchangeBody,
   decideCallback,
+  classifyAccountError,
+  classifyEmailStartError,
   decideTokenRenewal,
+  isConnectivityError,
+  LOGIN_ERROR,
   loopbackRedirectForPort,
   pkceChallengeS256,
   SIGNUP_CLOSED_ERROR,
@@ -36,8 +40,22 @@ import type { CloudPlan } from "./plan-decision";
 export type CloudProvider = "github" | "email";
 
 export type CloudStatus =
-  | { state: "logged-out"; apiBaseUrl: string; lastError: string | null }
-  | { state: "pending"; apiBaseUrl: string; provider: CloudProvider }
+  | {
+      state: "logged-out";
+      apiBaseUrl: string;
+      lastError: string | null;
+      /** A saved session exists but the API cannot be reached: the app is retrying on its own. */
+      sessionOffline?: boolean;
+    }
+  | {
+      state: "pending";
+      apiBaseUrl: string;
+      provider: CloudProvider;
+      /** GitHub only: the URL the browser must open, so the UI can offer it to copy. */
+      loginUrl?: string;
+      /** The OS refused to open `loginUrl` (no browser handler); nothing is waiting on a tab. */
+      openFailed?: boolean;
+    }
   | { state: "logged-in"; apiBaseUrl: string; account: CloudAccount; plan: CloudPlan | null; expiresAtMs: number };
 
 export type CloudAuthConfig = {
@@ -46,17 +64,23 @@ export type CloudAuthConfig = {
   dataDir: string;
   /** user_id/install_id locais (A1). `null` se ainda não houver identidade. */
   identity: () => { userId: string; installId: string } | null;
-  /** Abre a URL do navegador (produção: `shell.openExternal`). */
-  openUrl: (url: string) => void;
+  /** Abre a URL do navegador (produção: `shell.openExternal`). A rejeição (ou
+   *  exceção) marca o login como "não abriu": a UI mostra a URL para copiar. */
+  openUrl: (url: string) => void | Promise<unknown>;
   deviceLabel: string;
   now?: () => number;
   loginTimeoutMs?: number;
   /** Intervalo de renovação proativa em ms; 0 desliga (testes). */
   autoRenewMs?: number;
+  /** How long to wait before retrying a restore that failed for lack of connection; 0 turns it off. */
+  restoreRetryMs?: number;
   fetchImpl?: typeof fetch;
+  /** Bound on the sign-in e-mail request; tests shrink it. */
+  emailStartTimeoutMs?: number;
 };
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+const RESTORE_RETRY_MS = 15_000;
 
 const CALLBACK_OK_HTML =
   "<!doctype html><meta charset=utf-8><title>Stellar</title><body style='font:16px system-ui;padding:2rem'>" +
@@ -71,7 +95,11 @@ function randomOpaque(): string {
 
 export function createCloudAuth(cfg: CloudAuthConfig) {
   const now = cfg.now ?? Date.now;
-  const api: CloudApi = createCloudApi({ baseUrl: cfg.apiBaseUrl, fetchImpl: cfg.fetchImpl });
+  const api: CloudApi = createCloudApi({
+    baseUrl: cfg.apiBaseUrl,
+    fetchImpl: cfg.fetchImpl,
+    emailStartTimeoutMs: cfg.emailStartTimeoutMs,
+  });
   const tokens = createCloudTokenStore(cfg.dataDir);
 
   let access: { token: string; obtainedAtMs: number; expiresInSec: number } | null = null;
@@ -86,8 +114,13 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     verifier: string;
     redirectUri: string;
     timer: NodeJS.Timeout;
+    loginUrl?: string;
+    openFailed?: boolean;
   };
   let pending: Pending | null = null;
+  // Bumped by every beginLogin/cancel: an e-mail request still in flight when
+  // the user cancels or starts over must not resurrect a stale pending login.
+  let attempt = 0;
 
   const listeners = new Set<(status: CloudStatus) => void>();
 
@@ -102,8 +135,17 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
         expiresAtMs: access.obtainedAtMs + access.expiresInSec * 1000,
       };
     }
-    if (pending) return { state: "pending", apiBaseUrl: api.baseUrl, provider: pending.provider };
-    return { state: "logged-out", apiBaseUrl: api.baseUrl, lastError };
+    if (pending) {
+      return {
+        state: "pending",
+        apiBaseUrl: api.baseUrl,
+        provider: pending.provider,
+        ...(pending.loginUrl ? { loginUrl: pending.loginUrl } : {}),
+        ...(pending.openFailed ? { openFailed: true } : {}),
+      };
+    }
+    const sessionOffline = isConnectivityError(lastError) && tokens.getRefreshToken() !== null;
+    return { state: "logged-out", apiBaseUrl: api.baseUrl, lastError, ...(sessionOffline ? { sessionOffline: true } : {}) };
   }
 
   function emit(): void {
@@ -141,20 +183,35 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     if (!token) {
       clearSession();
       emit();
+      scheduleRestoreRetry();
       return;
     }
     const res = await api.meWithPlan(token);
     if (!res.ok) {
       // Access acabou de ser obtido; falha aqui é rede/contrato, não credencial.
-      lastError = res.error.message;
+      lastError = classifyAccountError(res.error);
       clearSession();
       emit();
+      scheduleRestoreRetry();
       return;
     }
     account = res.value.account;
     plan = res.value.plan;
     lastError = null;
     emit();
+  }
+
+  let restoreTimer: NodeJS.Timeout | null = null;
+  /** A saved session that could not be restored for lack of connection is
+   *  retried on its own, so a flaky start does not leave the user signed out. */
+  function scheduleRestoreRetry(): void {
+    if (restoreTimer || cfg.restoreRetryMs === 0) return;
+    if (!isConnectivityError(lastError) || !tokens.getRefreshToken()) return;
+    restoreTimer = setTimeout(() => {
+      restoreTimer = null;
+      if (!pending) void restore();
+    }, cfg.restoreRetryMs ?? RESTORE_RETRY_MS);
+    if (typeof restoreTimer.unref === "function") restoreTimer.unref();
   }
 
   /** Garante um access válido, renovando ANTES de expirar. `null` = precisa
@@ -176,7 +233,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
         tokens.clear();
         clearSession();
       }
-      lastError = res.error.message;
+      lastError = classifyAccountError(res.error);
       return null;
     }
     applyPair(res.value);
@@ -256,21 +313,28 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   async function beginLogin(provider: CloudProvider, email?: string): Promise<CloudStatus> {
     stopPending();
     lastError = null;
+    const mine = ++attempt;
     const { server, port } = await startListener();
+    if (mine !== attempt) {
+      server.close();
+      return currentStatus();
+    }
     const redirectUri = loopbackRedirectForPort(port);
     const state = randomOpaque();
     const verifier = randomOpaque();
     const codeChallenge = pkceChallengeS256(verifier);
-    const timer = setTimeout(() => {
-      if (pending?.server === server) {
-        stopPending();
-        lastError = "tempo esgotado esperando o login no navegador";
-        emit();
-      }
-    }, cfg.loginTimeoutMs ?? LOGIN_TIMEOUT_MS);
-    if (typeof timer.unref === "function") timer.unref();
-    pending = { server, provider, state, verifier, redirectUri, timer };
-    emit();
+
+    function arm(): Pending {
+      const timer = setTimeout(() => {
+        if (pending?.server === server) {
+          stopPending();
+          lastError = LOGIN_ERROR.loginTimeout;
+          emit();
+        }
+      }, cfg.loginTimeoutMs ?? LOGIN_TIMEOUT_MS);
+      if (typeof timer.unref === "function") timer.unref();
+      return { server, provider, state, verifier, redirectUri, timer };
+    }
 
     const ident = cfg.identity();
     // §3/item 3: o `user_id` vai no PRIMEIRO login (anexar a conta). Depois
@@ -280,19 +344,47 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
 
     if (provider === "github") {
       const startUrl = buildStartUrl({ apiBaseUrl: api.baseUrl, provider: "github", redirectUri, state, codeChallenge, userId });
-      cfg.openUrl(startUrl);
+      const armed = arm();
+      armed.loginUrl = startUrl;
+      pending = armed;
+      emit();
+      // The open is not awaited (the tab may take a while), but a refusal from
+      // the OS must reach the UI instead of leaving it waiting on a tab that
+      // never opened.
+      void (async () => cfg.openUrl(startUrl))().catch(() => {
+        if (pending !== armed) return;
+        armed.openFailed = true;
+        emit();
+      });
       return currentStatus();
     }
 
+    // E-mail: nothing is "pending" until the server ACCEPTED the request —
+    // announcing it earlier made a network failure look like a sent link.
     const res = await api.startEmail(
       buildEmailStartBody({ provider: "email", redirectUri, state, codeChallenge, email: email ?? "", userId }),
     );
+    if (mine !== attempt) {
+      // Cancelled or superseded while the request was in flight.
+      try {
+        server.close();
+      } catch {
+        /* já fechado */
+      }
+      return currentStatus();
+    }
     if (!res.ok) {
-      stopPending();
-      lastError = res.error.message;
+      try {
+        server.close();
+      } catch {
+        /* já fechado */
+      }
+      lastError = classifyEmailStartError(res.error);
       emit();
       return currentStatus();
     }
+    pending = arm();
+    emit();
     return currentStatus();
   }
 
@@ -330,6 +422,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     getStatus: currentStatus,
     beginLogin,
     cancel(): CloudStatus {
+      attempt++;
       stopPending();
       emit();
       return currentStatus();
@@ -343,6 +436,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     },
     dispose(): void {
       stopPending();
+      if (restoreTimer) clearTimeout(restoreTimer);
       if (renewTimer) clearInterval(renewTimer);
       listeners.clear();
     },

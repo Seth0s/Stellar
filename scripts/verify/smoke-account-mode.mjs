@@ -173,7 +173,7 @@ async function dismissFirstRunIfNeeded(page) {
   const local = await page.evalJs(`!!document.querySelector('[data-role="firstrun-local"]')`);
   if (local) {
     await page.evalJs(`document.querySelector('[data-role="firstrun-local"]').click()`);
-    await waitFor(page, `!!document.querySelector('[data-section="sessions"]')`);
+    await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
   }
 }
 
@@ -331,7 +331,7 @@ try {
     body: async (page) => {
       await waitFor(page, `!!(document.querySelector('[data-section="sessions"]') || document.querySelector('[data-role="firstrun-local"]'))`);
       await dismissFirstRunIfNeeded(page);
-      await waitFor(page, `!!document.querySelector('[data-section="sessions"]')`);
+      await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
 
       const nav = await cloudNavState(page);
       check("local: no inbox nav", nav.inbox, false);
@@ -366,7 +366,7 @@ try {
 
       // Go home for shell screenshot already taken
       await page.evalJs(`document.querySelector('.topbar-home')?.click()`);
-      await waitFor(page, `!!document.querySelector('[data-section="sessions"]')`);
+      await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
     },
   });
 
@@ -387,7 +387,7 @@ try {
         await page.evalJs(`(async () => (await window.cloud.status()).state)()`),
         "logged-in",
       );
-      await waitFor(page, `!!document.querySelector('[data-section="sessions"]')`);
+      await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
 
       const nav = await cloudNavState(page);
       check("logged-in: inbox nav visible", nav.inbox, true);
@@ -402,7 +402,7 @@ try {
       }
 
       await page.evalJs(`document.querySelector('.topbar-home')?.click()`);
-      await waitFor(page, `!!document.querySelector('[data-section="sessions"]')`);
+      await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
 
       // Logout → cloud nav disappears without restart
       await page.evalJs(`(async () => { await window.cloud.logout(); return true; })()`);

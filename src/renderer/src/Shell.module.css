@@ -274,6 +274,9 @@
 .accountSub {
   font-size: var(--v2-f11h);
   color: var(--v2-text-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settingsItem {

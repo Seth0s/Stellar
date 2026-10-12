@@ -73,7 +73,10 @@ export function InboxPage({
   boards,
   onOpenBoard,
   onOpenTeamTask,
+  accountOnly = false,
 }: {
+  /** Show only what comes from the account; local review rows stay out. */
+  accountOnly?: boolean;
   boards: { id: string; name: string }[];
   onOpenBoard: (boardId: string) => void;
   onOpenTeamTask?: (teamId: string, taskId: string) => void;
@@ -93,10 +96,11 @@ export function InboxPage({
     return window.inbox.onSnapshot(setSnapshot);
   }, [reload]);
 
-  const visible = useMemo(() => {
-    const items = snapshot?.items ?? [];
-    return items.filter((item) => kindMatchesTab(item.kind, tab));
-  }, [snapshot, tab]);
+  const scoped = useMemo(
+    () => (snapshot?.items ?? []).filter((item) => !accountOnly || item.source === "team"),
+    [snapshot, accountOnly],
+  );
+  const visible = useMemo(() => scoped.filter((item) => kindMatchesTab(item.kind, tab)), [scoped, tab]);
 
   async function runAction(item: InboxItemInfo, action: InboxActionId) {
     setBusyId(item.id);
@@ -157,7 +161,9 @@ export function InboxPage({
             onClick={() => setTab(id)}
           >
             {tabLabel(id)}
-            <span className={styles.cnt}>{snapshot?.counts[id] ?? 0}</span>
+            <span className={styles.cnt}>
+              {accountOnly ? scoped.filter((item) => kindMatchesTab(item.kind, id)).length : (snapshot?.counts[id] ?? 0)}
+            </span>
           </button>
         ))}
       </div>
