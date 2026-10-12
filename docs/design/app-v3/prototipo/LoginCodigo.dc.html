@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login por e-mail · Estado aditivo com código de confirmação</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+:root {
+  --v2-bg: #0b0d12;
+  --v2-card: #12151d;
+  --v2-card-hover: #151925;
+  --v2-field: #0f1218;
+  --v2-line: #1a1e28;
+  --v2-line-soft: #20242f;
+  --v2-line-mid: #232838;
+  --v2-line-card: #252a3a;
+  --v2-line-input: #2a2f3d;
+  --v2-line-strong: #2a3042;
+  --v2-text: #e8eaf0;
+  --v2-text-2: #c9cede;
+  --v2-text-2b: #d6dae4;
+  --v2-text-3: #a3aabb;
+  --v2-text-4: #9aa1b2;
+  --v2-text-5: #8d94a6;
+  --v2-bright: #ffffff;
+  --v2-primary: #4a5fe0;
+  --v2-primary-hover: #5770f0;
+  --v2-primary-focus: #6474e8;
+  --v2-link: #a9b8ff;
+  --v2-accent: #7c8cff;
+  --v2-good: #5fd08a;
+  --v2-good-bg: #14301f;
+  --v2-warn: #f2c96a;
+  --v2-warn-bg: #3a2f12;
+  --v2-danger: #ff9b9b;
+  --v2-danger-bg: #3a1717;
+  --v2-glow: #121829;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow-x: hidden;
+  background: #05060a;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  color: var(--v2-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ========================================================================= */
+/* Barra de Cenas do Protótipo (Desktop vs Mobile)                           */
+/* ========================================================================= */
+.scenesDesktop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: #080a0f;
+  border-bottom: 1px solid #1a1e28;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.scenesMobile {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #080a0f;
+  border-bottom: 1px solid #1a1e28;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 680px) {
+  .scenesDesktop {
+    display: none;
+  }
+  .scenesMobile {
+    display: flex;
+  }
+}
+
+.sceneBtn {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid #2a2f3d;
+  background: transparent;
+  color: #a3aabb;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.sceneBtn:hover {
+  background: #151925;
+  color: #e8eaf0;
+  border-color: #3b4570;
+}
+
+.sceneBtnOn {
+  background: #1d2333;
+  color: #e8eaf0;
+  border-color: #4a5fe0;
+  font-weight: 500;
+}
+
+.sceneBadge {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #232838;
+  color: #8d94a6;
+}
+
+.sceneBtnOn .sceneBadge {
+  background: #2b3560;
+  color: #b9c4ff;
+}
+
+.sceneSelect {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #2a2f3d;
+  background: #12151d;
+  color: #e8eaf0;
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+/* ========================================================================= */
+/* Layout Desktop (LoginScreen: exatamente medido em LoginScreen.module.css) */
+/* ========================================================================= */
+.waitingWrap {
+  width: 100%;
+  min-height: calc(100vh - 49px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  box-sizing: border-box;
+  background: radial-gradient(760px 480px at 50% 40%, var(--v2-glow) 0%, var(--v2-bg) 72%);
+  color: var(--v2-text);
+  overflow-x: hidden;
+}
+
+.waitingCard {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding: 32px;
+  border-radius: 18px;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-card);
+}
+
+.panelProgress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stepMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--v2-text-5);
+}
+
+.cancelLink {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--v2-link);
+  cursor: pointer;
+}
+
+.cancelLink:hover {
+  text-decoration: underline;
+}
+
+.segments {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.seg {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--v2-line-mid);
+}
+
+.segDone {
+  background: var(--v2-good);
+}
+
+.segActive {
+  background: var(--v2-accent);
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.stepIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+}
+
+.stepIconMail {
+  background: var(--v2-field);
+  border: 1px solid var(--v2-line-soft);
+  color: var(--v2-text-2b);
+}
+
+.stepIconGood {
+  background: var(--v2-good-bg);
+  color: var(--v2-good);
+}
+
+.stepTitle {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.stepText {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--v2-text-3);
+}
+
+.waitBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--v2-field);
+  border: 1px solid var(--v2-line-soft);
+  font-size: 12.5px;
+  color: var(--v2-text-3);
+}
+
+.spinner {
+  animation: spin 1.2s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
+/* ========================================================================= */
+/* O ÚNICO ACRÉSCIMO DO DONO: Link Discreto e Campo de Código               */
+/* ========================================================================= */
+.codeToggleWrap {
+  margin-top: -4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codeToggleLink {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--v2-link);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  width: fit-content;
+}
+
+.codeToggleLink:hover {
+  color: #c7d0ff;
+  text-decoration: underline;
+}
+
+.codeBoxExpanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--v2-field);
+  border: 1px solid var(--v2-line-input);
+}
+
+.codeLabel {
+  font-size: 12.5px;
+  color: var(--v2-text-2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.codeHint {
+  font-size: 11.5px;
+  color: var(--v2-text-5);
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+
+.codeInputRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.codeInput {
+  flex: 1;
+  height: 42px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--v2-line-input);
+  background: #090b10;
+  color: var(--v2-text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  outline: none;
+}
+
+.codeInput:focus {
+  border-color: var(--v2-primary-focus);
+}
+
+.codeInputErr {
+  border-color: #e0626a;
+  background: #180c10;
+  color: #ffb4b9;
+}
+
+.codeInputBlocked {
+  border-color: #3a2228;
+  background: #140d10;
+  color: #7a5f64;
+  cursor: not-allowed;
+}
+
+.primaryBtn {
+  height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--v2-primary);
+  color: var(--v2-bright);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primaryBtn:hover {
+  background: var(--v2-primary-hover);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.codeErrMsg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #ff9b9b;
+}
+
+.codeBlockedMsg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 155, 155, 0.08);
+  border: 1px solid rgba(255, 155, 155, 0.2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #ffb4b9;
+}
+
+.stepActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ghostBtn {
+  height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--v2-line-input);
+  border-radius: 10px;
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ghostBtn:hover {
+  border-color: var(--v2-line-strong);
+  color: var(--v2-bright);
+}
+
+.grow {
+  flex: 1;
+}
+
+/* ========================================================================= */
+/* Layout Celular (Página Pública do StellarCloud a 390px)                   */
+/* ========================================================================= */
+.publicPageWrap {
+  width: 100%;
+  min-height: calc(100vh - 49px);
+  background: #080a10;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 0;
+  box-sizing: border-box;
+}
+
+@media (max-width: 680px) {
+  .publicPageWrap {
+    padding: 0;
+    min-height: calc(100vh - 49px);
+    background: #ffffff;
+  }
+}
+
+.publicCard {
+  width: 100%;
+  max-width: 390px;
+  min-height: 640px;
+  background: #ffffff;
+  color: #141826;
+  border-radius: 28px;
+  border: 1px solid #1f2538;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (max-width: 680px) {
+  .publicCard {
+    max-width: 100%;
+    min-height: calc(100vh - 49px);
+    border-radius: 0;
+    border: 0;
+    box-shadow: none;
+  }
+}
+
+.publicHeader {
+  background: #0a0c14;
+  padding: 18px 24px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brandLogo {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #3d6bff, #9c8cff);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.brandTitle {
+  color: #ffffff;
+  font-size: 16.5px;
+  font-weight: 600;
+}
+
+.brandRule {
+  height: 3px;
+  background: linear-gradient(90deg, #3d6bff, #9c8cff, #c46cf0);
+}
+
+.publicBody {
+  flex: 1;
+  padding: 32px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  box-sizing: border-box;
+}
+
+.statusIconLarge {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin-bottom: 2px;
+}
+
+.iconSuccess {
+  background: #e8f8ee;
+  color: #168a42;
+}
+
+.iconExpired {
+  background: #fdf2e9;
+  color: #b95000;
+}
+
+.publicTitle {
+  margin: 0;
+  font-size: 23px;
+  font-weight: 700;
+  color: #141826;
+  line-height: 1.25;
+}
+
+.publicText {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: #4b5266;
+}
+
+.mobileCodeBox {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0 6px;
+  padding: 16px 20px;
+  background: #f5f6fa;
+  border: 1px solid #d9dce6;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+
+.mobileCodeLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7284;
+}
+
+.mobileCodeValue {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 30px;
+  font-weight: 700;
+  color: #1f2937;
+  letter-spacing: 0.1em;
+}
+
+.mobileCodeNote {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #6b7284;
+  margin: 0;
+}
+
+.publicFooter {
+  padding: 14px 20px;
+  border-top: 1px solid #eceef4;
+  font-size: 12px;
+  color: #8b92a5;
+  text-align: center;
+}
+</style>
+</helmet>
+
+<!-- 1. Barra Superior Desktop -->
+<div class="scenesDesktop" data-part="prototype-scenes">
+  <span style="font-size: 12px; font-weight: 600; color: #8d94a6; margin-right: 4px;">Cenas:</span>
+  <sc-for list="{{scenes}}" as="s">
+    <button type="button" class="{{s.cls}}" onClick="{{s.go}}">
+      {{s.label}}
+      <span class="sceneBadge">{{s.anchor}}</span>
+    </button>
+  </sc-for>
+  <span style="flex: 1"></span>
+  <span style="font-size: 12px; color: #8d94a6">{{cenaDesc}}</span>
+</div>
+
+<!-- 2. Barra Superior Mobile (Compacta para 390px) -->
+<div class="scenesMobile">
+  <label for="sc-select" style="font-size: 11.5px; font-weight: 600; color: #8d94a6; flex: none;">CENA:</label>
+  <select id="sc-select" class="sceneSelect" onChange="{{onSelectScene}}">
+    <sc-for list="{{scenesOptions}}" as="opt">
+      <option value="{{opt.id}}" selected="{{opt.selected}}">{{opt.title}}</option>
+    </sc-for>
+  </select>
+</div>
+
+<!-- ========================================================================= -->
+<!-- VISÃO DESKTOP: LOGINSCREEN (Passo 2 de 4 · Autorizar)                     -->
+<!-- ========================================================================= -->
+<sc-if value="{{isDesktopView}}">
+<div class="waitingWrap" data-login-waiting data-step="{{stepNumber}}">
+  <div class="waitingCard">
+    
+    <!-- Progresso do Wizard -->
+    <div class="panelProgress">
+      <div class="stepMeta">
+        <span>{{stepMetaText}}</span>
+        <button type="button" class="cancelLink">Cancelar</button>
+      </div>
+      <div class="segments" role="progressbar" aria-valuenow="{{stepNumber}}" aria-valuemin="1" aria-valuemax="4">
+        <span class="seg segDone"></span>
+        <span class="{{seg2Class}}"></span>
+        <span class="{{seg3Class}}"></span>
+        <span class="seg"></span>
+      </div>
+    </div>
+
+    <!-- Cenário Aguardando E-mail / Código -->
+    <sc-if value="{{isWaitingFlow}}">
+      <div class="stepBody">
+        <span class="stepIcon stepIconMail" data-role="login-mail-icon">
+          <svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <rect x="2" y="3.5" width="12" height="9" rx="1.6" />
+            <path d="M2.6 4.6L8 8.6l5.4-4" />
+          </svg>
+        </span>
+
+        <div>
+          <h1 class="stepTitle">Abra o link do e-mail</h1>
+          <p class="stepText">Enviamos um link para <strong style="color: #e8eaf0">ana@example.com</strong>. Abra-o para entrar — esta tela segue sozinha.</p>
+        </div>
+
+        <div class="waitBox">
+          <svg class="spinner" width="14" height="14" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+            <circle cx="18" cy="18" r="14" stroke="var(--v2-line-mid)" stroke-width="3" />
+            <path d="M18 4a14 14 0 0 1 14 14" stroke="var(--v2-accent)" stroke-width="3" stroke-linecap="round" />
+          </svg>
+          <span>Esperando a resposta do e-mail · expira em 4:52</span>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- O ÚNICO ACRÉSCIMO DO DONO: LINK DISCRETO OU CAMPO DE CÓDIGO     -->
+        <!-- ============================================================== -->
+        <div class="codeToggleWrap">
+          
+          <!-- #aguardando: link discreto -->
+          <sc-if value="{{showCodeLink}}">
+            <button type="button" class="codeToggleLink" onClick="{{openCodeField}}" data-role="toggle-code-link">
+              Digitar código de confirmação
+            </button>
+          </sc-if>
+
+          <!-- #codigo-aberto, #codigo-errado, #codigo-bloqueado -->
+          <sc-if value="{{showCodeExpanded}}">
+            <div class="codeBoxExpanded" data-role="code-expanded-box">
+              <div class="codeLabel">
+                <span>Código de confirmação</span>
+                <sc-if value="{{canCloseCode}}">
+                  <button type="button" class="cancelLink" onClick="{{closeCodeField}}" style="font-size: 11.5px">Ocultar</button>
+                </sc-if>
+              </div>
+
+              <div class="codeInputRow">
+                <input 
+                  type="text" 
+                  class="{{codeInputClass}}" 
+                  value="{{codeInputValue}}" 
+                  maxlength="7" 
+                  placeholder="481-925" 
+                  data-role="code-input"
+                  disabled="{{isCodeDisabled}}"
+                />
+                <button type="button" class="primaryBtn" data-role="confirm-btn" disabled="{{isCodeDisabled}}">
+                  Confirmar
+                </button>
+              </div>
+
+              <!-- #codigo-errado -->
+              <sc-if value="{{showCodeError}}">
+                <div class="codeErrMsg" data-role="code-err-msg">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4.5zm0 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/>
+                  </svg>
+                  Código incorreto. Restam 2 tentativas.
+                </div>
+              </sc-if>
+
+              <!-- #codigo-bloqueado -->
+              <sc-if value="{{showCodeBlocked}}">
+                <div class="codeBlockedMsg" data-role="code-blocked-msg">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="flex: none; margin-top: 1px">
+                    <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm-.75 4a.75.75 0 0 1 1.5 0v4a.75.75 0 0 1-1.5 0v-4zm.75 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/>
+                  </svg>
+                  <span>Pedido cancelado após 3 tentativas incorretas. Peça um novo e-mail no início para continuar.</span>
+                </div>
+              </sc-if>
+
+              <p class="codeHint">Se o app já detectou o clique pelo celular, a confirmação acontece sozinha em instantes.</p>
+            </div>
+          </sc-if>
+
+        </div>
+
+        <div class="stepActions">
+          <sc-if value="{{showBackBtn}}">
+            <button type="button" class="ghostBtn">Voltar</button>
+          </sc-if>
+          <sc-if value="{{showRestartBtn}}">
+            <button type="button" class="primaryBtn">Pedir novo e-mail</button>
+          </sc-if>
+          <span class="grow"></span>
+        </div>
+
+      </div>
+    </sc-if>
+
+    <!-- #confirmado: avança para o Passo 3 de 4 (Nome da Máquina) como hoje -->
+    <sc-if value="{{isConfirmed}}">
+      <div class="stepBody">
+        <span class="stepIcon stepIconGood" data-role="step-good-icon">
+          <svg width="22" height="22" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M2.5 7.2l2.8 2.8L11.5 4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <div>
+          <h1 class="stepTitle">Tudo pronto!</h1>
+          <p class="stepText">Conta conectada como <strong style="color: #e8eaf0">ana@example.com</strong>. Dê um nome para identificar esta máquina na sua conta.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <label style="font-size: 13px; color: var(--v2-text-2);" for="inp-machine">Nome desta máquina</label>
+          <input 
+            id="inp-machine"
+            type="text" 
+            style="height: 42px; border-radius: 10px; border: 1px solid var(--v2-line-input); background: var(--v2-field); color: var(--v2-text); padding: 0 14px; font: inherit; font-size: 14px;" 
+            value="stellar-host"
+          />
+        </div>
+        <div class="stepActions" style="margin-top: 8px;">
+          <span class="grow"></span>
+          <button type="button" class="primaryBtn" style="height: 42px; padding: 0 24px;">Continuar</button>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</sc-if>
+
+<!-- ========================================================================= -->
+<!-- VISÃO MÓVEL: PÁGINAS PÚBLICAS DO STELLARCLOUD (390px)                     -->
+<!-- ========================================================================= -->
+<sc-if value="{{isMobileView}}">
+<div class="publicPageWrap" data-role="public-page-wrap">
+  <div class="publicCard" data-role="public-card">
+    
+    <div class="publicHeader">
+      <div class="brandLogo">S</div>
+      <div class="brandTitle">Stellar</div>
+    </div>
+    <div class="brandRule"></div>
+
+    <!-- #pagina-sucesso -->
+    <sc-if value="{{isMobileSuccess}}">
+      <div class="publicBody">
+        <div class="statusIconLarge iconSuccess">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6L9 17l-5-5"/>
+          </svg>
+        </div>
+        <h1 class="publicTitle">Pronto!</h1>
+        <p class="publicText">Sua entrada no Stellar foi autorizada. Você já pode voltar ao aplicativo no seu computador.</p>
+
+        <div class="mobileCodeBox">
+          <span class="mobileCodeLabel">Código de confirmação</span>
+          <span class="mobileCodeValue">481-925</span>
+          <p class="mobileCodeNote">Caso o aplicativo solicite, digite o código acima na tela de login para confirmar.</p>
+        </div>
+
+        <p style="font-size: 13px; color: #6b7284; margin-top: auto;">Você já pode fechar esta aba com segurança.</p>
+      </div>
+    </sc-if>
+
+    <!-- #pagina-expirada -->
+    <sc-if value="{{isMobileExpired}}">
+      <div class="publicBody">
+        <div class="statusIconLarge iconExpired">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+        </div>
+        <h1 class="publicTitle">Link expirado</h1>
+        <p class="publicText">Este link de entrada expirou ou já foi usado. Por segurança, os links de login são de uso único e válidos por 15 minutos.</p>
+
+        <div style="width: 100%; box-sizing: border-box; padding: 14px 16px; border-radius: 12px; background: #fdf6ec; border: 1px solid #faecd8; font-size: 13px; color: #8c5310; line-height: 1.45; text-align: left;">
+          Volte ao aplicativo Stellar no seu computador e clique em <strong>Enviar link de acesso</strong> para gerar um novo pedido.
+        </div>
+
+        <p style="font-size: 13px; color: #6b7284; margin-top: auto;">Abra o Stellar no seu computador para tentar de novo.</p>
+      </div>
+    </sc-if>
+
+    <div class="publicFooter">
+      Stellar · <a href="https://stellar.idyplatform.com" style="color: inherit; text-decoration: none;">stellar.idyplatform.com</a>
+    </div>
+
+  </div>
+</div>
+</sc-if>
+
+</x-dc>
+
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":880}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const hash = (location.hash || "").replace(/^#/, "");
+    const cena = this.normalizeHash(hash);
+    this.state = { cena };
+    this.handleHashChange = () => {
+      const nextHash = (location.hash || "").replace(/^#/, "");
+      this.setState({ cena: this.normalizeHash(nextHash) });
+    };
+    window.addEventListener("hashchange", this.handleHashChange);
+  }
+
+  normalizeHash(raw) {
+    const valid = [
+      "aguardando",
+      "codigo-aberto",
+      "codigo-errado",
+      "codigo-bloqueado",
+      "confirmado",
+      "pagina-sucesso",
+      "pagina-expirada"
+    ];
+    if (valid.includes(raw)) return raw;
+    return "aguardando";
+  }
+
+  setCena(k) {
+    location.hash = "#" + k;
+    this.setState({ cena: k });
+  }
+
+  renderVals() {
+    const c = this.state.cena;
+    const go = (k) => () => { this.setCena(k); };
+
+    const sceneDefs = [
+      { id: "aguardando", label: "Aguardando", anchor: "#aguardando", title: "Aguardando (#aguardando)" },
+      { id: "codigo-aberto", label: "Código aberto", anchor: "#codigo-aberto", title: "Código aberto (#codigo-aberto)" },
+      { id: "codigo-errado", label: "Código errado", anchor: "#codigo-errado", title: "Código errado (#codigo-errado)" },
+      { id: "codigo-bloqueado", label: "Código bloqueado", anchor: "#codigo-bloqueado", title: "Código bloqueado (#codigo-bloqueado)" },
+      { id: "confirmado", label: "Confirmado", anchor: "#confirmado", title: "Confirmado (#confirmado)" },
+      { id: "pagina-sucesso", label: "Página móvel: Sucesso", anchor: "#pagina-sucesso", title: "Página móvel: Sucesso (#pagina-sucesso)" },
+      { id: "pagina-expirada", label: "Página móvel: Expirada", anchor: "#pagina-expirada", title: "Página móvel: Expirada (#pagina-expirada)" },
+    ];
+
+    const scenes = sceneDefs.map((s) => ({
+      ...s,
+      cls: "sceneBtn" + (c === s.id ? " sceneBtnOn" : ""),
+      go: go(s.id),
+    }));
+
+    const scenesOptions = sceneDefs.map((s) => ({
+      id: s.id,
+      title: s.title,
+      selected: c === s.id,
+    }));
+
+    const descriptions = {
+      "aguardando": "Desktop · Estado original idêntico ao atual + link discreto 'Digitar código de confirmação'",
+      "codigo-aberto": "Desktop · Campo de código de 6 dígitos (481-925) expandido inline",
+      "codigo-errado": "Desktop · Código incorreto digitado; alerta com contagem regressiva de tentativas",
+      "codigo-bloqueado": "Desktop · 3 erros atingidos: pedido cancelado com aviso de bloqueio",
+      "confirmado": "Desktop · Aceite efetuado: avança normalmente para Nome da Máquina (Passo 3 de 4)",
+      "pagina-sucesso": "Celular (390px) · Tela pública do StellarCloud após aceite no e-mail com código em destaque",
+      "pagina-expirada": "Celular (390px) · Tela pública do StellarCloud caso o link tenha expirado",
+    };
+
+    const isDesktopView = c !== "pagina-sucesso" && c !== "pagina-expirada";
+    const isMobileView = !isDesktopView;
+    const isWaitingFlow = c !== "confirmado";
+    const isConfirmed = c === "confirmado";
+
+    // Sub-estados do desktop
+    const showCodeLink = c === "aguardando";
+    const showCodeExpanded = c === "codigo-aberto" || c === "codigo-errado" || c === "codigo-bloqueado";
+    const showCodeError = c === "codigo-errado";
+    const showCodeBlocked = c === "codigo-bloqueado";
+    const canCloseCode = c === "codigo-aberto" || c === "codigo-errado";
+    const isCodeDisabled = c === "codigo-bloqueado";
+    const showBackBtn = c !== "codigo-bloqueado";
+    const showRestartBtn = c === "codigo-bloqueado";
+
+    let codeInputClass = "codeInput";
+    if (showCodeError) codeInputClass += " codeInputErr";
+    if (showCodeBlocked) codeInputClass += " codeInputBlocked";
+
+    const codeInputValue = c === "codigo-errado" ? "123-456" : c === "codigo-bloqueado" ? "999-000" : (c === "codigo-aberto" ? "481-925" : "");
+
+    // Wizard progresso
+    const stepNumber = isConfirmed ? 3 : 2;
+    const stepMetaText = isConfirmed ? "Passo 3 de 4 · Nome da máquina" : "Passo 2 de 4 · Autorizar";
+    const seg2Class = "seg " + (isConfirmed ? "segDone" : "segActive");
+    const seg3Class = "seg " + (isConfirmed ? "segActive" : "");
+
+    // Mobile
+    const isMobileSuccess = c === "pagina-sucesso";
+    const isMobileExpired = c === "pagina-expirada";
+
+    return {
+      cenaDesc: descriptions[c] || "",
+      scenes,
+      scenesOptions,
+      isDesktopView,
+      isMobileView,
+      isWaitingFlow,
+      isConfirmed,
+      showCodeLink,
+      showCodeExpanded,
+      showCodeError,
+      showCodeBlocked,
+      canCloseCode,
+      isCodeDisabled,
+      showBackBtn,
+      showRestartBtn,
+      codeInputClass,
+      codeInputValue,
+      stepNumber,
+      stepMetaText,
+      seg2Class,
+      seg3Class,
+      isMobileSuccess,
+      isMobileExpired,
+      openCodeField: () => { this.setCena("codigo-aberto"); },
+      closeCodeField: () => { this.setCena("aguardando"); },
+      onSelectScene: (e) => {
+        if (e && e.target && e.target.value) {
+          this.setCena(e.target.value);
+        }
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>
