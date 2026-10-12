@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Desenho como whiteboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Estados por âncora: #caneta-escrevendo #caneta-sobre-tracos #ponteiro #selecao #borracha #escrita-unica */
+body{margin:0;background:#05060a;font-family:'Space Grotesk',system-ui,sans-serif;color:#e8eaf0}
+html{scrollbar-width:none}
+#board{width:1100px;height:560px;position:relative;overflow:hidden;background-color:#0b0d12;background-image:radial-gradient(#1b2030 1px,transparent 1px);background-size:22px 22px}
+svg.layer{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.path{fill:none;stroke:#e8eaf0;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}
+.path.live{stroke:#e8eaf0}
+.halo{fill:none;stroke:#45c8ff;stroke-opacity:.28;stroke-width:15;stroke-linecap:round;stroke-linejoin:round}
+.about{stroke:#e0846f;stroke-opacity:.9}
+.other{stroke:#f0a43e;stroke-opacity:.55;stroke-width:12}
+.cursor{position:absolute;pointer-events:none}
+.tag{position:absolute;font-size:12px;padding:4px 9px;border-radius:7px;background:#12151d;border:1px solid #343c55;color:#c9cede;white-space:nowrap}
+.mini{position:absolute;width:22px;height:22px;border-radius:50%;background:#12151d;border:1px solid #343c55;color:#f2a093;display:grid;place-items:center;box-shadow:0 4px 12px #000a}
+.note{position:absolute;font-size:12px;color:#8d94a6}
+.ann{position:absolute;border:1px dashed #7d8cff99;border-radius:8px;pointer-events:none}
+.ann b{position:absolute;left:8px;top:-9px;background:#0b0d12;color:#a8b3ff;font:500 11px 'Space Grotesk',sans-serif;padding:0 6px}
+#sheet{width:1100px;box-sizing:border-box;padding:24px 32px 56px;background:#0b0d12;border-top:1px solid #1d2230}
+#sheet h2{font-size:16px;margin:0 0 12px}
+#sheet table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:22px}
+#sheet td,#sheet th{border:1px solid #1d2230;padding:8px 10px;vertical-align:top;text-align:left}
+#sheet th{color:#8d94a6;font-weight:500;background:#0d1016;width:190px}
+#sheet code{font-family:monospace;font-size:11.5px;color:#c3cbff}
+#sheet .ok{color:#8fdcc0}#sheet .app{color:#f0b25c}#sheet .mod{color:#f2a093}
+#nav{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+#nav a{color:#c9cede;text-decoration:none;border:1px solid #2a2f3d;border-radius:7px;padding:4px 10px;font-size:12px;background:#161a24}
+#nav a.on{border-color:#7d8cff;color:#fff;background:#1a2040}
+</style>
+</head>
+<body>
+<div id="board"></div>
+<div id="sheet"></div>
+<script>
+const STATES = [
+  ['caneta-escrevendo','Caneta: escrevendo'],['caneta-sobre-tracos','Caneta: por cima de traços'],['ponteiro','Ponteiro sobre a escrita'],
+  ['selecao','Seleção: escrita selecionada'],['borracha','Borracha'],['escrita-unica','Vários traços = uma escrita']
+];
+const f = (n) => Math.round(n * 10) / 10;
+const ell = (cx, cy, rx, ry, a0, sweep, n = 28) => Array.from({ length: n + 1 }, (_, i) => { const a = a0 + sweep * i / n; return [f(cx + rx * Math.cos(a)), f(cy + ry * Math.sin(a))]; });
+const line = (x0, y0, x1, y1, n = 10, bow = 0) => Array.from({ length: n + 1 }, (_, i) => { const t = i / n; return [f(x0 + (x1 - x0) * t + bow * Math.sin(Math.PI * t)), f(y0 + (y1 - y0) * t)]; });
+// "ola" in board px; the strokes of one writing (each is what one pen-down/up makes today: one card)
+const W = { x: 230, y: 190 };
+const S = {
+  o: ell(W.x + 60, W.y + 100, 40, 48, -Math.PI * 0.55, Math.PI * 2.05),
+  l: line(W.x + 150, W.y + 20, W.x + 152, W.y + 150, 12, 8),
+  a1: ell(W.x + 235, W.y + 100, 38, 46, -Math.PI * 0.2, -Math.PI * 1.9),
+  a2: line(W.x + 270, W.y + 60, W.x + 272, W.y + 150, 8, 3),
+  acc: line(W.x + 238, W.y + 12, W.x + 262, W.y - 6, 5, 0),
+};
+const pts = (p) => p.map(([x, y]) => `${x},${y}`).join(' ');
+const P = (p, cls = '') => `<polyline class="path ${cls}" points="${pts(p)}"/>`;
+const H = (p) => `<polyline class="halo" points="${pts(p)}"/>`;
+const pencil = (x, y) => `<svg class="cursor" style="left:${x - 2}px;top:${y - 26}px" width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M3 25l1.2-5.2L17.6 6.4a2.2 2.2 0 013.1 0l1.9 1.9a2.2 2.2 0 010 3.1L9.2 24.8z" fill="#e8eaf0" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/><path d="M15.8 8.2l4 4" stroke="#0b0d12" stroke-width="1.4"/><path d="M3 25l3.2-.7-2.5-2.5z" fill="#0b0d12"/></svg>`;
+const eraser = (x, y) => `<svg class="cursor" style="left:${x - 14}px;top:${y - 14}px" width="28" height="28" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="11.5" stroke="#e8eaf0" stroke-width="1.6" fill="#e8eaf018"/><circle cx="14" cy="14" r="1.6" fill="#e8eaf0"/></svg>`;
+const arrowMove = (x, y) => `<svg class="cursor" style="left:${x - 11}px;top:${y - 11}px" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#e8eaf0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2v18M2 11h18M11 2l-3 3M11 2l3 3M11 20l-3-3M11 20l3-3M2 11l3-3M2 11l3 3M20 11l-3-3M20 11l-3 3" fill="#0b0d1099"/></svg>`;
+const otherWriting = () => {
+  const p = Array.from({ length: 20 }, (_, i) => [820 + i * 11, 330 + Math.sin(i / 2.3) * 34]);
+  return `<polyline class="path other" points="${pts(p)}"/>`;
+};
+function board(state) {
+  const all = [S.o, S.l, S.a1, S.a2, S.acc];
+  let svg = '', extra = '';
+  if (state === 'caneta-escrevendo') {
+    const partial = S.a1.slice(0, 20);
+    svg = P(S.o) + P(S.l) + P(partial, 'live');
+    const tip = partial[partial.length - 1];
+    extra = pencil(tip[0], tip[1]) + `<div class="tag" style="left:230px;top:440px">Caneta ativa · cursor de lápis · mouse em volta nunca mostra fundo, moldura ou cabeçalho</div>`;
+  } else if (state === 'caneta-sobre-tracos') {
+    const under = line(W.x + 20, W.y + 175, W.x + 200, W.y + 168, 14, 6);
+    const partial = under.slice(0, 10);
+    svg = all.map((p) => P(p)).join('') + P(partial, 'live');
+    const tip = partial[partial.length - 1];
+    extra = pencil(tip[0], tip[1]) + `<div class="tag" style="left:230px;top:440px">Caneta ativa: o traço novo começa e cruza a escrita antiga; nada reage ao mouse</div>`;
+  } else if (state === 'ponteiro') {
+    svg = all.map((p) => P(p)).join('');
+    extra = arrowMove(S.l[6][0], S.l[6][1]) + `<div class="tag" style="left:230px;top:440px">Ponteiro: só o cursor muda (mover) quando está em cima do traço. Nenhum realce.</div>`;
+  } else if (state === 'selecao') {
+    svg = all.map(H).join('') + all.map((p) => P(p)).join('');
+    const bx = W.x + 292, by = W.y - 30;
+    extra = `<div class="mini" style="left:${bx}px;top:${by}px" title="Apagar (Del)"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></div>
+      <div class="tag" style="left:${bx - 70}px;top:${by - 34}px">Apagar · Del</div>` + arrowMove(S.o[10][0], S.o[10][1]) +
+      `<div class="tag" style="left:230px;top:440px">Seleção: halo fino acompanhando os traços (sem retângulo). Arrastar o traço move a escrita toda; × ou Del apaga.</div>`;
+  } else if (state === 'borracha') {
+    svg = [S.o, S.a1, S.a2, S.acc].map((p) => P(p)).join('') + P(S.l, 'about');
+    extra = eraser(S.l[5][0] + 2, S.l[5][1]) + `<div class="tag" style="left:230px;top:440px">Borracha: o traço sob o círculo fica vermelho; soltar apaga só esse traço</div>`;
+  } else if (state === 'escrita-unica') {
+    svg = all.map((p) => P(p)).join('') + otherWriting();
+    extra = `<div class="ann" style="left:${W.x - 12}px;top:${W.y - 24}px;width:316px;height:200px"><b>1 escrita · 5 traços · 1 card (diagrama, não aparece no app)</b></div>
+      <div class="ann" style="left:808px;top:276px;width:240px;height:100px"><b>outra escrita (parou ≥1,5 s ou longe)</b></div>
+      <div class="tag" style="left:230px;top:440px">Traços feitos em sequência e perto uns dos outros viram uma escrita só: selecionar, mover e apagar valem para a escrita inteira</div>`;
+  }
+  return `<svg class="layer">${svg}</svg>${extra}`;
+}
+function sheet(state) {
+  const nav = `<div id="nav">${STATES.map(([id, l]) => `<a href="#${id}" class="${id === state ? 'on' : ''}">${l}</a>`).join('')}</div>`;
+  return `${nav}<h2>Desenho como whiteboard de verdade</h2>
+  <table>
+    <tr><th>Medido hoje (app isolado)</th><td>Com a caneta ativa o cursor é a seta padrão (<code>cursor: auto</code>) em toda parte. Riscar sobre o fundo vazio cria o traço; riscar sobre a caixa de um desenho que já existe <b>não cria nada</b> (2 → 2 cards): só o fundo vazio inicia o desenho, e a caixa de cada card captura o mouse. Um traço = um card com cabeçalho; uma palavra de 5 traços são 5 cards.</td></tr>
+    <tr><th>(a) Mouse nunca mostra nada</th><td>O desenho não tem cabeçalho, moldura, fundo, contorno nem barra, em nenhum estado, com ou sem caneta. Passar o mouse só pode mudar o cursor.</td></tr>
+    <tr><th>(b) Caneta = lápis</th><td>Ferramenta caneta ativa: cursor de lápis em todo o canvas e todo clique/arrasto desenha, inclusive sobre traços existentes. Os traços existentes deixam de receber mouse enquanto a caneta está ativa.</td></tr>
+    <tr><th>(c) Mover/apagar fora da caneta</th><td>Só existem com a ferramenta de seleção (ou ponteiro, para mover) e com a borracha. Seleção: halo fino colado aos traços, sem retângulo nem card; arrastar o traço move; × pequeno junto da escrita e a tecla Del apagam. Borracha: cursor de círculo, o traço sob ele fica vermelho e soltar apaga.</td></tr>
+    <tr><th>(d) Uma escrita só</th><td>Traços feitos em sequência (menos de 1,5 s entre eles) e perto (até ~60 px da escrita em curso) pertencem à mesma escrita; passou disso, começa outra. Selecionar, mover e apagar agem na escrita inteira.</td></tr>
+  </table>
+  <h2>O que dá sem mexer no modelo de cards e o que não dá</h2>
+  <table>
+    <tr><th>Sem mexer no modelo</th><td>
+      <span class="ok">✔</span> <b>(a)</b> tirar o cabeçalho/hover do desenho e limitar o mouse ao traço: só <code>StrokeCard.tsx/.module.css</code>.<br>
+      <span class="ok">✔</span> <b>(c) realce</b> da seleção como halo no traço: só <code>StrokeCard</code> (a seleção por marquee e o prop <code>selected</code> já existem).<br>
+      <span class="app">●</span> <b>(b)</b> cursor de lápis e traços sem mouse durante a caneta: sem mudar o modelo, mas precisa tocar <code>App.tsx</code>/<code>layout.css</code> (passar a ferramenta ativa e um cursor por ferramenta), fora do território desta task.<br>
+      <span class="app">●</span> <b>(c) borracha</b>: não existe hoje (ferramentas: ponteiro, caneta, conector, seleção, recorte). Ferramenta nova = <code>card-types.ts</code>, <code>App.tsx</code>, rail, menu radial, atalho e textos; o modelo de dados não muda (apagar já existe).<br>
+      <span class="app">●</span> <b>(d), versão provisória</b>: ao terminar um traço, dar o mesmo <code>groupId</code> ao traço anterior se for recente e próximo. O grupo já move junto, mas desenha um contorno (<code>.group-outline</code>), que precisaria ser omitido para grupos só de traços, e a seleção ainda não é do grupo todo. Continua um card por traço.</td></tr>
+    <tr><th>Exige mudar o modelo</th><td>
+      <span class="mod">✖</span> <b>(d) de verdade</b>: um card por escrita, com vários traços dentro. Hoje o card guarda uma única linha (<code>points</code>). Passaria a guardar uma lista de traços (cada um com seus pontos, cor, largura e estilo), e o novo traço seria anexado à escrita em curso em vez de criar card. Não muda o banco (o conteúdo já é um JSON no campo de texto do card; leitura de desenhos antigos continua funcionando), mas muda o tipo do card, a leitura/gravação, o desenho e a regra de criação em <code>App.tsx</code>. É o que resolve de fato 40 cards para uma frase, a lista de cards do board e o desempenho.<br>
+      <span class="mod">✖</span> Apagar <b>parte</b> de um traço com a borracha (hoje só traço inteiro): exige partir a linha em duas.</td></tr>
+    <tr><th>Recomendação</th><td>Fazer em duas etapas: 1) <b>sem mexer no modelo</b>: (a), (c) realce, e (b)/borracha se o App.tsx for liberado; 2) <b>modelo de escrita</b> (d) numa task própria, porque toca App.tsx e o formato do desenho. Pergunta ao dono: borracha que apaga traço inteiro basta, ou precisa apagar pedaço?</td></tr>
+  </table>`;
+}
+function render() {
+  const s = (location.hash || '#caneta-escrevendo').slice(1);
+  const state = STATES.some(([id]) => id === s) ? s : 'caneta-escrevendo';
+  document.getElementById('board').innerHTML = board(state);
+  document.getElementById('sheet').innerHTML = sheet(state);
+}
+window.addEventListener('hashchange', render); render();
+</script>
+</body>
+</html>
