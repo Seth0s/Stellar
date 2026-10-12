@@ -174,15 +174,19 @@ export type TaskFooterItem = {
   requestedStatus: unknown | null;
   review: string | null;
   cards: Array<{ role: string }>;
+  /** A prototype the agent declared and asked the owner to approve (null/absent: none). */
+  prototypeAsk?: unknown | null;
   updatedAt: number;
 };
 
 export function decideTaskFooter(tasks: TaskFooterItem[], now: number) {
   const working = tasks.filter((task) => task.phase === "running" && task.cardAlive).length;
   const review = tasks.filter((task) => task.phase === "awaiting_review" || task.phase === "changes_requested").length;
-  const needsHuman = tasks.filter((task) =>
-    task.blockedQuestion !== null || task.requestedStatus !== null ||
-    (task.phase === "awaiting_review" && task.review === "wanted" && !task.cards.some((card) => card.role === "reviewer")),
+  // Same three sources as the Fila's needs-you filter: a question, a status ask
+  // and a declared prototype ask. A task that only lacks a reviewer is counted
+  // in `review`, not here.
+  const needsHuman = tasks.filter(
+    (task) => task.blockedQuestion !== null || task.requestedStatus !== null || (task.prototypeAsk ?? null) !== null,
   ).length;
   const latest = tasks.reduce<number | null>((at, task) => at === null || task.updatedAt > at ? task.updatedAt : at, null);
   return {

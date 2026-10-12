@@ -46,18 +46,21 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
     <button type="button" class="{{scUsuario}}" onClick="{{goUsuario}}">Pronta recolhida</button>
     <button type="button" class="{{scMedia}}" onClick="{{goMedia}}">Média · 1200</button>
     <button type="button" class="{{scEstreita}}" onClick="{{goEstreita}}">Estreita · 800</button>
+    <button type="button" class="{{scProto}}" onClick="{{goProto}}">Protótipo esperando</button>
+    <button type="button" class="{{scAprov}}" onClick="{{goAprov}}">Aprovado</button>
+    <button type="button" class="{{scDisp}}" onClick="{{goDisp}}">Dispensado</button>
     <span style="flex: 1"></span>
     <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
   </div>
 
-  <div data-cena="{{cena}}" style="width: {{cardW}}px; max-width: {{cardW}}px; min-width: 0; flex: 0 0 auto; align-self: center; height: 860px; box-sizing: border-box; background-color: #0b0d12; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230">
+  <div data-cena="{{cena}}" style="position: relative; width: {{cardW}}px; max-width: {{cardW}}px; min-width: 0; flex: 0 0 auto; align-self: center; height: 860px; box-sizing: border-box; background-color: #0b0d12; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; border: 1px solid #1d2230">
 
     <header class="head" style="padding: 14px 18px; border-bottom: 1px solid #1d2230">
       <h1 style="margin: 0; font-size: 17px; font-weight: 600; flex: none">Fila</h1>
       <a href="Sprints.dc.html" class="sprint">Board 64 · Sprint Ciclo 2 ▾</a>
       <div role="group" aria-label="Filtro" class="filters" style="display: flex; gap: 6px; flex: none">
         <button type="button" class="{{fTudo}}" onClick="{{goTudo}}">Tudo <span style="color: #8d94a6">14</span></button>
-        <button type="button" class="{{fVoce}}" onClick="{{goVoce}}">Precisa de você <span style="color: #f0b25c">3</span></button>
+        <button type="button" class="{{fVoce}}" onClick="{{goVoce}}">Precisa de você <span style="color: #f0b25c">{{needCount}}</span></button>
         <button type="button" class="{{fVivas}}" onClick="{{goVivas}}">Com agente vivo <span style="color: #8d94a6">2</span></button>
       </div>
       <span style="flex: 1 1 8px"></span>
@@ -81,12 +84,29 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
           <span style="font-size: 13.5px; line-height: 1.4">#70584525 A5c e mais 3 esperam liberação depois do commit do ciclo.</span>
           <div style="display: flex; gap: 6px"><button type="button" class="btn">Ver as 4</button></div>
         </div>
-        <div style="border: 1px solid #27305a; background: #131829; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
-          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a9b8ff"><span style="width: 7px; height: 7px; border-radius: 50%; background: #7d8cff"></span>Protótipo para aprovar</div>
+        <sc-if value="{{showProtoCard}}" hint-placeholder-val="{{ true }}">
+        <div data-part="prototype-card" style="border: 1px solid #27305a; background: #131829; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a9b8ff"><span style="width: 7px; height: 7px; border-radius: 50%; background: #7d8cff"></span>Protótipo para aprovar · há 3 h</div>
           <span style="font-size: 13.5px; line-height: 1.4">#a550a7ae Detalhe da task no card Fila, mais organizado</span>
-          <div style="display: flex; gap: 6px"><button type="button" class="btn">Abrir</button></div>
+          <span class="mono" data-part="prototype-file" style="font-size: 12px; color: #8d94a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">prototypes/Fila-v3.1.dc.html</span>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+            <button type="button" class="btn" data-part="prototype-open" style="background: #4a5fe0; border-color: #4a5fe0; font-weight: 600; color: #fff" onClick="{{noop}}">Abrir protótipo</button>
+            <button type="button" class="btn" data-part="prototype-approve" onClick="{{approve}}">Aprovar</button>
+            <button type="button" class="btn" data-part="prototype-dismiss" onClick="{{dismiss}}">Dispensar</button>
+            <span style="flex: 1"></span>
+            <a href="#task" data-part="prototype-task-link" style="font-size: 12.5px">Ver task</a>
+          </div>
         </div>
+        </sc-if>
       </section>
+    </sc-if>
+
+    <sc-if value="{{showToast}}" hint-placeholder-val="{{ false }}">
+      <div role="status" data-part="proto-toast" style="position: absolute; right: 20px; bottom: 56px; z-index: 3; display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #14301f; color: #8ee6a8; font-size: 13.5px; box-shadow: 0 12px 40px rgba(0,0,0,.5)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.4 8.4l3 3 6-6.4"></path></svg>
+        <span>{{toastText}}</span>
+        <sc-if value="{{toastUndo}}" hint-placeholder-val="{{ false }}"><button type="button" class="btn" data-part="proto-undo" style="min-height: 28px; background: transparent; border-color: #2f6b49; color: #8ee6a8" onClick="{{undo}}">Desfazer</button></sc-if>
+      </div>
     </sc-if>
 
     <div style="flex: 1; min-height: 0; min-width: 0; padding: 12px 18px 16px; display: flex; gap: 12px; overflow-x: auto; align-items: stretch">
@@ -236,7 +256,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
     <footer style="padding: 10px 18px; border-top: 1px solid #1d2230; display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: #8d94a6">
       <span style="display: flex; align-items: center; gap: 6px"><span class="live"></span>{{rodCount}} agentes trabalhando</span>
       <span>{{revCount}} esperando revisão</span>
-      <span style="color: #f0b25c">3 precisam de você</span>
+      <span style="color: #f0b25c">{{needCount}} {{needLabel}}</span>
       <span style="flex: 1"></span>
       <span>Atualizado agora</span>
     </footer>
@@ -249,7 +269,7 @@ class Component extends DCLogic {
     super(props);
     const fromHash = new URLSearchParams((location.hash || "").replace(/^#/, "")).get("cena");
     const cena = fromHash || new URLSearchParams(location.search).get("cena") || "abertas";
-    this.state = Object.assign({ f: "tudo", cena }, this.scene(cena));
+    this.state = Object.assign({ f: "tudo", cena, proto: this.protoOf(cena) }, this.scene(cena));
   }
 
   // Empty columns start collapsed. Narrow cards collapse from the right
@@ -281,8 +301,13 @@ class Component extends DCLogic {
     return { rails, empty, w };
   }
 
+  // The prototype card lives in one of three states; the scenes only pick one.
+  protoOf(cena) {
+    return cena === "aprovado" ? "aprovado" : cena === "dispensado" ? "dispensado" : "esperando";
+  }
+
   go(cena) {
-    return () => this.setState(Object.assign({ cena }, this.scene(cena)));
+    return () => this.setState(Object.assign({ cena, proto: this.protoOf(cena) }, this.scene(cena)));
   }
 
   toggle(key) {
@@ -305,7 +330,11 @@ class Component extends DCLogic {
       usuario: "Pronta tem tasks e foi recolhida",
       media: "1200 — Concluída, Falhas e Substituídas viram faixa",
       estreita: "800 — só Esperando e Pronta cabem abertas",
+      prototipo: "Só aparece quando um card declarou protótipo e pediu aprovação. Abrir abre o protótipo; Ver task, o detalhe",
+      aprovado: "Aprovar registra na task e avisa o card que dirige: a fase 2 segue sozinha. O cartão sai da faixa",
+      dispensado: "Dispensar só tira da faixa. O status da task não muda e dá para desfazer",
     };
+    const proto = this.state.proto;
     return {
       cena: this.state.cena,
       cenaLabel: labels[this.state.cena] || "",
@@ -317,6 +346,18 @@ class Component extends DCLogic {
       showStrip: f !== "vivas",
       scAbertas: sc("abertas"), scVazias: sc("vazias"), scUsuario: sc("usuario"),
       scMedia: sc("media"), scEstreita: sc("estreita"),
+      scProto: sc("prototipo"), scAprov: sc("aprovado"), scDisp: sc("dispensado"),
+      goProto: this.go("prototipo"), goAprov: this.go("aprovado"), goDisp: this.go("dispensado"),
+      needCount: proto === "esperando" ? "3" : "2",
+      needLabel: "precisam de você",
+      showProtoCard: proto === "esperando",
+      showToast: proto !== "esperando",
+      toastText: proto === "aprovado" ? "Aprovado · #a550a7ae foi avisada para seguir com a fase 2" : "Dispensado · a task segue como está",
+      toastUndo: proto === "dispensado",
+      approve: () => this.setState({ proto: "aprovado", cena: "aprovado" }),
+      dismiss: () => this.setState({ proto: "dispensado", cena: "dispensado" }),
+      undo: () => this.setState({ proto: "esperando", cena: "prototipo" }),
+      noop: () => {},
       goAbertas: this.go("abertas"), goVazias: this.go("vazias"), goUsuario: this.go("usuario"),
       goMedia: this.go("media"), goEstreita: this.go("estreita"),
       openEsp: !rails.esp, railEsp: rails.esp, toggleEsp: this.toggle("esp"),

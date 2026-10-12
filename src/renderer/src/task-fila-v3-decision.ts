@@ -80,6 +80,8 @@ export type QueueTaskFacts = {
   contextPercent?: number | null;
   hasReportThisRound?: boolean;
   blockedAskedAt?: number | null;
+  /** A prototype the agent declared and asked the owner to approve. */
+  prototypeAsk?: { path: string; askedAt: number } | null;
   requestedReason?: string | null;
   /** Gate red is outside this task's territory (measured). */
   gateRedOutsideTerritory?: boolean | null;
@@ -149,18 +151,14 @@ export function groupTasksByQueueColumn<T extends QueueTaskFacts & { id: string;
   return groups;
 }
 
-/** DADOS §6 — three sources only. Prototype Fila also shows review=wanted
- * while the task is still in Pronta (ready/reserved), before awaiting_review. */
+/** DADOS §6 — three sources: a question (blocked), a status ask, and a
+ * prototype the agent declared and asked the owner to approve. A task that only
+ * lacks a reviewer is NOT here: it sits in its column ("Esperando o REVISOR"),
+ * and `review === "wanted"` alone never means a prototype is waiting. */
 export function taskNeedsYou(task: QueueTaskFacts): boolean {
   if (task.blockedQuestion != null) return true;
   if (task.requestedStatus != null) return true;
-  if (
-    task.review === "wanted" &&
-    !cardHasReviewer(task.cards.map((c) => c.role)) &&
-    (task.phase === "awaiting_review" || task.phase === "ready" || task.phase === "reserved")
-  ) {
-    return true;
-  }
+  if (task.prototypeAsk != null) return true;
   return false;
 }
 
@@ -604,4 +602,49 @@ export function saveCollapsedColumns(boardId: string, collapsed: ReadonlySet<Que
   } catch {
     /* quota / private mode — preference is best-effort */
   }
+}
+
+// ---- prototype cards the owner dismissed -----------------------------------
+
+const DISMISSED_PROTOTYPES_PREFIX = "stellar.fila.prototypeDismissed.";
+
+/** One dismissal answers one ask: a NEW ask (a later report) has a new `askedAt`,
+ * so it shows again. */
+export function prototypeDismissKey(taskId: string, askedAt: number): string {
+  return `${taskId}:${askedAt}`;
+}
+
+export function loadDismissedPrototypes(boardId: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_PROTOTYPES_PREFIX + boardId);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((item): item is string => typeof item === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveDismissedPrototypes(boardId: string, dismissed: ReadonlySet<string>): void {
+  try {
+    // Keep the newest few: an old ask cannot come back, so its key is dead weight.
+    localStorage.setItem(DISMISSED_PROTOTYPES_PREFIX + boardId, JSON.stringify([...dismissed].slice(-200)));
+  } catch {
+    /* quota / private mode — dismissing is best-effort */
+  }
+}
+
+/** Tasks with the ask removed where the owner dismissed that exact ask. The
+ * task itself is untouched: only the prototype card goes away. */
+export function applyPrototypeDismissals<T extends { id: string; prototypeAsk?: { askedAt: number } | null }>(
+  tasks: readonly T[],
+  dismissed: ReadonlySet<string>,
+): T[] {
+  if (dismissed.size === 0) return [...tasks];
+  return tasks.map((task) =>
+    task.prototypeAsk && dismissed.has(prototypeDismissKey(task.id, task.prototypeAsk.askedAt))
+      ? { ...task, prototypeAsk: null }
+      : task,
+  );
 }

@@ -2,6 +2,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CardFrame } from "./CardFrame";
 import { decideTaskFooter } from "./card-footer-decision";
+import { applyPrototypeDismissals } from "./task-fila-v3-decision";
+import { useDismissedPrototypes } from "./task-fila-prototype-dismissals";
 import { Icon } from "./icons";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import { useModal } from "./useModal";
@@ -83,8 +85,10 @@ const COLUMN_HEADER_KEY = {
   superseded: "task.column.superseded",
 } as const satisfies Record<TaskColumn, "task.column.todo" | "task.column.doing" | "task.column.done" | "task.column.failed" | "task.column.superseded">;
 
-function TaskPulseFooter({ tasks }: { tasks: TaskBoardItem[] }) {
-  const pulse = decideTaskFooter(tasks, Date.now());
+function TaskPulseFooter({ tasks, boardId }: { tasks: TaskBoardItem[]; boardId: string }) {
+  // Prototype cards the owner dismissed do not count as needing the owner.
+  const dismissed = useDismissedPrototypes(boardId);
+  const pulse = decideTaskFooter(applyPrototypeDismissals(tasks, dismissed), Date.now());
   return (
     <span className="card-foot-row" data-role="task-card-pulse" data-part="queue-footer">
       <span data-tone="good">{pulse.working} agentes trabalhando</span>
@@ -1464,7 +1468,7 @@ function TaskCardInner({
       panX={panX}
       panY={panY}
       footerContent={
-        <TaskPulseFooter tasks={boardTasks} />
+        <TaskPulseFooter tasks={boardTasks} boardId={activeBoardId} />
       }
       headerContent={
         <>

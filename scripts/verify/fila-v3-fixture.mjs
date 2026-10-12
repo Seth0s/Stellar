@@ -439,7 +439,8 @@ Push: o desktop cifra o aviso (RFC 8291) e o servidor só assina com VAPID e env
       requested_by: null,
       requested_at: null,
       superseded_by: null,
-      // Ready column + needs-you strip via review=wanted without a final report.
+      // Ready column; the needs-you strip card comes from the prototype ask
+      // declared in the parcial report seeded in wireLiveLinks.
       review: "wanted",
       ord: 15,
       updated_at: now,
@@ -530,8 +531,9 @@ export function wireLiveLinks(dbPath, clock = FILA_V3_CLOCK) {
     runB,
   );
   db.prepare(`UPDATE tasks SET card_id = ?, updated_at = ? WHERE id = ?`).run(deadReview, now - 6 * 60_000, review);
-  // Keep a550 in ready: no live card and no final report; strip uses review=wanted.
-  db.prepare(`UPDATE tasks SET card_id = NULL, updated_at = ? WHERE id = ?`).run(now - 60_000, proto);
+  // Keep a550 in ready: no live card and no final report. Its strip card is the
+  // prototype ask declared by its implementer in a parcial report (below).
+  db.prepare(`UPDATE tasks SET card_id = ?, updated_at = ? WHERE id = ?`).run(deadProto, now - 60_000, proto);
   const link = db.prepare(
     `INSERT OR REPLACE INTO task_cards
        (task_id, card_id, role, linked_at, provider, reservation_state, reserved_order, released_at)
@@ -605,6 +607,20 @@ export function wireLiveLinks(dbPath, clock = FILA_V3_CLOCK) {
       taskId: review,
     }),
     now - 6 * 60_000,
+  );
+  // The explicit signal of a prototype waiting for approval: a parcial report
+  // that names the prototype file and asks for approval (3 h ago, as the
+  // prototype reads).
+  report.run(
+    900002,
+    deadProto,
+    JSON.stringify({
+      estado: "parcial",
+      taskId: proto,
+      decisaoTomada: "protótipo pronto",
+      prototype: { path: "Fila-v3.1.dc.html", approval: "requested" },
+    }),
+    now - 3 * 3_600_000,
   );
   db.close();
 }

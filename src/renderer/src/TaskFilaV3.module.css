@@ -159,7 +159,7 @@
   color: var(--card-name);
 }
 
-.needsCardReview {
+.needsCardPrototype {
   border-color: var(--fila-review-needs-border);
   background: var(--fila-review-needs-bg);
 }
@@ -172,7 +172,7 @@
   color: var(--card-warning);
 }
 
-.needsHeadReview {
+.needsHeadPrototype {
   color: var(--fila-link);
 }
 
@@ -184,7 +184,7 @@
   flex: none;
 }
 
-.needsDotReview {
+.needsDotPrototype {
   background: var(--card-live);
 }
 
@@ -196,8 +196,38 @@
 
 .needsActions {
   display: flex;
+  align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+.needsActionsGrow {
+  flex: 1 1 0;
+}
+
+/* Path of the prototype file, muted and mono like the prototype's file line. */
+.needsFile {
+  font-family: var(--font-mono);
+  font-size: var(--fila-text-12);
+  color: var(--card-context);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.needsLink {
+  font: inherit;
+  font-size: var(--fila-text-13);
+  color: var(--fila-link);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.needsLink:hover {
+  color: var(--fila-link-hover);
 }
 
 .board {

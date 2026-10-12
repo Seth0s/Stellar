@@ -192,6 +192,15 @@ export const APP_NOTICE = {
     return singleLine(`${lead}: ${task} (role: ${value(input.role, 24)}) — read it with get_task using taskId ${task}.`);
   },
 
+  /** The owner approved a prototype the agent asked about. It releases the next
+   *  phase; it is NOT the approval of the task. */
+  prototypeApproved(input: { taskId: string; path: string }): string {
+    const task = taskKey(input.taskId);
+    return singleLine(
+      `the owner approved the prototype ${value(input.path, 96)} for task ${task} — this releases the next phase only and does not approve the task; continue the work and conclude with a final report that carries taskId ${task}.`,
+    );
+  },
+
   quotaHealth(input: { cardLabel: string; provider: string; percent: number; threshold: number }): string {
     return singleLine(
       `card ${value(input.cardLabel, 48)} (${value(input.provider, 32)}) provider quota is ${input.percent}% used, past the ${input.threshold}% warning threshold; inspect list_cards for current health.`,

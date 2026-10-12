@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   QUEUE_COLUMN_ORDER,
+  applyPrototypeDismissals,
   columnForQueueTask,
   countQueueFilter,
   decideColumnRails,
@@ -8,6 +9,9 @@ import {
   deriveTileStatusPhrase,
   filterByQueueFilter,
   isDoneToday,
+  loadDismissedPrototypes,
+  prototypeDismissKey,
+  saveDismissedPrototypes,
   summarizeRecentAction,
   taskNeedsYou,
   tileShowsLiveActivity,
@@ -164,23 +168,66 @@ describe("deriveAgoraBanner (DADOS §5)", () => {
 });
 
 describe("taskNeedsYou / filters (DADOS §6)", () => {
-  it("counts only blocked, status-ask, and human review without reviewer", () => {
+  it("counts only blocked, status-ask, and a declared prototype ask", () => {
+    const ask = { path: "fila.dc.html", askedAt: 100 };
     const list = [
       facts({ phase: "running", cardAlive: true, blockedQuestion: {} }),
       facts({ phase: "ready", requestedStatus: "done" }),
-      facts({ phase: "awaiting_review", review: "wanted", cards: [] }),
-      facts({ phase: "awaiting_review", review: "wanted", cards: [{ role: "reviewer" }] }),
+      facts({ phase: "running", cardAlive: true, prototypeAsk: ask }),
       facts({ phase: "running", cardAlive: true }),
     ];
     expect(list.filter(taskNeedsYou)).toHaveLength(3);
     expect(countQueueFilter(list, "needsYou")).toBe(3);
-    expect(countQueueFilter(list, "liveAgent")).toBe(1);
-    expect(filterByQueueFilter(list, "liveAgent")).toHaveLength(1);
+    expect(countQueueFilter(list, "liveAgent")).toBe(2);
+    expect(filterByQueueFilter(list, "liveAgent")).toHaveLength(2);
   });
 
-  it("includes review=wanted while still in Pronta (ready)", () => {
-    expect(taskNeedsYou(facts({ phase: "ready", review: "wanted", cards: [] }))).toBe(true);
-    expect(taskNeedsYou(facts({ phase: "ready", review: "wanted", cards: [{ role: "reviewer" }] }))).toBe(false);
+  it("review=wanted without a reviewer is NOT a prototype waiting (it only lacks a reviewer)", () => {
+    // Three prototype cards once showed up for exactly this case.
+    for (const phase of ["ready", "reserved", "awaiting_review"] as const) {
+      expect(taskNeedsYou(facts({ phase, review: "wanted", cards: [] }))).toBe(false);
+    }
+    expect(countQueueFilter([facts({ phase: "ready", review: "wanted", cards: [] })], "needsYou")).toBe(0);
+  });
+
+  it("a declared prototype ask needs you whatever the review flag", () => {
+    const ask = { path: "fila.dc.html", askedAt: 100 };
+    expect(taskNeedsYou(facts({ phase: "running", cardAlive: true, review: null, prototypeAsk: ask }))).toBe(true);
+    expect(taskNeedsYou(facts({ phase: "running", cardAlive: true, review: null, prototypeAsk: null }))).toBe(false);
+  });
+
+  it("dismissing hides exactly that ask and nothing else", () => {
+    const tasks = [
+      { id: "t1", prototypeAsk: { path: "a.html", askedAt: 100 } },
+      { id: "t2", prototypeAsk: { path: "b.html", askedAt: 200 } },
+      { id: "t3", prototypeAsk: null },
+    ];
+    const dismissed = new Set([prototypeDismissKey("t1", 100)]);
+    const visible = applyPrototypeDismissals(tasks, dismissed);
+    expect(visible.map((task) => task.prototypeAsk?.askedAt ?? null)).toEqual([null, 200, null]);
+    // The task rows are the same tasks: only the ask was taken off.
+    expect(visible.map((task) => task.id)).toEqual(["t1", "t2", "t3"]);
+    // A NEW ask for the same task (a later report) shows again.
+    const renewed = applyPrototypeDismissals([{ id: "t1", prototypeAsk: { path: "a.html", askedAt: 300 } }], dismissed);
+    expect(renewed[0]?.prototypeAsk?.askedAt).toBe(300);
+    // Nothing dismissed: the same tasks come back.
+    expect(applyPrototypeDismissals(tasks, new Set())).toEqual(tasks);
+  });
+
+  it("the dismissed keys survive a reload and tolerate junk", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    });
+    saveDismissedPrototypes("b1", new Set([prototypeDismissKey("t1", 100)]));
+    expect(loadDismissedPrototypes("b1")).toEqual(new Set(["t1:100"]));
+    expect(loadDismissedPrototypes("other")).toEqual(new Set());
+    store.set("stellar.fila.prototypeDismissed.b1", '{"not":"an array"}');
+    expect(loadDismissedPrototypes("b1")).toEqual(new Set());
+    store.set("stellar.fila.prototypeDismissed.b1", "not json");
+    expect(loadDismissedPrototypes("b1")).toEqual(new Set());
+    vi.unstubAllGlobals();
   });
 
   it("Tudo excludes superseded and archived done (Fila.dc.html Tudo 14)", () => {

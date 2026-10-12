@@ -155,6 +155,12 @@ import {
 } from "./message-bus";
 import { createPrototypeServer } from "./prototype-server";
 import { parseManifest, presetUrl, type PrototypePresetInfo } from "./prototype-presets";
+import {
+  derivePrototypeAsk,
+  prototypeApprovalFromResultJson,
+  safePrototypePath,
+  stampPrototypeApprovalJson,
+} from "./prototype-ask-decision";
 import { ensureMcpRegistered } from "./mcp-registration";
 import { gateProgressForTask, parseGateDiffEvidence } from "./gate-runner";
 import { taskGateViewFromResult } from "./gate-notice-decision";
@@ -2011,6 +2017,7 @@ function createWindow() {
     lastActor: "app" | "agent" | "human" | "orchestrator" | null;
     cards: { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[];
     report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
+    prototypeAsk: { path: string; askedAt: number } | null;
     // RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
     // <id>". `deps` é o array cru de `deps_json` (já existia desde a Fase
     // 1); `depStatuses` só cobre OS ids desta lista (nunca o board
@@ -2261,6 +2268,14 @@ function createWindow() {
         lastActor: lastActorByTask.get(t.id) ?? null,
         cards: cardsByTask.get(t.id) ?? [],
         report: report ? { verdict: (report.verdict ?? null) as "aprovado" | "reprovado" | null, updatedAt: report.updated_at } : null,
+        // A prototype the agent declared and asked the owner to approve; derived
+        // from the implementer's reports (prototype-ask-decision.ts).
+        prototypeAsk: derivePrototypeAsk({
+          taskId: t.id,
+          phase,
+          reports: phaseReports,
+          approval: prototypeApprovalFromResultJson(t.result_json),
+        }),
         concludingReportAt: latestConcludingReportAt(t.id, phaseReports),
         deps,
         depStatuses,
@@ -3780,6 +3795,55 @@ function createWindow() {
       return res;
     },
   );
+  // The Fila's prototype-to-approve card. Opening is the owner's own click,
+  // so it skips the consent modal an agent's open_prototype goes through: the
+  // renderer is told to open it exactly like an autonomous-board open.
+  ipcMain.handle("store:tasks:prototype-open", async (_e, taskId: string, rawPath: string) => {
+    const task = store.getTask(taskId);
+    if (!task) return { ok: false, error: `no such task "${taskId}"` };
+    const path = safePrototypePath(rawPath);
+    if (path === null) return { ok: false, error: "that is not a prototype file path" };
+    const board = task.board_id ? store.getBoard(task.board_id) : null;
+    if (!task.board_id || !board || !board.cwd) return { ok: false, error: "the task's board has no project folder" };
+    if (!existsSync(join(board.cwd, "prototypes", path))) {
+      return { ok: false, error: `prototype file not found: prototypes/${path}` };
+    }
+    let port: number;
+    try {
+      port = await prototypeServer.ensureStarted();
+    } catch (err) {
+      return { ok: false, error: `could not start the prototype server: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    const url = presetUrl(`http://127.0.0.1:${port}`, task.board_id, path);
+    const owner = task.card_id ?? store.listLiveImplementersForTask(task.id)[0]?.card_id ?? "";
+    safeSend(win, "browser:ask-open", randomUUID(), owner, url, undefined, true, undefined);
+    return { ok: true, url };
+  });
+  // Approving a prototype stores the owner's answer on the task and tells the
+  // card doing the work to go on. It never changes the task's status.
+  ipcMain.handle("store:tasks:prototype-approve", (_e, taskId: string, rawPath: string, askedAt: number) => {
+    const task = store.getTask(taskId);
+    if (!task) return { ok: false, error: `no such task "${taskId}"` };
+    const path = safePrototypePath(rawPath);
+    if (path === null || typeof askedAt !== "number" || !Number.isFinite(askedAt)) {
+      return { ok: false, error: "that is not a prototype approval" };
+    }
+    const stored = prototypeApprovalFromResultJson(task.result_json);
+    if (stored && stored.askedAt === askedAt && stored.path === path) return { ok: true, notifiedCardId: null };
+    const now = Date.now();
+    persistTask({
+      ...task,
+      result_json: stampPrototypeApprovalJson(task.result_json, { path, askedAt, approvedAt: now }),
+      updated_at: now,
+      actor: "human",
+    });
+    const cardIds = [task.card_id, ...store.listLiveImplementersForTask(task.id).map((l) => l.card_id)].filter(
+      (id, i, all): id is string => typeof id === "string" && id !== "" && all.indexOf(id) === i,
+    );
+    const notifiedCardId =
+      messageBus?.notifyPrototypeApproved({ taskId: task.id, path, cardIds, boardId: task.board_id }) ?? null;
+    return { ok: true, notifiedCardId };
+  });
   // GAVETA (task 377a6029) — a fila de reservas de um card. Leitura pura e as
   // três ações do card ("começar agora", "soltar reserva", reordenar).
   ipcMain.handle("store:tasks:reservations:list", (_e, cardId: string) => messageBus?.handleRequest({ cmd: "list_reservations", cardId }));

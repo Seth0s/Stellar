@@ -1236,6 +1236,10 @@ export type TaskBoardItem = {
     orphan: boolean;
   }[];
   report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
+  /** A prototype the agent declared and asked the owner to approve (a `parcial`
+   *  report with `prototype: { path, approval: "requested" }`). `null`/absent =
+   *  nothing is waiting. `askedAt` is the time of the report that asked. */
+  prototypeAsk?: { path: string; askedAt: number } | null;
   /** Timestamp of the latest concluding implementer report for this task.
    *  `null` when none exists. The charts turn it into the review segment. */
   concludingReportAt?: number | null;
@@ -1382,6 +1386,18 @@ const tasks = {
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
   respondStatusAsk: (taskId: string, allowed: boolean): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:respond-status-ask", taskId, allowed),
+  /** Opens the prototype a task asked the owner to approve, in a browser card,
+   *  served by the board's local prototype server. The click is the consent. */
+  openPrototype: (taskId: string, path: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:prototype-open", taskId, path),
+  /** The owner approves a prototype: stored on the task and the card doing the
+   *  work is told to continue. It does NOT approve the task. */
+  approvePrototype: (
+    taskId: string,
+    path: string,
+    askedAt: number,
+  ): Promise<{ ok: true; notifiedCardId: string | null } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:prototype-approve", taskId, path, askedAt),
   /** Task 22f0a649 — o humano responde a pergunta de `blocked` na Fila. */
   answerBlocked: (
     taskId: string,

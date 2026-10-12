@@ -92,7 +92,9 @@ describe("card footer decisions", () => {
       { phase: "running", cardAlive: true, blockedQuestion: null, requestedStatus: null, review: null, cards: [], updatedAt: 60_000 },
       { phase: "running", cardAlive: false, blockedQuestion: null, requestedStatus: null, review: null, cards: [], updatedAt: 120_000 },
       { phase: "awaiting_review", cardAlive: false, blockedQuestion: null, requestedStatus: null, review: "wanted", cards: [], updatedAt: 180_000 },
+      { phase: "running", cardAlive: true, blockedQuestion: null, requestedStatus: null, review: null, cards: [], prototypeAsk: { path: "a.html", askedAt: 1 }, updatedAt: 90_000 },
     ], 240_000);
-    expect(pulse).toEqual({ working: 1, review: 1, needsHuman: 1, latestAge: "há 1 min" });
+    // A task that only lacks a reviewer counts as awaiting review, never as needing the owner.
+    expect(pulse).toEqual({ working: 2, review: 1, needsHuman: 1, latestAge: "há 1 min" });
   });
 });

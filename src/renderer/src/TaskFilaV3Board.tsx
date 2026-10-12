@@ -9,8 +9,10 @@ import {
   deriveTileGateChips,
   deriveTileStatusPhrase,
   deriveTileTypeLabel,
+  applyPrototypeDismissals,
   isDoneToday,
   loadCollapsedColumns,
+  prototypeDismissKey,
   saveCollapsedColumns,
   taskNeedsYou,
   tileShowsLiveActivity,
@@ -21,6 +23,8 @@ import { boardItemTitle, queueFactsFromBoardItem } from "./task-fila-v3-facts";
 import { blockedQuestionOf } from "./task-board-model";
 import { describeGateChip, type GateChipTone } from "./task-gate-view";
 import { t } from "../../shared/i18n";
+import { setPrototypeDismissedKey, useDismissedPrototypes } from "./task-fila-prototype-dismissals";
+import { toast } from "./useToast";
 import styles from "./TaskFilaV3.module.css";
 
 const GATE_TONE_CLASS: Record<GateChipTone, string> = {
@@ -69,10 +73,16 @@ function NeedsYouStrip({
   tasks,
   now,
   onOpen,
+  onOpenPrototype,
+  onApprovePrototype,
+  onDismissPrototype,
 }: {
   tasks: TaskBoardItem[];
   now: number;
   onOpen: (id: string) => void;
+  onOpenPrototype: (task: TaskBoardItem) => void;
+  onApprovePrototype: (task: TaskBoardItem) => void;
+  onDismissPrototype: (task: TaskBoardItem) => void;
 }) {
   const items = tasks.filter((task) => taskNeedsYou(queueFactsFromBoardItem(task))).slice(0, 3);
   if (items.length === 0) return null;
@@ -81,15 +91,14 @@ function NeedsYouStrip({
       {items.map((task) => {
         const facts = queueFactsFromBoardItem(task);
         const blocked = blockedQuestionOf(task);
-        const isReview =
-          facts.review === "wanted" &&
-          !facts.cards.some((c) => c.role === "reviewer") &&
-          !blocked &&
-          !facts.requestedStatus &&
-          (facts.phase === "awaiting_review" || facts.phase === "ready" || facts.phase === "reserved");
-        const ageMs = blocked?.askedAt ? now - blocked.askedAt : task.requestedAt ? now - task.requestedAt : null;
+        // A prototype card exists only when the agent declared one and asked for
+        // approval (task.prototypeAsk); a question or a status ask comes first.
+        const proto = !blocked && !facts.requestedStatus ? (task.prototypeAsk ?? null) : null;
+        const isReview = proto !== null;
+        const askedAt = blocked?.askedAt ?? proto?.askedAt ?? task.requestedAt ?? null;
+        const ageMs = askedAt ? now - askedAt : null;
         const ageH = ageMs != null && ageMs > 0 ? Math.max(1, Math.floor(ageMs / 3_600_000)) : null;
-        const bodyRaw = blocked?.text ?? task.requestedReason ?? boardItemTitle(task);
+        const bodyRaw = blocked?.text ?? (proto ? null : task.requestedReason) ?? boardItemTitle(task);
         // Owner: do not repeat the id when the body already starts with #…
         const body = /^#\w/.test(bodyRaw.trim()) ? bodyRaw.trim() : `#${shortTaskId(task.id)} ${bodyRaw}`;
         const groupMatch = !blocked && facts.requestedStatus
@@ -99,16 +108,18 @@ function NeedsYouStrip({
         return (
           <div
             key={task.id}
-            className={`${styles.needsCard}${isReview ? ` ${styles.needsCardReview}` : ""}`}
+            className={`${styles.needsCard}${isReview ? ` ${styles.needsCardPrototype}` : ""}`}
             data-part="needs-you-card"
           >
             <div
-              className={`${styles.needsHead}${isReview ? ` ${styles.needsHeadReview}` : ""}`}
+              className={`${styles.needsHead}${isReview ? ` ${styles.needsHeadPrototype}` : ""}`}
               data-part="needs-you-head"
             >
-              <span className={`${styles.needsDot}${isReview ? ` ${styles.needsDotReview}` : ""}`} />
+              <span className={`${styles.needsDot}${isReview ? ` ${styles.needsDotPrototype}` : ""}`} />
               {isReview
-                ? t("task.queue.needs.reviewTitle")
+                ? ageH
+                  ? t("task.queue.needs.prototypeTitleAge", { h: ageH })
+                  : t("task.queue.needs.prototypeTitle")
                 : ageH
                   ? t("task.queue.needs.questionAge", { h: ageH })
                   : t("task.queue.needs.question")}
@@ -116,8 +127,57 @@ function NeedsYouStrip({
             <span className={styles.needsBody} data-part="needs-you-body">
               {body}
             </span>
+            {proto && (
+              <span className={styles.needsFile} data-part="prototype-file" title={`prototypes/${proto.path}`}>
+                prototypes/{proto.path}
+              </span>
+            )}
             <div className={styles.needsActions}>
-              {blocked
+              {proto
+                ? [
+                    <button
+                      key="open"
+                      type="button"
+                      className={`${styles.btn} ${styles.btnPrimary}`}
+                      data-no-drag
+                      data-part="prototype-open"
+                      onClick={() => onOpenPrototype(task)}
+                    >
+                      {t("task.queue.needs.openPrototype")}
+                    </button>,
+                    <button
+                      key="approve"
+                      type="button"
+                      className={styles.btn}
+                      data-no-drag
+                      data-part="prototype-approve"
+                      onClick={() => onApprovePrototype(task)}
+                    >
+                      {t("task.queue.needs.approve")}
+                    </button>,
+                    <button
+                      key="dismiss"
+                      type="button"
+                      className={styles.btn}
+                      data-no-drag
+                      data-part="prototype-dismiss"
+                      onClick={() => onDismissPrototype(task)}
+                    >
+                      {t("task.queue.needs.dismiss")}
+                    </button>,
+                    <span key="grow" className={styles.needsActionsGrow} aria-hidden="true" />,
+                    <button
+                      key="task"
+                      type="button"
+                      className={styles.needsLink}
+                      data-no-drag
+                      data-part="prototype-task-link"
+                      onClick={() => onOpen(task.id)}
+                    >
+                      {t("task.queue.needs.viewTask")}
+                    </button>,
+                  ]
+                : blocked
                 ? blocked.options.map((opt) => (
                     <button
                       key={opt.id}
@@ -328,7 +388,7 @@ function QueueTile({
 }
 
 export function TaskFilaV3Board({
-  tasks,
+  tasks: boardTasks,
   now,
   query,
   onQueryChange,
@@ -365,6 +425,13 @@ export function TaskFilaV3Board({
   sprintLabel: string | null;
 }) {
   const [filter, setFilter] = useState<QueueFilter>("all");
+  // Prototype cards the owner dismissed. Everything below reads `tasks` with
+  // those asks removed, so the strip, the chip and the footer agree.
+  const dismissedPrototypes = useDismissedPrototypes(boardId);
+  const tasks = useMemo(
+    () => applyPrototypeDismissals(boardTasks, dismissedPrototypes),
+    [boardTasks, dismissedPrototypes],
+  );
   const [userCollapsed, setUserCollapsed] = useState<Set<QueueColumn>>(() => loadCollapsedColumns(boardId));
   const [userExpanded, setUserExpanded] = useState<Set<QueueColumn>>(() => new Set());
   const [boardWidth, setBoardWidth] = useState(0);
@@ -374,6 +441,42 @@ export function TaskFilaV3Board({
     setUserCollapsed(loadCollapsedColumns(boardId));
     setUserExpanded(new Set());
   }, [boardId]);
+
+  function setPrototypeDismissed(task: TaskBoardItem, dismissed: boolean) {
+    if (!task.prototypeAsk) return;
+    setPrototypeDismissedKey(boardId, prototypeDismissKey(task.id, task.prototypeAsk.askedAt), dismissed);
+  }
+
+  // "Abrir" opens the PROTOTYPE; the task detail is the secondary link.
+  async function openPrototype(task: TaskBoardItem) {
+    if (!task.prototypeAsk) return;
+    const res = await window.tasks.openPrototype(task.id, task.prototypeAsk.path);
+    if (!res.ok) toast(res.error);
+  }
+
+  // Approving only releases the next phase: the task's own status is untouched.
+  async function approvePrototype(task: TaskBoardItem) {
+    if (!task.prototypeAsk) return;
+    const res = await window.tasks.approvePrototype(task.id, task.prototypeAsk.path, task.prototypeAsk.askedAt);
+    if (!res.ok) {
+      toast(res.error);
+      return;
+    }
+    toast(
+      res.notifiedCardId
+        ? t("task.queue.needs.prototypeApproved", { id: shortTaskId(task.id) })
+        : t("task.queue.needs.prototypeApprovedNobody"),
+    );
+  }
+
+  // Dismissing only takes the card off the strip; Desfazer brings it back.
+  function dismissPrototype(task: TaskBoardItem) {
+    setPrototypeDismissed(task, true);
+    toast(t("task.queue.needs.prototypeDismissed"), {
+      label: t("task.queue.needs.undo"),
+      onClick: () => setPrototypeDismissed(task, false),
+    });
+  }
 
   useEffect(() => {
     const el = boardRef.current;
@@ -663,7 +766,16 @@ export function TaskFilaV3Board({
         )}
       </header>
 
-      {filter !== "liveAgent" && <NeedsYouStrip tasks={tasks} now={now} onOpen={onOpenTask} />}
+      {filter !== "liveAgent" && (
+        <NeedsYouStrip
+          tasks={tasks}
+          now={now}
+          onOpen={onOpenTask}
+          onOpenPrototype={(task) => void openPrototype(task)}
+          onApprovePrototype={(task) => void approvePrototype(task)}
+          onDismissPrototype={dismissPrototype}
+        />
+      )}
 
       <div
         ref={boardRef}

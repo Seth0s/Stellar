@@ -71,6 +71,7 @@ export function queueFactsFromBoardItem(
     contextPercent: extras?.contextPercent ?? null,
     hasReportThisRound: extras?.hasReportThisRound ?? (task.report != null ? true : false),
     blockedAskedAt: task.blockedQuestion?.askedAt ?? null,
+    prototypeAsk: task.prototypeAsk ?? null,
     gateRedOutsideTerritory: outside,
     gateFailedFilesOutside:
       extras?.gateFailedFilesOutside ?? task.gateRun?.isolation?.undeclaredInTerritory.length ?? null,

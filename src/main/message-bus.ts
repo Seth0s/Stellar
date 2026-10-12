@@ -4598,6 +4598,35 @@ export function createMessageBus(
   }
 
   /**
+   * The owner approved a prototype the agent asked about: tell the card that
+   * does the work so the next phase starts by itself. Candidates are tried in
+   * order (the implementer cards first, then the board's orchestrator) and the
+   * first one that can read a typed line gets it. Same eligibility as
+   * `notifyHumanMovedTask`: alive, a terminal card, and not a plain shell
+   * (typing into a shell would run the text as a command).
+   *
+   * Returns the card that was told, or `null` when nobody could be (the
+   * approval is already stored on the task, so nothing is lost).
+   */
+  function notifyPrototypeApproved(input: { taskId: string; path: string; cardIds: readonly string[]; boardId: string | null }): string | null {
+    const candidates = [...input.cardIds];
+    const orchestrator = input.boardId ? callbacks.getBoardOrchestratorCardId(input.boardId) : null;
+    if (orchestrator) candidates.push(orchestrator);
+    for (const cardId of candidates) {
+      if (!cardId || !callbacks.isCardAlive(cardId)) continue;
+      const card = listTerminalCards().find((c) => c.id === cardId);
+      if (!card || isShellProvider(card.provider ?? null)) continue;
+      const message = formatAgentFacingAuthorship(
+        "stellar",
+        APP_NOTICE.prototypeApproved({ taskId: input.taskId, path: input.path }),
+      );
+      enqueueCardDelivery(cardId, message, { steer: true });
+      return cardId;
+    }
+    return null;
+  }
+
+  /**
    * Aviso CURTO ao card que acabou de ser ligado a uma task (task 618d179a,
    * `link_task_card`). Ele NÃO é o enunciado: o enunciado vive no `prompt` da
    * task e o agente o lê com `get_task`. Repetir o texto aqui só mudaria quem
@@ -10519,6 +10548,7 @@ export function createMessageBus(
     scanStuckReservations,
     notifyConcurrencyCapChanged,
     notifyHumanMovedTask,
+    notifyPrototypeApproved,
     /** NÃO-SILÊNCIO do contexto perdido (task ea71065e) — o registry avisa o
      * bus quando o watcher de sessão não conseguiu atribuir o id a um card de
      * task; o bus entrega o aviso ao ORQUESTRADOR do board. */
