@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connectPage, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
+import { connectPage, ensureTeamProfile, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROTO_DIR = join(PROJECT_ROOT, "docs/design/app-v2/prototipo");
@@ -417,6 +417,7 @@ try {
   await waitForCloud(ownerPage);
   await ownerPage.evalJs(`(async () => { await window.team.create({ name: "Idy Platform" }); })()`);
 
+  await ensureTeamProfile(ownerPage);
   await ownerPage.evalJs(`document.querySelector('[data-section="team"]').click()`);
   check("team section opens", await waitFor(ownerPage, `!!document.querySelector('[data-team-sub="overview"]')`), true);
 
@@ -592,6 +593,7 @@ try {
   await memberPage.send("Page.enable");
   await memberPage.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await waitForCloud(memberPage);
+  await ensureTeamProfile(memberPage);
   await memberPage.evalJs(`document.querySelector('[data-section="team"]').click()`);
   await waitFor(memberPage, `!!document.querySelector('[data-part="team-open-integrations"]')`);
   await memberPage.evalJs(`document.querySelector('[data-part="team-open-integrations"]')?.click()`);

@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connectPage, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
+import { connectPage, ensureTeamProfile, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROTO_DIR = join(PROJECT_ROOT, "docs/design/app-v2/prototipo");
@@ -485,6 +485,7 @@ async function openTeam(page) {
   await waitFor(page, `!!(${q('[data-role="profile-trigger"]')} || ${q('[data-role="firstrun-local"]')})`);
   await dismissFirstRun(page);
   await waitLoggedIn(page);
+  await ensureTeamProfile(page);
   await waitFor(page, `!!${q('[data-section="team"]')}`);
   await click(page, '[data-section="team"]');
 }

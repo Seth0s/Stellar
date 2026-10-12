@@ -43,8 +43,28 @@ export function isConnectivityFailure(raw: string | null | undefined): boolean {
   return !!raw && CONNECTIVITY_PATTERN.test(raw);
 }
 
+/** What an offline start still knows of the account: who it is and when that was last confirmed. */
+export type OfflineAccount = { account: CloudAccountInfo; savedAtMs: number };
+
+/** The cached account of an offline saved session, or `null` when the machine has none. */
+export function readOfflineAccount(status: CloudStatusInfo | null | undefined): OfflineAccount | null {
+  if (status?.state !== "logged-out") return null;
+  const raw = (status as { cachedAccount?: { account?: CloudAccountInfo; savedAtMs?: unknown } }).cachedAccount;
+  if (!raw || typeof raw.savedAtMs !== "number" || !raw.account || !Array.isArray(raw.account.identities)) return null;
+  return { account: raw.account, savedAtMs: raw.savedAtMs };
+}
+
 /** A saved session exists but the API is unreachable; the app retries by itself. */
 export function isSessionOffline(status: CloudStatusInfo | null | undefined): boolean {
   if (status?.state !== "logged-out") return false;
   return (status as { sessionOffline?: unknown }).sessionOffline === true;
+}
+
+/** "12/10 14:32" in the user's locale: when a stale piece of data was last refreshed. */
+export function formatStaleStamp(ms: number, locale: string): string {
+  try {
+    return new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toISOString().slice(0, 16).replace("T", " ");
+  }
 }

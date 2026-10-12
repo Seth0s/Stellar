@@ -1,0 +1,41 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s2);
+  max-height: 280px;
+  overflow-y: auto;
+  margin: var(--v2-s5) 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+  padding: var(--v2-s5) var(--v2-s6);
+  border-radius: var(--v2-r9);
+  background: var(--v2-card);
+  border: 1px solid var(--v2-line-soft);
+  cursor: pointer;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s1);
+  min-width: 0;
+}
+
+.name {
+  font-size: var(--v2-f13h);
+  font-weight: 600;
+  color: var(--v2-text);
+}
+
+.path {
+  font-family: var(--font-mono);
+  font-size: var(--v2-f12);
+  color: var(--v2-text-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

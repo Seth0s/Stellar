@@ -460,6 +460,57 @@ describe("cloud-auth (loopback, backend falso)", () => {
     expect(second.getStatus()).toMatchObject({ state: "logged-in" });
   });
 
+  it("sem conexão no boot: o status traz a conta que a máquina já conhecia e de QUANDO ela é", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    const savedAt = clock; // the login wrote the cache at this time
+
+    clock += 3_600_000;
+    const offline = createCloudAuth({
+      apiBaseUrl: backend.baseUrl,
+      dataDir: dir,
+      identity: () => ({ userId: USER_ID, installId: INSTALL_ID }),
+      openUrl,
+      deviceLabel: "test",
+      now: () => clock,
+      fetchImpl: (() => Promise.reject(new TypeError("fetch failed"))) as typeof fetch,
+      restoreRetryMs: 0,
+    });
+    auths.push(offline);
+    await offline.restore();
+    const status = offline.getStatus();
+    expect(status).toMatchObject({ state: "logged-out", sessionOffline: true });
+    expect(status.state === "logged-out" && status.cachedAccount?.account.displayName).toBe("Ana");
+    expect(status.state === "logged-out" && status.cachedAccount?.account.identities[0]).toMatchObject({ kind: "github", subject: "42" });
+    expect(status.state === "logged-out" && status.cachedAccount?.savedAtMs).toBe(savedAt);
+  });
+
+  it("logout apaga a conta guardada: um boot offline depois dele não mostra mais nada", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    await first.logout();
+
+    const offline = createCloudAuth({
+      apiBaseUrl: backend.baseUrl,
+      dataDir: dir,
+      identity: () => ({ userId: USER_ID, installId: INSTALL_ID }),
+      openUrl,
+      deviceLabel: "test",
+      now: () => clock,
+      fetchImpl: (() => Promise.reject(new TypeError("fetch failed"))) as typeof fetch,
+      restoreRetryMs: 0,
+    });
+    auths.push(offline);
+    await offline.restore();
+    const status = offline.getStatus();
+    expect(status.state === "logged-out" && status.cachedAccount).toBeFalsy();
+    expect(status.state === "logged-out" && status.sessionOffline).toBeFalsy();
+  });
+
   it("retry() manual: restaura na hora, sem esperar o timer", async () => {
     const first = make();
     await first.beginLogin("github");

@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bootIntoFreshSession, connectPage, ensureAccountScope, ensureLocalScope, makeChecker, pickFreePort, spawnCard, startApp, stopApp } from "./cdp-client.mjs";
+import { bootIntoFreshSession, connectPage, ensureAccountScope, ensureLocalScope, ensureTeamProfile, makeChecker, pickFreePort, spawnCard, startApp, stopApp } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROTO_DIR = join(PROJECT_ROOT, "docs/design/app-v2/prototipo");
@@ -452,6 +452,7 @@ try {
     taskView({ id: randomUUID(), short_id: 11, ref: "#11", title: "Ajustar tradução do e-mail", kind: "corrigir", state: "concluida", assignee_id: OWNER_ACC, origin_kind: "csv", updated_at: minutesAgo(600) }),
   ]);
 
+  await ensureTeamProfile(ownerPage);
   await ownerPage.evalJs(`document.querySelector('[data-section="team"]').click()`);
   check("a tela do time abre na visão geral", await waitFor(ownerPage, `!!document.querySelector('[data-team-sub="overview"]')`), true);
   await delay(400);
@@ -575,7 +576,7 @@ try {
   check("membro tem um board local para a Fila", typeof boardId === "string" && boardId.length > 0, true);
   await memberPage.evalJs(`document.querySelector('.topbar-home')?.click()`);
   await waitFor(memberPage, `!!document.querySelector('[data-role="profile-trigger"]')`);
-  await ensureAccountScope(memberPage);
+  await ensureTeamProfile(memberPage);
   await waitFor(memberPage, `!!document.querySelector('[data-section="team"]')`);
 
   await memberPage.evalJs(`document.querySelector('[data-section="team"]').click()`);

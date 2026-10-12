@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
-import { connectPage, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
+import { connectPage, ensureTeamProfile, makeChecker, pickFreePort, startApp, stopApp } from "./cdp-client.mjs";
 
 const PROTO_DIR =
   process.env.STELLAR_PROTO_DIR ?? "/home/lucas/Workplace/Projects/StellarCloud/docs/stellar/design/app-v2/prototipo";
@@ -394,6 +394,7 @@ try {
   check("seeded 324 local tasks", expected.length, 324);
   check("seeded 219 open tasks", openIds.size, 219);
 
+  await ensureTeamProfile(page);
   await click(page, '[data-section="team"]');
   check("team section opens", await waitFor(page, `!!document.querySelector('[data-team-sub="import"]')`), true);
   const openWizard = async () => {

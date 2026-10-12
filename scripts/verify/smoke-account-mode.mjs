@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   bootIntoFreshSession,
+  ensureTeamProfile,
   connectPage,
   makeChecker,
   pickFreePort,
@@ -392,7 +393,10 @@ try {
       const nav = await cloudNavState(page);
       check("logged-in: inbox nav visible", nav.inbox, true);
       check("logged-in: workhome nav visible", nav.workhome, true);
-      check("logged-in: team nav visible", nav.team, true);
+      // Time belongs to the team profile: hidden under Pro, there once the team profile is picked.
+      check("logged-in: team nav hidden under the personal profile", nav.team, false);
+      await ensureTeamProfile(page);
+      check("logged-in: team nav visible under the team profile", (await cloudNavState(page)).team, true);
       await shot(page, "logged-shell");
 
       const overlay = await openBoardAndOverlays(page, "logged");
@@ -425,8 +429,11 @@ try {
     seed: seedLocal,
     apiBase,
     body: async (page, app) => {
-      await waitFor(page, `!!(document.querySelector('[data-section="sessions"]') || document.querySelector('[data-role="firstrun-local"]') || document.querySelector('[data-role="sign-in"]'))`);
+      await waitFor(page, `!!(document.querySelector('[data-section="sessions"]') || document.querySelector('[data-role="firstrun-local"]'))`);
       await dismissFirstRunIfNeeded(page);
+      // Sign-in lives in the one account/profile control: open it, then pick "Entrar".
+      await waitFor(page, `!!document.querySelector('[data-role="profile-trigger"]')`);
+      await page.evalJs(`document.querySelector('[data-role="profile-trigger"]').click()`);
       await waitFor(page, `!!document.querySelector('[data-role="sign-in"]')`);
       await page.evalJs(`document.querySelector('[data-role="sign-in"]').click()`);
       await waitFor(page, `!!document.querySelector('[data-login-choose]')`);

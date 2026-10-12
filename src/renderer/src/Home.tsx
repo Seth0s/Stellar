@@ -101,6 +101,9 @@ export function Home({
   onUpdateBoard,
   onDeleteBoard,
   onOpenInbox,
+  contextPill,
+  accountEmpty,
+  staleNotice,
 }: {
   boards: BoardRow[];
   boardCounts: Record<string, BoardCounts>;
@@ -119,6 +122,13 @@ export function Home({
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
   onOpenInbox?: () => void;
+  /** Names the account profile whose sessions this is (absent on the local list). */
+  contextPill?: string;
+  /** Set in the account scope: the empty state explains that account sessions are the account's own,
+   *  and offers the import of local ones when there are any. */
+  accountEmpty?: { onImport?: () => void };
+  /** Set when the account's data on screen is stale (no connection): says since when. */
+  staleNotice?: string;
 }) {
   const [modal, setModal] = useState<ModalState>(null);
   /** Session awaiting confirmation before it is stopped (an agent is running
@@ -175,11 +185,23 @@ export function Home({
     <div className={`${styles.page} home`}>
       <div className={`${styles.header} home-header`}>
         <div className={styles.titleCol}>
-          <h1 className={styles.h1}>{t("home.sessions")}</h1>
+          <h1 className={styles.h1}>
+            {t("home.sessions")}
+            {contextPill ? (
+              <span className={styles.contextPill} data-role="context-pill">
+                {contextPill}
+              </span>
+            ) : null}
+          </h1>
           <div className={styles.subtitle}>
             {t("home.sessions.subtitle", { s: sessionsPart, f: foldersPart })}
             {tasksPart}
           </div>
+          {staleNotice ? (
+            <div className={styles.staleNotice} data-role="stale-notice" role="status">
+              {staleNotice}
+            </div>
+          ) : null}
         </div>
         <label className={styles.search}>
           <span className={styles.searchIcon}>
@@ -217,8 +239,8 @@ export function Home({
             </svg>
           </div>
           <div>
-            <h2 className={styles.emptyTitle}>{t("home.empty.title")}</h2>
-            <p className={styles.emptyText}>{t("home.empty.text")}</p>
+            <h2 className={styles.emptyTitle}>{accountEmpty ? t("home.empty.account.title") : t("home.empty.title")}</h2>
+            <p className={styles.emptyText}>{accountEmpty ? t("home.empty.account.text") : t("home.empty.text")}</p>
           </div>
           <div className={styles.emptyActions}>
             <button type="button" className="primary" onClick={() => openCreate()}>
@@ -227,6 +249,11 @@ export function Home({
               </svg>
               {t("home.createFirst")}
             </button>
+            {accountEmpty?.onImport ? (
+              <button type="button" className={styles.ghostBtn} data-role="account-import-open" onClick={accountEmpty.onImport}>
+                {t("home.empty.account.import")}
+              </button>
+            ) : null}
             <button type="button" className={styles.ghostBtn} onClick={onChangeRoot}>
               <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
                 <path d="M1.8 4.5a1 1 0 0 1 1-1h3.4l1.4 1.6h5.6a1 1 0 0 1 1 1v6.4a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z" />

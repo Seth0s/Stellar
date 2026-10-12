@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Conta e perfil</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.mono{font-family:'JetBrains Mono',monospace}
+.nav{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:8px;color:#a3aabb;font-size:13.5px;box-sizing:border-box}
+.navOn{background:#182037;color:#fff}
+.navSub{margin-left:auto;font-size:11.5px;color:#8d94a6}
+.navDim{opacity:.55}
+.sub2{display:flex;align-items:center;height:30px;padding:0 10px 0 36px;border-radius:7px;color:#8d94a6;font-size:13px}
+.row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:#e8eaf0}
+.row:hover{background:#1c2130}
+.rowOff{opacity:.5}
+.av{width:34px;height:34px;flex:none;border-radius:9px;display:grid;place-items:center;font-size:14px;font-weight:700}
+.avS{width:30px;height:30px;border-radius:8px;font-size:13px}
+.avP{background:#262d52;color:#c7d0ff}
+.avT{background:#123a35;color:#8ee6d8}
+.avA{background:#2b2350;color:#d9ccff}
+.head{padding:6px 10px 5px;font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:.08em;color:#8d94a6}
+.act{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:#d6dae4;font-size:13.5px}
+.act:hover{background:#1c2130}
+.card{border-radius:12px;background:#12151d;border:1px solid #20242f;padding:14px;display:flex;flex-direction:column;gap:6px}
+.btn{height:34px;padding:0 14px;border-radius:9px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.btnG{background:#12151d;border:1px solid #2a2f3d;color:#d6dae4;font-weight:400}
+.btnL{height:44px;padding:0 18px;border-radius:10px;border:0;background:#4a5fe0;color:#fff;font:inherit;font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;box-sizing:border-box}
+.btnGh{height:44px;border-radius:10px;border:0;background:#fff;color:#0b0d12;font:inherit;font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;box-sizing:border-box}
+.btnO{height:40px;padding:0 16px;border-radius:10px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:14px;display:inline-flex;align-items:center}
+.inp{height:44px;border-radius:10px;border:1px solid #2a2f3d;background:#0f1218;color:#e8eaf0;font:inherit;font-size:14px;padding:0 14px;display:flex;align-items:center;box-sizing:border-box;width:100%}
+.seg{flex:1;height:4px;border-radius:3px;background:#232838}
+.feat{display:flex;gap:12px;align-items:flex-start}
+.featI{width:32px;height:32px;border-radius:9px;background:#161b2e;color:#b9c4ff;display:grid;place-items:center;flex:none}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #05060a; padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 10px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <sc-for list="{{scenes}}" as="s" hint-placeholder-count="6"><button type="button" class="{{s.cls}}" onClick="{{s.go}}">{{s.label}}</button></sc-for>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
+  </div>
+
+  <sc-if value="{{showLogin}}" hint-placeholder-val="{{ false }}">
+  <div data-part="login" data-step="{{loginStep}}" style="flex: 1; min-height: 0; display: flex; border-radius: 12px; overflow: hidden; border: 1px solid #1a1e28; background: #0b0d12; position: relative">
+    <sc-if value="{{loginChoose}}" hint-placeholder-val="{{ true }}">
+      <section style="width: 50%; display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 0 70px; box-sizing: border-box; background: #0e1016; border-right: 1px solid #1a1e28">
+        <div style="display: flex; align-items: center; gap: 12px"><span class="av avP" style="width: 40px; height: 40px">S</span><span style="font-size: 20px; font-weight: 600">Stellar</span></div>
+        <h2 style="margin: 0; font-size: 26px; font-weight: 600; line-height: 1.25">Sua casa de trabalho vai junto com você.</h2>
+        <div class="feat"><span class="featI">▤</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Em qualquer máquina</span><span style="font-size: 13px; color: #8d94a6; line-height: 1.5">Regras, skills, memórias e agentes das suas CLIs chegam prontos.</span></span></div>
+        <div class="feat"><span class="featI">◍</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 14px; font-weight: 600">Pessoal e empresa separados</span><span style="font-size: 13px; color: #8d94a6; line-height: 1.5">Cada perfil tem suas sessões, sua casa e o login de cada CLI.</span></span></div>
+      </section>
+      <section style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative">
+        <button type="button" aria-label="Voltar sem entrar" style="position: absolute; right: 24px; top: 20px; width: 32px; height: 32px; border-radius: 9px; border: 1px solid #2a2f3d; background: #161a24; color: #c9cede; display: grid; place-items: center"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+        <div data-part="login-form" style="width: 380px; display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; flex-direction: column; gap: 6px"><h1 style="margin: 0; font-size: 26px; font-weight: 600">Conta Stellar</h1><span style="font-size: 13.5px; color: #8d94a6; line-height: 1.5">Abrimos o navegador do sistema para você entrar. Nenhuma senha fica guardada no app.</span></div>
+          <div class="btnGh" data-part="login-github">Entrar com GitHub</div>
+          <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #8d94a6"><span style="flex: 1; height: 1px; background: #232838"></span>ou com e-mail<span style="flex: 1; height: 1px; background: #232838"></span></div>
+          <div style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12.5px; color: #c9cede">E-mail</span><span class="inp" data-part="login-email" style="color: {{emailColor}}">{{emailText}}</span></div>
+          <div class="btnL" data-part="login-send">{{sendLabel}}</div>
+          <sc-if value="{{loginError}}" hint-placeholder-val="{{ false }}"><div role="alert" data-part="login-error" style="font-size: 12.5px; color: #f2c96a; line-height: 1.5">Não foi possível falar com o servidor do Stellar. Confira sua conexão e tente de novo.</div></sc-if>
+          <span style="font-size: 12px; color: #8d94a6; line-height: 1.5">Ao entrar, você concorda com os Termos de uso e a Privacidade.</span>
+          <div style="height: 1px; background: #1a1e28"></div>
+          <span style="font-size: 13.5px; color: #c9cede">Continuar sem conta, só nesta máquina →</span>
+        </div>
+      </section>
+    </sc-if>
+    <sc-if value="{{loginWaiting}}" hint-placeholder-val="{{ false }}">
+      <div style="flex: 1; display: grid; place-items: center">
+        <div data-part="login-wait" style="width: 560px; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; padding: 28px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; font-size: 12.5px; color: #8d94a6"><span>{{stepText}}</span><span style="flex: 1"></span><span style="color: #8f9cff">Cancelar</span></div>
+            <div style="display: flex; gap: 6px"><span class="seg" style="background: #5fd08a"></span><span class="seg" style="background: {{seg2}}"></span><span class="seg"></span><span class="seg"></span></div>
+          </div>
+          <sc-if value="{{waitEmail}}" hint-placeholder-val="{{ true }}">
+            <span class="av" style="width: 44px; height: 44px; background: #12151d; border: 1px solid #20242f; color: #d6dae4"><svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.6"></rect><path d="M2.6 4.6L8 8.6l5.4-4"></path></svg></span>
+            <div style="display: flex; flex-direction: column; gap: 6px"><h1 style="margin: 0; font-size: 22px; font-weight: 600">Abra o link do e-mail</h1><span style="font-size: 14px; color: #9aa1b2; line-height: 1.5">Enviamos um link para ana@example.com. Abra-o para entrar — esta tela segue sozinha.</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #0f1218; border: 1px solid #20242f; font-size: 12.5px; color: #9aa1b2">Esperando a resposta do e-mail · expira em 4:52</div>
+            <div style="display: flex"><span class="btnO">Voltar</span></div>
+          </sc-if>
+          <sc-if value="{{waitGithub}}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; flex-direction: column; gap: 6px"><h1 style="margin: 0; font-size: 22px; font-weight: 600">Abrindo o navegador</h1><span style="font-size: 14px; color: #9aa1b2; line-height: 1.5">Uma aba vai abrir no seu navegador padrão. Se não abriu, use o botão abaixo.</span></div>
+            <div style="display: flex; gap: 10px; align-items: center"><span class="btnO">Abrir de novo</span><span class="btnO">Copiar link</span><span style="flex: 1"></span><span class="btn" style="height: 40px">A aba abriu</span></div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{showShell}}" hint-placeholder-val="{{ true }}">
+  <div data-part="app" data-state="{{cena}}" style="flex: 1; min-height: 0; display: flex; border-radius: 12px; overflow: hidden; border: 1px solid #1a1e28; background: #0b0d12; position: relative">
+    <!-- Sidebar: ONE control for account and profile at the top; no account card at the bottom. -->
+    <aside style="width: 264px; flex: none; display: flex; flex-direction: column; gap: 14px; padding: 18px 14px; box-sizing: border-box; background: #0e1016; border-right: 1px solid #1a1e28; position: relative">
+      <button type="button" data-part="switcher" aria-haspopup="menu" aria-expanded="{{menuOpen}}" style="display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; background: #141823; border: 1px solid {{triggerBorder}}; color: #e8eaf0; font: inherit; text-align: left; cursor: pointer; width: 100%; box-sizing: border-box">
+        <span class="av {{triggerAv}}" style="position: relative">{{triggerInitials}}<sc-if value="{{triggerWarn}}" hint-placeholder-val="{{ false }}"><span style="position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; background: #f2c96a; border: 2px solid #141823"></span></sc-if></span>
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span data-part="switcher-name" style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{triggerName}}</span>
+          <span data-part="switcher-sub" style="font-size: 12px; color: {{triggerSubColor}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{triggerSub}}</span>
+        </span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><path d="{{chevron}}"></path></svg>
+      </button>
+
+      <nav aria-label="Seções" style="display: flex; flex-direction: column; gap: 2px" data-part="nav">
+        <sc-for list="{{nav}}" as="n" hint-placeholder-count="5">
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div class="{{n.cls}}" data-nav="{{n.id}}">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="{{n.icon}}"></path></svg>
+              <span>{{n.label}}</span>
+              <span class="navSub" style="color: {{n.subColor}}">{{n.sub}}</span>
+            </div>
+            <sc-if value="{{n.hasChildren}}" hint-placeholder-val="{{ false }}">
+              <div class="sub2" style="color: #c7d0ff; background: #182037">Visão geral</div>
+              <div class="sub2">Board</div>
+              <sc-if value="{{n.showMembers}}" hint-placeholder-val="{{ true }}"><div class="sub2">Membros</div></sc-if>
+            </sc-if>
+          </div>
+        </sc-for>
+      </nav>
+
+      <span style="flex: 1"></span>
+      <div class="nav" data-part="settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6"></path></svg><span>Configurações</span></div>
+
+      <sc-if value="{{menuOpen}}" hint-placeholder-val="{{ false }}">
+        <div role="menu" aria-label="Conta e perfil" data-part="switcher-menu" style="position: absolute; left: 14px; top: 84px; width: 300px; z-index: 5; display: flex; flex-direction: column; gap: 1px; padding: 8px; border-radius: 14px; background: #151924; border: 1px solid #2a3042; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); box-sizing: border-box">
+          <div class="head">ESTA MÁQUINA</div>
+          <div class="row" role="menuitemradio" aria-checked="{{localChecked}}" data-row="local-personal">
+            <span class="av avS avP">P</span>
+            <span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13.5px; font-weight: 600">Pessoal</span><span style="font-size: 12px; color: #8d94a6">Local · pastas do perfil</span></span>
+            <sc-if value="{{localChecked}}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="#8f9cff" stroke-width="1.7" aria-hidden="true"><path d="M3 7.2l2.6 2.6L11 4.4"></path></svg></sc-if>
+          </div>
+          <div class="row" role="menuitemradio" aria-checked="false" data-row="local-company">
+            <span class="av avS avT">E</span>
+            <span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13.5px; font-weight: 600">Empresa Exemplo</span><span style="font-size: 12px; color: #8d94a6">Local · reabre o app</span></span>
+          </div>
+
+          <sc-if value="{{menuAccount}}" hint-placeholder-val="{{ true }}">
+            <div class="head" style="margin-top: 6px" data-part="menu-account-head">CONTA · {{identity}}</div>
+            <div class="row" role="menuitemradio" aria-checked="{{proChecked}}" data-row="account-pro">
+              <span class="av avS avA">PR</span>
+              <span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13.5px; font-weight: 600">Pro</span><span style="font-size: 12px; color: #8d94a6">Pessoal · sincronizada</span></span>
+              <sc-if value="{{proChecked}}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="#8f9cff" stroke-width="1.7" aria-hidden="true"><path d="M3 7.2l2.6 2.6L11 4.4"></path></svg></sc-if>
+            </div>
+            <div class="row" role="menuitemradio" aria-checked="{{teamChecked}}" data-row="account-team">
+              <span class="av avS avT">TE</span>
+              <span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13.5px; font-weight: 600">Time Exemplo</span><span style="font-size: 12px; color: #8d94a6">Time · 4 membros · você é admin</span></span>
+              <sc-if value="{{teamChecked}}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="#8f9cff" stroke-width="1.7" aria-hidden="true"><path d="M3 7.2l2.6 2.6L11 4.4"></path></svg></sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{menuOffline}}" hint-placeholder-val="{{ false }}">
+            <div class="head" style="margin-top: 6px">CONTA · {{identity}}</div>
+            <div data-part="menu-offline" style="display: flex; flex-direction: column; gap: 8px; margin: 2px 4px 4px; padding: 10px 12px; border-radius: 10px; background: #3a2f12; color: #f2c96a; font-size: 12.5px; line-height: 1.45">
+              <span style="font-weight: 600">Sem conexão com a conta</span>
+              <span style="color: #e8d29a">Os perfis da conta voltam quando a conexão voltar. Suas sessões locais seguem normais.</span>
+              <span style="display: flex; align-items: center; gap: 10px"><button type="button" class="btn btnG" style="height: 28px; padding: 0 10px; font-size: 12px; white-space: nowrap">Tentar de novo</button><span style="font-size: 11.5px; color: #e8d29a; line-height: 1.3">e tenta sozinho a cada 15 s</span></span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{menuSignIn}}" hint-placeholder-val="{{ false }}">
+            <div class="head" style="margin-top: 6px">CONTA</div>
+            <div class="row" data-row="sign-in" style="background: #182037">
+              <span class="av avS avP"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5.5" r="2.6"></circle><path d="M3 13.5c1.1-2.4 2.9-3.6 5-3.6s3.9 1.2 5 3.6"></path></svg></span>
+              <span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 13.5px; font-weight: 600">Entrar no Stellar</span><span style="font-size: 12px; color: #9aa1b2">Leve sua casa de trabalho junto</span></span>
+            </div>
+          </sc-if>
+
+          <div style="height: 1px; background: #232838; margin: 6px 4px"></div>
+          <div class="act"><svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"></path></svg>Novo perfil</div>
+          <div class="act"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6"></path></svg>Gerenciar perfis e contas</div>
+          <sc-if value="{{menuSignOut}}" hint-placeholder-val="{{ true }}"><div class="act" data-row="sign-out" style="color: #ffb4b4"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M6.5 2.5h-3v11h3M10 5l3 3-3 3M13 8H6.5"></path></svg>Sair da conta</div></sc-if>
+          <div style="padding: 6px 10px 2px; font-size: 11.5px; color: #8d94a6; line-height: 1.45">{{menuHint}}</div>
+        </div>
+      </sc-if>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; padding: 26px 40px; display: flex; flex-direction: column; gap: 20px; box-sizing: border-box">
+      <div style="display: flex; align-items: center; gap: 14px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <h1 style="margin: 0; font-size: 22px; font-weight: 600">Sessões</h1>
+            <sc-if value="{{showPill}}" hint-placeholder-val="{{ false }}"><span data-part="context-pill" style="font-size: 11.5px; padding: 3px 9px; border-radius: 7px; {{pillStyle}}">{{pill}}</span></sc-if>
+          </div>
+          <span style="font-size: 13px; color: #8d94a6">{{subtitle}}</span>
+        </div>
+        <span style="flex: 1"></span>
+        <span style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #232838; border-radius: 9px; width: 300px; box-sizing: border-box; color: #8d94a6; font-size: 13px">Buscar sessão ou pasta<span style="flex: 1"></span><span class="mono" style="font-size: 11px; border: 1px solid #2a2f3d; border-radius: 5px; padding: 1px 6px">Ctrl K</span></span>
+        <span class="btn">+ Nova sessão</span>
+      </div>
+      <sc-if value="{{showList}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 10px" data-part="session-list">
+        <span class="mono" style="font-size: 10.5px; letter-spacing: 0.08em; color: #8d94a6">PROJETOS</span>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px">
+          <sc-for list="{{sessions}}" as="s" hint-placeholder-count="3">
+            <div class="card" data-part="session-card"><span style="font-size: 14.5px; font-weight: 600">{{s.name}}</span><span class="mono" style="font-size: 12px; color: #8d94a6">{{s.path}}</span><span style="font-size: 12.5px; color: #9aa1b2; margin-top: 6px">{{s.meta}}</span></div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+      <sc-if value="{{showEmpty}}" hint-placeholder-val="{{ false }}">
+        <div data-part="account-empty" style="margin: 40px auto 0; width: 520px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center">
+          <span class="av" style="width: 56px; height: 56px; background: #12151d; border: 1px dashed #2a3042; color: #7c8cff"><svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"></rect><rect x="9" y="2" width="5" height="5" rx="1.2"></rect><rect x="2" y="9" width="5" height="5" rx="1.2"></rect><path d="M11.5 9.5v4M9.5 11.5h4"></path></svg></span>
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600">Nenhuma sessão nesta conta ainda</h2>
+          <span style="font-size: 13.5px; color: #9aa1b2; line-height: 1.55">As sessões da conta são próprias dela e começam separadas das que ficam só nesta máquina. Crie uma nova ou traga as locais que você quiser.</span>
+          <div style="display: flex; gap: 10px; margin-top: 4px"><span class="btn">+ Nova sessão</span><span class="btn btnG" data-part="import-local">Importar sessões desta máquina</span></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{showTeamNote}}" hint-placeholder-val="{{ false }}">
+        <div class="card" style="flex-direction: row; align-items: center; gap: 12px" data-part="team-note"><span class="av avS avT">TE</span><span style="font-size: 13px; color: #c9cede; line-height: 1.5">Perfil <strong>Time Exemplo</strong>: a Fila e o Time usam este time. {{teamNote}}</span></div>
+      </sc-if>
+    </main>
+    <sc-if value="{{showToast}}" hint-placeholder-val="{{ false }}"><div role="status" data-part="toast" style="position: absolute; right: 24px; bottom: 24px; display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 12px; background: #14301f; color: #8ee6a8; font-size: 13.5px; box-shadow: 0 12px 40px rgba(0,0,0,.5)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.4 8.4l3 3 6-6.4"></path></svg><span style="display: flex; flex-direction: column"><span style="font-weight: 600">Conta conectada</span><span style="color: #b6f0c8; font-size: 12.5px">Ana Ribeiro · ana@example.com</span></span></div></sc-if>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // `#local`, `#conta-pro`, `#conta-time`, `#trocar`, `#sem-sessao`, `#offline`;
+    // `#cena=<name>` and `?cena=<name>` work too.
+    const raw = (location.hash || "").replace(/^#/, "");
+    const fromHash = raw.startsWith("cena=") ? raw.slice(5) : raw;
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "local";
+    this.state = { cena };
+  }
+
+  renderVals() {
+    const cena = this.state.cena;
+    const go = (k) => () => { this.setState({ cena: k }); };
+    const scenes = [
+      ["local", "Local"],
+      ["conta-pro", "Conta · Pro"],
+      ["conta-time", "Conta · Time (admin)"],
+      ["conta-time-membro", "Conta · Time (membro)"],
+      ["trocar", "Trocar (menu aberto)"],
+      ["offline", "Offline"],
+      ["sem-sessao", "Sem conta"],
+      ["login-escolha", "Entrar · escolha"],
+      ["login-aguardando", "Entrar · e-mail aguardando"],
+      ["login-aguardando-github", "Entrar · GitHub aguardando"],
+      ["login-erro", "Entrar · erro"],
+      ["logado", "Logado"],
+    ].map(([k, label]) => ({ label, cls: cena === k ? "scene sceneOn" : "scene", go: go(k) }));
+
+    const labels = {
+      local: "Escopo local, com conta conectada: Sessões e Estatísticas. Um controle só, no topo",
+      "conta-pro": "Conta, perfil Pro: sessões PRÓPRIAS da conta (começam vazias, com importação), Caixa e Casa",
+      "conta-time": "Conta, perfil do time (admin): aparece a seção Time com tudo que o backend liberar",
+      "conta-time-membro": "Mesmo perfil, como membro: a UI mostra só o que o backend entregar (sem Membros)",
+      trocar: "O mesmo controle aberto: máquina, conta e perfis da conta em uma lista",
+      "sem-sessao": "Sem conta: 'Entrar no Stellar' mora no controle, não no rodapé",
+      "login-escolha": "Passo 1 após 'Entrar no Stellar': escolher GitHub ou e-mail",
+      "login-aguardando": "E-mail: link enviado só depois do 202 do servidor; a tela segue sozinha",
+      "login-aguardando-github": "GitHub: navegador abrindo; Copiar link sempre à mão",
+      "login-erro": "Falha de rede/503/timeout: mensagem no formulário e 'Tentar de novo'",
+      logado: "Voltou ao app, já na conta. Nome da máquina e sincronização seguem como no protótipo de entrada (v2)",
+      offline: "Sessão salva sem conexão: aviso no controle, retry automático e botão",
+    };
+
+    const isLogin = cena.startsWith("login-");
+    const loginStep = cena === "login-escolha" || cena === "login-erro" ? "choose" : cena === "login-aguardando" ? "email" : cena === "login-aguardando-github" ? "github" : "";
+
+    const account = cena === "conta-pro" || cena === "conta-time" || cena === "conta-time-membro" || cena === "trocar" || cena === "offline" || cena === "local" || cena === "logado";
+    const member = cena === "conta-time-membro";
+    const inTeam = cena === "conta-time" || member;
+    const inLocal = cena === "local" || cena === "sem-sessao";
+    // Account sessions are the account's own: a fresh account has none (import brings the local ones).
+    const emptyAccount = cena === "conta-pro" || cena === "trocar" || cena === "logado";
+    const open = cena === "trocar" || cena === "sem-sessao" || cena === "offline";
+    const offline = cena === "offline";
+    const signedOut = cena === "sem-sessao";
+
+    // The one control: line 1 is the profile in view, line 2 says whose it is.
+    let triggerName = "Pessoal";
+    let triggerSub = "nesta máquina";
+    let triggerInitials = "P";
+    let triggerAv = "avP";
+    if (cena === "local") triggerSub = "nesta máquina";
+    if (signedOut) triggerSub = "sem conta";
+    if (cena === "conta-pro" || cena === "trocar" || cena === "logado") { triggerName = "Pro"; triggerSub = "ana@example.com"; triggerInitials = "PR"; triggerAv = "avA"; }
+    if (inTeam) { triggerName = "Time Exemplo"; triggerSub = "ana@example.com"; triggerInitials = "TE"; triggerAv = "avT"; }
+    if (offline) { triggerName = "Pro"; triggerSub = "sem conexão"; triggerInitials = "PR"; triggerAv = "avA"; }
+
+    const mk = (id, label, icon, o = {}) => ({
+      id, label, icon,
+      cls: "nav" + (o.on ? " navOn" : "") + (o.dim ? " navDim" : ""),
+      sub: o.sub || "", subColor: o.subColor || "#8d94a6",
+      hasChildren: !!o.children, showMembers: !o.member,
+    });
+    const I = {
+      sessions: "M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z",
+      inbox: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2 1.3",
+      home: "M2.5 7.2L8 2.8l5.5 4.4V13a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8zM6.3 13.8V9.6h3.4v4.2",
+      team: "M5.8 3.3a2.3 2.3 0 1 0 0 4.6 2.3 2.3 0 0 0 0-4.6zM1.8 13c.4-2.3 2-3.6 4-3.6s3.6 1.3 4 3.6M11 4.5a1.8 1.8 0 1 1 0 3.6M10 9.6c1.9 0 3.4 1.1 3.9 3.4",
+      stats: "M2.5 13.5V8.5M6.2 13.5V4.5M9.8 13.5V7M13.5 13.5V2.5",
+    };
+    let nav;
+    if (inLocal) {
+      nav = [mk("sessions", "Sessões", I.sessions, { on: true, sub: "4" }), mk("stats", "Estatísticas", I.stats)];
+    } else if (inTeam) {
+      nav = [
+        mk("sessions", "Sessões", I.sessions, { on: true, sub: "2" }),
+        mk("inbox", "Caixa de entrada", I.inbox, { sub: "3", subColor: "#b9c4ff" }),
+        mk("workhome", "Casa de trabalho", I.home, { sub: "do time" }),
+        mk("team", "Time", I.team, { children: true, member }),
+        mk("stats", "Estatísticas", I.stats),
+      ];
+    } else if (offline) {
+      nav = [
+        mk("sessions", "Sessões", I.sessions, { on: true, sub: "2" }),
+        mk("inbox", "Caixa de entrada", I.inbox, { dim: true, sub: "offline", subColor: "#f2c96a" }),
+        mk("workhome", "Casa de trabalho", I.home, { dim: true, sub: "offline", subColor: "#f2c96a" }),
+        mk("stats", "Estatísticas", I.stats),
+      ];
+    } else {
+      nav = [
+        mk("sessions", "Sessões", I.sessions, { on: true, sub: "0" }),
+        mk("inbox", "Caixa de entrada", I.inbox, { sub: "2", subColor: "#b9c4ff" }),
+        mk("workhome", "Casa de trabalho", I.home, { sub: "sincronizada" }),
+        mk("stats", "Estatísticas", I.stats),
+      ];
+    }
+
+    const showLogin = isLogin;
+    const withEmail = cena === "login-erro" || cena === "login-aguardando";
+    return {
+      cena,
+      cenaLabel: labels[cena] || "",
+      scenes,
+      showLogin,
+      showShell: !showLogin,
+      loginStep,
+      loginChoose: loginStep === "choose",
+      loginWaiting: loginStep === "email" || loginStep === "github",
+      waitEmail: loginStep === "email",
+      waitGithub: loginStep === "github",
+      loginError: cena === "login-erro",
+      emailText: withEmail ? "ana@example.com" : "voce@exemplo.com",
+      emailColor: withEmail ? "#e8eaf0" : "#6b7284",
+      sendLabel: cena === "login-erro" ? "Tentar de novo" : "Enviar link de acesso",
+      stepText: loginStep === "github" ? "Passo 1 de 4 · Navegador" : "Passo 2 de 4 · Autorizar",
+      seg2: loginStep === "github" ? "#232838" : "#7c8cff",
+      showToast: cena === "logado",
+      showList: !emptyAccount,
+      showEmpty: emptyAccount,
+      menuOpen: open,
+      triggerBorder: open ? "#2a3042" : "#232838",
+      triggerName, triggerSub, triggerInitials, triggerAv,
+      triggerSubColor: offline ? "#f2c96a" : "#8d94a6",
+      triggerWarn: offline,
+      chevron: open ? "M4 8.5l3-3 3 3" : "M4 5.5l3 3 3-3",
+      nav,
+      identity: "ana@example.com",
+      menuAccount: (account && !offline) && !signedOut,
+      menuOffline: offline,
+      menuSignIn: signedOut,
+      menuSignOut: !signedOut,
+      localChecked: inLocal,
+      proChecked: cena === "trocar" || cena === "conta-pro",
+      teamChecked: inTeam,
+      menuHint: signedOut
+        ? "Sem conta o Stellar funciona só nesta máquina."
+        : "Trocar de perfil da máquina reabre o app; trocar de perfil da conta é na hora.",
+      subtitle: inLocal ? "4 sessões em 2 pastas" : emptyAccount ? "0 sessões nesta conta" : "2 sessões nesta conta",
+      showPill: !inLocal,
+      pill: inTeam ? (member ? "Time Exemplo · membro" : "Time Exemplo") : offline ? "offline" : "conta · Pro",
+      pillStyle: offline ? "background: #3a2f12; color: #f2c96a" : inTeam ? "background: #123a35; color: #8ee6d8" : "background: #1b2242; color: #b9c4ff",
+      showTeamNote: inTeam,
+      teamNote: member ? "Você entra como membro: a UI mostra só o que o servidor liberar para o seu papel." : "Você é admin: a UI mostra tudo que o servidor liberar para o seu papel.",
+      sessions: inLocal || cena === "local"
+        ? [
+            { name: "api-gateway", path: "~/projetos/api-gateway", meta: "3 agentes · há 2 h" },
+            { name: "docs-site", path: "~/projetos/docs-site", meta: "1 agente · ontem" },
+            { name: "mobile-app", path: "~/estudos/mobile-app", meta: "2 agentes · há 3 dias" },
+          ]
+        : [
+            { name: "plataforma-web", path: "conta · Time Exemplo", meta: "2 agentes · há 1 h" },
+            { name: "infra", path: "conta · Time Exemplo", meta: "1 agente · ontem" },
+          ],
+    };
+  }
+}
+</script>
+</body>
+</html>

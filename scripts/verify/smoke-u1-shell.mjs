@@ -115,6 +115,8 @@ try {
   // 6. Tela 5 — the internal login screen (choose step).
   await click(`document.querySelector('[data-section="sessions"]')`);
   await delay(150);
+  await click(`document.querySelector('[data-role="profile-trigger"]')`);
+  await delay(200);
   await click(`document.querySelector('[data-role="sign-in"]') ?? document.querySelector('[data-role="firstrun-account"]')`);
   await delay(250);
   const loginUp = await page.evalJs(`document.body.innerText.includes('GitHub')`);

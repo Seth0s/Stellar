@@ -49,6 +49,22 @@
   gap: var(--v2-s3);
 }
 
+.staleNotice {
+  font-size: var(--v2-f12h);
+  color: var(--v2-warn);
+}
+
+.contextPill {
+  margin-left: var(--v2-s5);
+  padding: var(--v2-s2) var(--v2-s5);
+  border-radius: var(--v2-r8);
+  background: var(--v2-accent-bg);
+  color: var(--v2-accent-soft);
+  font-size: var(--v2-f11h);
+  font-weight: 500;
+  vertical-align: middle;
+}
+
 .h1 {
   margin: 0;
   font-size: var(--v2-f26);

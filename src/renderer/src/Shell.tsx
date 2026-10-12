@@ -13,14 +13,18 @@ import { useBoardSummaries, useBoardBackgroundStatus } from "./useBoardSummaries
 import { consumeTeamBoardFocus } from "./board-quick-task-decisions";
 import { setTeamSub, useTeamNav, type TeamSub } from "./team-nav";
 import { hasCloudAccount } from "./account-mode-decision";
-import { isSessionOffline, statusIdentity } from "./account-display-decision";
+import { accountIdentity, formatStaleStamp, isSessionOffline, readOfflineAccount, statusIdentity } from "./account-display-decision";
+import { getLocale } from "../../shared/i18n";
 import {
-  scopeFooterSubKey,
   scopeLanding,
   scopeNavSections,
   sectionAllowedInScope,
+  teamSectionVisible,
+  type AccountProfileView,
   type AccountScope,
 } from "./account-scope-decision";
+import type { AccountProfilesState } from "./account-scope";
+import { AccountSessionImport } from "./AccountSessionImport";
 import styles from "./Shell.module.css";
 
 const TEAM_SUB_LABEL: Record<TeamSub, MessageKey> = {
@@ -80,12 +84,6 @@ function NavIcon({ name }: { name: ShellSection }) {
   );
 }
 
-function initials(text: string): string {
-  const parts = text.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  return (parts[0][0] + (parts[1]?.[0] ?? "")).toUpperCase();
-}
-
 /**
  * The new shell: a fixed sidebar (profile, sections, account, settings) and a
  * content area that renders the active section. Sessions is the default; the
@@ -110,6 +108,12 @@ export function Shell({
   onSignOut,
   scope,
   onScopeChange,
+  accountProfiles,
+  accountProfile,
+  onPickAccountProfile,
+  sessionBoards,
+  localBoards,
+  onImportBoards,
   initialSection = "sessions",
 }: {
   boards: BoardRow[];
@@ -127,13 +131,22 @@ export function Shell({
   onOpenSettings: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
-  /** The scope shared by the profile selector, the footer and the content. */
+  /** The scope shared by the switcher and the content. */
   scope: AccountScope;
   onScopeChange: (next: AccountScope) => void;
+  /** The account's profiles (Pro, one per team) and the one in view. */
+  accountProfiles: AccountProfilesState;
+  accountProfile: AccountProfileView | null;
+  onPickAccountProfile: (id: string) => void;
+  /** The sessions of the view in front of the user (`boards` is every session, for the team screens). */
+  sessionBoards: BoardRow[];
+  /** The sessions kept on this machine (owned by no account profile): what an import can bring. */
+  localBoards: BoardRow[];
+  onImportBoards: (ids: readonly string[]) => void;
   initialSection?: ShellSection;
 }) {
   const [section, setSection] = useState<ShellSection>(
-    sectionAllowedInScope(initialSection, scope) ? initialSection : scopeLanding(scope),
+    sectionAllowedInScope(initialSection, scope, { team: false }) ? initialSection : scopeLanding(scope),
   );
   const [hasInvite, setHasInvite] = useState(false);
   const [inboxSnap, setInboxSnap] = useState<InboxSnapshotInfo | null>(null);
@@ -141,10 +154,16 @@ export function Shell({
   const [teamFocus, setTeamFocus] = useState<{ teamId: string; taskId?: string; unassigned?: boolean } | null>(null);
 
   const loggedIn = hasCloudAccount(cloud);
-  const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : null;
-  // One identity, read once: the selector and the footer show the very same name and e-mail/login.
-  const identity = statusIdentity(cloud)?.identity ?? "";
+  // A saved session waiting for the connection: the account is still known from the machine.
+  const offlineAccount = readOfflineAccount(cloud);
+  const accountOffline = !loggedIn && offlineAccount !== null;
+  const accountLabel = cloud?.state === "logged-in" ? cloud.account.displayName : (offlineAccount?.account.displayName ?? null);
+  const offlineStamp = offlineAccount ? formatStaleStamp(offlineAccount.savedAtMs, getLocale()) : "";
+  // One identity, read once, for the switcher.
+  const identity = statusIdentity(cloud)?.identity ?? (offlineAccount ? accountIdentity(offlineAccount.account).identity : "");
   const sessionOffline = isSessionOffline(cloud);
+  const inTeamProfile = scope === "account" && teamSectionVisible(accountProfile, accountProfiles.profiles, accountProfiles.status === "ok");
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     if (!loggedIn) return;
@@ -158,8 +177,8 @@ export function Shell({
 
   // A section that is not part of the scope in view gives way to the scope's landing.
   useEffect(() => {
-    if (!sectionAllowedInScope(section, scope)) setSection(scopeLanding(scope));
-  }, [scope, section]);
+    if (!sectionAllowedInScope(section, scope, { team: inTeamProfile })) setSection(scopeLanding(scope));
+  }, [scope, section, inTeamProfile]);
 
   useEffect(() => {
     if (!loggedIn) {
@@ -207,7 +226,7 @@ export function Shell({
       ShellSection,
       { id: ShellSection; label: string; count?: number; sub?: string; badge?: number }
     > = {
-      sessions: { id: "sessions", label: t("shell.sessions"), count: boards.length },
+      sessions: { id: "sessions", label: t("shell.sessions"), count: sessionBoards.length },
       inbox: {
         id: "inbox",
         label: t("shell.inbox"),
@@ -218,8 +237,8 @@ export function Shell({
       stats: { id: "stats", label: t("shell.stats") },
       account: { id: "account", label: t("shell.account") },
     };
-    return scopeNavSections(scope).map((id) => byId[id]);
-  }, [boards.length, hasInvite, inboxBadge, scope]);
+    return scopeNavSections(scope, { team: inTeamProfile }).map((id) => byId[id]);
+  }, [sessionBoards.length, hasInvite, inboxBadge, scope, inTeamProfile]);
 
   return (
     <div className={styles.shell}>
@@ -227,10 +246,21 @@ export function Shell({
         <ProfileSelector
           onOpenSettings={onOpenSettings}
           loggedIn={loggedIn}
+          sessionOffline={sessionOffline}
+          offlineSinceMs={offlineAccount?.savedAtMs ?? null}
+          onManageAccount={() => {
+            onScopeChange("account");
+            setSection("account");
+          }}
           accountName={accountLabel}
           accountIdentity={identity}
           scope={scope}
           onScopeChange={onScopeChange}
+          accountProfiles={accountProfiles}
+          accountProfile={accountProfile}
+          onPickAccountProfile={onPickAccountProfile}
+          onSignIn={onSignIn}
+          onSignOut={onSignOut}
         />
 
         <nav className={styles.nav} aria-label={t("shell.sections")}>
@@ -313,48 +343,6 @@ export function Shell({
         ) : null}
 
         {section !== "inbox" ? (
-          loggedIn ? (
-            <button
-              type="button"
-              className={styles.account}
-              data-role="account"
-              data-scope={scope}
-              data-account-name={accountLabel ?? ""}
-              data-account-identity={identity}
-              onClick={() => {
-                onScopeChange("account");
-                setSection("account");
-              }}
-              title={t("shell.account")}
-            >
-              <span className={styles.accountAvatar}>{accountLabel ? initials(accountLabel) : "?"}</span>
-              <span className={styles.accountText}>
-                <span className={styles.accountName}>{accountLabel}</span>
-                {identity !== "" ? (
-                  <span className={styles.accountSub} data-role="account-identity" title={identity}>
-                    {identity}
-                  </span>
-                ) : null}
-                <span className={styles.accountSub}>{t(scopeFooterSubKey(scope))}</span>
-              </span>
-            </button>
-          ) : sessionOffline ? (
-            <div className={styles.signInCard} data-role="account-offline" role="status">
-              <div className={styles.signInTitle}>{t("account.offline.title")}</div>
-              <div className={styles.signInDesc}>{t("account.offline.desc")}</div>
-            </div>
-          ) : (
-            <div className={styles.signInCard}>
-              <div className={styles.signInTitle}>{t("shell.signIn.title")}</div>
-              <div className={styles.signInDesc}>{t("shell.signIn.desc")}</div>
-              <button type="button" className={`${styles.primaryBtn} ${styles.signInBtn}`} data-role="sign-in" onClick={onSignIn}>
-                {t("shell.signIn.action")}
-              </button>
-            </div>
-          )
-        ) : null}
-
-        {section !== "inbox" ? (
           <button type="button" className={`${styles.navItem} ${styles.settingsItem}`} onClick={onOpenSettings}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
               <circle cx="8" cy="8" r="2.2" />
@@ -368,7 +356,20 @@ export function Shell({
       <main className={styles.main}>
         {section === "sessions" ? (
           <Home
-            boards={boards}
+            boards={sessionBoards}
+            contextPill={
+              scope === "account" && accountProfile
+                ? accountProfile.kind === "team"
+                  ? accountProfile.name
+                  : t("account.pill.personal", { name: accountProfile.name })
+                : undefined
+            }
+            staleNotice={scope === "account" && accountOffline ? t("account.offline.home", { when: offlineStamp }) : undefined}
+            accountEmpty={
+              scope === "account"
+                ? { onImport: localBoards.length > 0 ? () => setImportOpen(true) : undefined }
+                : undefined
+            }
             boardCounts={boardCounts}
             summaries={summaries}
             backgroundStatus={background}
@@ -382,18 +383,23 @@ export function Shell({
             onUpdateBoard={onUpdateBoard}
             onDeleteBoard={onDeleteBoard}
           />
+        ) : accountOffline && (section === "workhome" || section === "team" || section === "inbox" || section === "account") ? (
+          <OfflineSection when={offlineStamp} />
         ) : loggedIn && section === "workhome" ? (
           <WorkHomePage />
         ) : loggedIn && section === "team" ? (
           <TeamPage
             boards={boards.map((b) => ({ id: b.id, name: b.name }))}
-            initialTeamId={teamFocus?.teamId}
+            initialTeamId={teamFocus?.teamId ?? (accountProfile?.kind === "team" ? (accountProfile.teamId ?? undefined) : undefined)}
             initialTaskId={teamFocus?.taskId}
             initialUnassigned={teamFocus?.unassigned === true}
           />
         ) : loggedIn && section === "account" ? (
           <div className={styles.page}>
-            <div className={styles.sectionSub}>{accountLabel ?? t("shell.signIn.action")}</div>
+            <h1 className={styles.sectionTitle}>{t("shell.account")}</h1>
+            <div className={styles.sectionSub} data-role="account-page-identity">
+              {[accountLabel, identity].filter((part) => part && part !== "").join(" · ") || t("shell.signIn.action")}
+            </div>
             <CloudLinkPanel />
             <div>
               <button type="button" className={styles.ghostBtn} onClick={onSignOut}>
@@ -412,9 +418,45 @@ export function Shell({
             }}
           />
         ) : (
-          <InfoSection boardCount={boards.length} />
+          <InfoSection boardCount={sessionBoards.length} />
         )}
       </main>
+      {importOpen ? (
+        <AccountSessionImport
+          boards={localBoards}
+          targetName={accountProfile?.name ?? ""}
+          onImport={(ids) => {
+            onImportBoards(ids);
+            setImportOpen(false);
+          }}
+          onClose={() => setImportOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** An account section that needs the API, while the connection is missing. The sessions stay usable. */
+function OfflineSection({ when }: { when: string }) {
+  const [retrying, setRetrying] = useState(false);
+  return (
+    <div className={styles.page} data-role="account-offline-section">
+      <h1 className={styles.sectionTitle}>{t("account.offline.section.title")}</h1>
+      <div className={styles.sectionSub}>{t("account.offline.section.text", { when })}</div>
+      <div>
+        <button
+          type="button"
+          className={styles.ghostBtn}
+          data-role="account-section-retry"
+          disabled={retrying}
+          onClick={() => {
+            setRetrying(true);
+            void window.cloud.retry().finally(() => setRetrying(false));
+          }}
+        >
+          {t("account.retry")}
+        </button>
+      </div>
     </div>
   );
 }

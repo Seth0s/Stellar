@@ -34,6 +34,7 @@ import {
   type CloudAccount,
 } from "./cloud-auth-decision";
 import { createCloudApi, type CloudApi } from "./cloud-api";
+import { createCloudAccountCache, type CachedAccount } from "./cloud-account-cache";
 import { createCloudTokenStore } from "./cloud-tokens";
 import type { CloudPlan } from "./plan-decision";
 
@@ -46,6 +47,8 @@ export type CloudStatus =
       lastError: string | null;
       /** A saved session exists but the API cannot be reached: the app is retrying on its own. */
       sessionOffline?: boolean;
+      /** With `sessionOffline`: the account the app last saw, so the UI can show who it is (and how old that is). */
+      cachedAccount?: CachedAccount;
     }
   | {
       state: "pending";
@@ -101,6 +104,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     emailStartTimeoutMs: cfg.emailStartTimeoutMs,
   });
   const tokens = createCloudTokenStore(cfg.dataDir);
+  const accountCache = createCloudAccountCache(cfg.dataDir);
 
   let access: { token: string; obtainedAtMs: number; expiresInSec: number } | null = null;
   let account: CloudAccount | null = null;
@@ -150,7 +154,14 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       };
     }
     const sessionOffline = isConnectivityError(lastError) && tokens.getRefreshToken() !== null;
-    return { state: "logged-out", apiBaseUrl: api.baseUrl, lastError, ...(sessionOffline ? { sessionOffline: true } : {}) };
+    const cachedAccount = sessionOffline ? accountCache.read() : null;
+    return {
+      state: "logged-out",
+      apiBaseUrl: api.baseUrl,
+      lastError,
+      ...(sessionOffline ? { sessionOffline: true } : {}),
+      ...(cachedAccount ? { cachedAccount } : {}),
+    };
   }
 
   function emit(): void {
@@ -207,6 +218,8 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     account = res.value.account;
     plan = res.value.plan;
     lastError = null;
+    // What an offline start will show of this account, and from when.
+    accountCache.write({ account: res.value.account, savedAtMs: now() });
     emit();
   }
 
@@ -273,6 +286,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       // a newer one meanwhile, that session is alive and stays.
       if (res.error.code === "invalid_grant") {
         tokens.clear();
+        accountCache.clear();
         clearSession();
       }
       lastError = classifyAccountError(res.error);
@@ -438,6 +452,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     const refreshToken = tokens.getRefreshToken();
     if (refreshToken) await api.logout(refreshToken).catch(() => undefined);
     tokens.clear();
+    accountCache.clear();
     clearSession();
     lastError = null;
     emit();

@@ -7,7 +7,7 @@ import { FirstRun } from "./FirstRun";
 import { LoginScreen } from "./LoginScreen";
 import { InviteDialog, type InvitePreview } from "./InviteDialog";
 import { Shell } from "./Shell";
-import { useAccountScope } from "./account-scope";
+import { useAccountProfiles, useAccountView } from "./account-scope";
 import { shouldShowFirstRun } from "./home-decisions";
 import { writeTeamBoardFocus } from "./board-quick-task-decisions";
 import { maskIdentity, requestTeamSub } from "./team-admin-decisions";
@@ -106,7 +106,14 @@ export function AppShell({
   }, [fixture]);
 
   const profileId = profiles?.activeProfileId ?? null;
-  const { scope, setScope } = useAccountScope(cloud, profileId);
+  const accountProfiles = useAccountProfiles(cloud, profileId);
+  const account = useAccountView(cloud, profileId, accountProfiles, boards);
+  const { scope } = account;
+  // A session created while an account profile is in view belongs to it.
+  const createBoardInView = (name: string, cwd: string, template: SessionTemplate) => {
+    if (scope === "account") account.expectNewBoard(new Set(boards.map((b) => b.id)));
+    onCreateBoard(name, cwd, template);
+  };
   const profileName = profiles?.profiles.find((p) => p.isActive)?.name ?? null;
   const sessionCount =
     typeof fixture?.boot?.sessionCount === "number" ? fixture.boot.sessionCount : boards.length;
@@ -226,7 +233,7 @@ export function AppShell({
         onChangeRoot={onChangeRoot}
         onNavigateRoot={onNavigateRoot}
         onOpenBoard={onOpenBoard}
-        onCreateBoard={onCreateBoard}
+        onCreateBoard={createBoardInView}
         onUpdateBoard={onUpdateBoard}
         onDeleteBoard={onDeleteBoard}
         onStopBoard={onStopBoard}
@@ -234,7 +241,13 @@ export function AppShell({
         onSignIn={() => setPhase("login")}
         onSignOut={() => void signOut()}
         scope={scope}
-        onScopeChange={setScope}
+        onScopeChange={account.setScope}
+        accountProfiles={accountProfiles}
+        accountProfile={account.accountProfile}
+        onPickAccountProfile={account.pickAccountProfile}
+        sessionBoards={account.visibleBoards(boards)}
+        localBoards={account.localBoards(boards)}
+        onImportBoards={account.importBoards}
       />
       {inviteToken ? (
         <InviteDialog

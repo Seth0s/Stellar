@@ -3477,6 +3477,12 @@ function createWindow() {
   });
   // DESIGN-BACKLOG.md item 14 — Home's "último acesso".
   ipcMain.handle("store:boards:touch", (_e, id: string, at: number) => store.touchBoard(id, at));
+  // Owner of an account session (null = local). Only the account switcher writes it.
+  ipcMain.handle("store:boards:set-account-profile", (_e, ids: unknown, profileId: unknown) => {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) return 0;
+    if (profileId !== null && (typeof profileId !== "string" || profileId === "")) return 0;
+    return store.setBoardAccountProfile(ids, profileId);
+  });
   // DESIGN-BACKLOG.md item 59 — the only IPC channel that can flip
   // `boards.autonomous`. Reachable only from real renderer UI code
   // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
@@ -4636,6 +4642,7 @@ function createWindow() {
     return cloudAuth.beginLogin(p, typeof email === "string" && email.trim() !== "" ? email.trim() : undefined);
   });
   ipcMain.handle("cloud:cancel", () => cloudAuth?.cancel() ?? cloudStatusOrLoggedOut());
+  ipcMain.handle("cloud:retry", () => cloudAuth?.retry() ?? cloudStatusOrLoggedOut());
   ipcMain.handle("cloud:logout", () => cloudAuth?.logout() ?? cloudStatusOrLoggedOut());
   // The plans page the "Fazer upgrade" call-to-action opens (config).
   ipcMain.handle("cloud:plans-url", () => resolvePlansUrl(process.env));

@@ -221,6 +221,18 @@ export type BoardRow = {
   default_review?: string | null;
   default_report_schema_json?: string | null;
   default_allow_commit?: number | null;
+  /**
+   * Which ACCOUNT profile owns this session. `null` = a local session (kept on
+   * this machine only). Account sessions are the account's own and start apart
+   * from the local ones; the account switcher partitions the Home by this column.
+   *
+   * Optional in the type for the same reason as the defaults above (hand-built
+   * rows). A rename goes through the generic `upsertBoard`, which must NOT reset
+   * the owner, so the ON CONFLICT clause leaves it alone; only
+   * `setBoardAccountProfile` (an import, or a session created under an account
+   * profile) writes it.
+   */
+  account_profile_id?: string | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -1015,6 +1027,13 @@ function migrate(db: Database.Database) {
   // construction (column on boards, not a flag on cards).
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN orchestrator_card_id TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Owner of an account session (see `BoardRow.account_profile_id`). Additive:
+  // every board that already exists reads NULL = local, no backfill.
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN account_profile_id TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1987,10 +2006,10 @@ export function openStore(userDataDir: string) {
   const getConnectorBoardIdStmt = db.prepare("SELECT board_id FROM connectors WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit, account_profile_id FROM boards ORDER BY created_at ASC",
   );
   const getBoardStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit FROM boards WHERE id = ?",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit, account_profile_id FROM boards WHERE id = ?",
   );
   // Os três `default_*` entram no INSERT (um board novo nasce com o que o
   // chamador mandou, normalmente nada) mas NÃO no ON CONFLICT: este `upsert` é
@@ -1999,13 +2018,17 @@ export function openStore(userDataDir: string) {
   // defaults é `setBoardDefaults` (declaração própria, coluna própria), e só
   // ele — a mesma separação que `autonomous`/`concurrency_cap` já têm.
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit)
-    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap, @orchestrator_card_id, @default_review, @default_report_schema_json, @default_allow_commit)
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit, account_profile_id)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap, @orchestrator_card_id, @default_review, @default_report_schema_json, @default_allow_commit, @account_profile_id)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd,
       updated_at = excluded.updated_at, autonomous = excluded.autonomous, concurrency_cap = excluded.concurrency_cap,
       orchestrator_card_id = excluded.orchestrator_card_id
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
+  // Owner of an account session: the one write path (an import, or a session
+  // created under an account profile). Unlike a rename it does not bump
+  // `updated_at`: moving a session between lists is not editing it.
+  const setBoardAccountProfileStmt = db.prepare("UPDATE boards SET account_profile_id = ? WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
   // DESIGN-BACKLOG.md item 59 — a dedicated single-purpose statement,
   // deliberately separate from the general `upsertBoard` a rename/cwd
@@ -3546,6 +3569,9 @@ export function openStore(userDataDir: string) {
         default_review: board.default_review ?? null,
         default_report_schema_json: board.default_report_schema_json ?? null,
         default_allow_commit: board.default_allow_commit ?? null,
+        // A new row carries the owner it was given (normally none = local); the
+        // ON CONFLICT clause does not list it, so a rename never resets it.
+        account_profile_id: board.account_profile_id ?? null,
       }),
     touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
     setBoardAutonomous: (id: string, autonomous: boolean) => setBoardAutonomousStmt.run(autonomous ? 1 : 0, Date.now(), id),
@@ -3562,6 +3588,17 @@ export function openStore(userDataDir: string) {
      * "aplicado" num board que não existe é exatamente o tipo de mentira que
      * esta feature existe para não contar.
      */
+    /**
+     * Moves sessions to an account profile (`profileId`), or back to local
+     * (`null`). One transaction: either every listed session moves or none does.
+     * Returns how many rows changed; ids that do not exist are skipped.
+     */
+    setBoardAccountProfile: (ids: readonly string[], profileId: string | null): number =>
+      db.transaction((boardIds: readonly string[]) => {
+        let changed = 0;
+        for (const id of boardIds) changed += setBoardAccountProfileStmt.run(profileId, id).changes;
+        return changed;
+      })(ids),
     setBoardDefaults: (id: string, defaults: BoardTaskDefaults): boolean => {
       if (!getBoardExistsStmt.get(id)) return false;
       // A codificação (JSON TEXT / 0-1-INTEGER) mora no módulo puro, junto com

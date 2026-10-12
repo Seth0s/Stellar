@@ -597,18 +597,40 @@ export async function ensureLocalScope(page) {
 /** The reverse of `ensureLocalScope`: pick the account row in the profile menu. */
 export async function ensureAccountScope(page) {
   const inLocalScope = await page.evalJs(
-    `document.querySelector('[data-role="profile-sub"]')?.getAttribute('data-scope') === 'local' && !!document.querySelector('[data-role="account"]')`,
+    `document.querySelector('[data-role="profile-sub"]')?.getAttribute('data-scope') === 'local'`,
   );
-  if (!inLocalScope) return;
+  const signedIn = await page.evalJs(`window.cloud.status().then((s) => s.state === 'logged-in')`).catch(() => false);
+  if (!inLocalScope || !signedIn) return;
   await page.evalJs(`document.querySelector('[data-role="profile-trigger"]')?.click()`);
-  await delay(250);
+  // The account's profiles load from the server; wait for the first row.
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector('[data-role="profile-row-account"]')`)) break;
+    await delay(100);
+  }
   await page.evalJs(`document.querySelector('[data-role="profile-row-account"]')?.click()`);
   await delay(300);
 }
 
-export async function bootIntoFreshSession(page, name = "Sessão de Teste", { spawnTerminal = true } = {}) {
+/** Brings the Time section into reach: the account scope with the TEAM profile in view (what a user picks in the control). */
+export async function ensureTeamProfile(page) {
+  await ensureAccountScope(page);
+  if (await page.evalJs(`!!document.querySelector('[data-section="team"]')`)) return;
+  await page.evalJs(`document.querySelector('[data-role="profile-trigger"]')?.click()`);
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector('[data-role="profile-row-account"][data-account-kind="team"]')`)) break;
+    await delay(100);
+  }
+  await page.evalJs(`document.querySelector('[data-role="profile-row-account"][data-account-kind="team"]')?.click()`);
+  for (let i = 0; i < 40; i++) {
+    if (await page.evalJs(`!!document.querySelector('[data-section="team"]')`)) return;
+    await delay(100);
+  }
+}
+
+export async function bootIntoFreshSession(page, name = "Sessão de Teste", { spawnTerminal = true, keepScope = false } = {}) {
   await delay(300);
-  await ensureLocalScope(page);
+  // `keepScope` creates the session in whatever scope the Home is showing (account sessions are the account's own).
+  if (!keepScope) await ensureLocalScope(page);
   const isHome = await page.evalJs(`!!document.querySelector('.home')`);
   if (!isHome) {
     // Already inside an active session/board

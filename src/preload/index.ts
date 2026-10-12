@@ -307,6 +307,8 @@ export type BoardRow = {
   default_review?: string | null;
   default_report_schema_json?: string | null;
   default_allow_commit?: number | null;
+  /** The account profile that owns this session; `null` = a local session. */
+  account_profile_id?: string | null;
 };
 
 /**
@@ -445,6 +447,9 @@ const store = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("store:boards:delete", id),
     /** DESIGN-BACKLOG.md item 14 — bumps `last_accessed_at` on open. */
     touch: (id: string, at: number): Promise<void> => ipcRenderer.invoke("store:boards:touch", id, at),
+    /** Moves sessions to an account profile (`null` = back to local); resolves to how many moved. */
+    setAccountProfile: (ids: string[], profileId: string | null): Promise<number> =>
+      ipcRenderer.invoke("store:boards:set-account-profile", ids, profileId),
     /** DESIGN-BACKLOG.md item 59 — the ONE write path for the autonomous
      * toggle, called only from the session UI's own checkbox/switch. */
     setAutonomous: (id: string, autonomous: boolean): Promise<void> =>
@@ -2394,6 +2399,8 @@ export type CloudApi = {
   status: () => Promise<CloudStatusInfo>;
   login: (provider: "github" | "email", email?: string) => Promise<CloudStatusInfo>;
   cancel: () => Promise<CloudStatusInfo>;
+  /** Restore a saved session now (the manual "try again" of an offline session). */
+  retry: () => Promise<CloudStatusInfo>;
   logout: () => Promise<CloudStatusInfo>;
   onStatusChanged: (cb: (status: CloudStatusInfo) => void) => () => void;
   devices: CloudDevicesApi;
@@ -2404,6 +2411,7 @@ const cloud: CloudApi = {
   status: () => ipcRenderer.invoke("cloud:status"),
   login: (provider, email) => ipcRenderer.invoke("cloud:login", provider, email),
   cancel: () => ipcRenderer.invoke("cloud:cancel"),
+  retry: () => ipcRenderer.invoke("cloud:retry"),
   logout: () => ipcRenderer.invoke("cloud:logout"),
   plansUrl: () => ipcRenderer.invoke("cloud:plans-url"),
   onStatusChanged: (cb) => {

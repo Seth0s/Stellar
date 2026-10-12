@@ -22,6 +22,7 @@
 }
 
 .avatar {
+  position: relative;
   width: 34px;
   height: 34px;
   flex: none;
@@ -180,6 +181,81 @@
   padding: var(--v2-s2) var(--v2-s5);
   font-size: var(--v2-f11h);
   color: var(--v2-warn);
+}
+
+.warnDot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--v2-warn);
+  border: 2px solid var(--v2-elevated);
+}
+
+.subWarn {
+  color: var(--v2-warn);
+}
+
+.signInRow {
+  background: var(--v2-accent-bg);
+}
+
+.signOutRow {
+  color: var(--v2-danger);
+}
+
+.offlineBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s4);
+  margin: var(--v2-s2) var(--v2-s2) var(--v2-s3);
+  padding: var(--v2-s6) var(--v2-s7);
+  border-radius: var(--v2-r10);
+  background: var(--v2-warn-bg);
+  color: var(--v2-warn);
+  font-size: var(--v2-f12h);
+  line-height: 1.45;
+}
+
+.offlineTitle {
+  font-weight: 600;
+}
+
+.offlineText {
+  color: var(--v2-warn);
+  opacity: 0.85;
+}
+
+.offlineActions {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s5);
+}
+
+.retryBtn {
+  height: 28px;
+  padding: 0 var(--v2-s5);
+  border: 1px solid var(--v2-line-input);
+  border-radius: var(--v2-r8);
+  background: var(--v2-card);
+  color: var(--v2-text-2b);
+  font: inherit;
+  font-size: var(--v2-f12);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.retryBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.offlineAuto {
+  font-size: var(--v2-f11h);
+  opacity: 0.85;
+  line-height: 1.3;
 }
 
 .retryLink {
