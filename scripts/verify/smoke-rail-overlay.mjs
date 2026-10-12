@@ -113,6 +113,50 @@ try {
   check("no 'open the rail' button exists", await page.evalJs(`!document.querySelector(".rail-toggle")`), true);
   shots.push(await shot(page, "rail"));
 
+  // ---- brand mark in the title strip, left of the path ----------------------
+  const brand = await rect(page, ".titlebar-brand");
+  const crumb = await rect(page, ".topbar-title");
+  check("the Stellar mark is 16 px", [brand?.width, brand?.height], (v) => v[0] === 16 && v[1] === 16);
+  check("centred on the rail column (x = 14) and in the strip", [brand?.x, brand?.y], (v) => v[0] === 14 && v[1] === (28 - 16) / 2);
+  check("left of the board path", brand.right <= crumb.x, true);
+  check("the mark takes no clicks (the strip still drags)", await page.evalJs(`getComputedStyle(document.querySelector(".titlebar-brand")).pointerEvents`), "none");
+  check("no 'Stellar' text beside it", await page.evalJs(`!document.querySelector(".titlebar")?.innerText.includes("Stellar")`), true);
+  shots.push(await shot(page, "titlebar-brand"));
+
+  // ---- the board path opens the Board panel (not the old popover) -------------
+  const crumbC = await center(page, ".topbar-title");
+  await page.click(crumbC.x, crumbC.y);
+  await delay(300);
+  check("the path opens the rail's Board panel", await page.evalJs(`document.querySelector('[data-role="rail-panel"] h2')?.textContent`), "Board");
+  check("and not the old sessions popover", await page.evalJs(`!document.querySelector(".board-list, .popover")`), true);
+  await page.click(crumbC.x, crumbC.y);
+  await delay(300);
+  check("a second click on the path closes it", (await railState(page))?.step, "closed");
+  await page.click(crumbC.x, crumbC.y);
+  await delay(300);
+  check("'Trocar de sessão…' is in the panel", await page.evalJs(`!!document.querySelector('[data-role="rail-switch-session"]')`), true);
+  shots.push(await shot(page, "board-from-path"));
+  // "Trocar de sessão…" swaps the Board panel for the session list (same panel).
+  await page.evalJs(`document.querySelector('[data-role="rail-switch-session"]')?.click()`);
+  await delay(300);
+  check("'Trocar de sessão…' opens the session list", await page.evalJs(`document.querySelector('[data-role="rail-panel"] h2')?.textContent`), "Sessões");
+  check("it is the rail panel, not the old popover", await page.evalJs(`!document.querySelector(".board-list, .popover") && !!document.querySelector('[data-role="rail-sessions"]')`), true);
+  check("the current session is marked and listed with its agent count", await page.evalJs(`(() => { const r = document.querySelector('[data-role="session-row"][data-active="true"]'); return !!r && /agente/.test(r.textContent) && !!r.querySelector("svg"); })()`), true);
+  check("both actions are there", await page.evalJs(`!!document.querySelector('[data-role="session-new"]') && !!document.querySelector('[data-role="open-archived"]')`), true);
+  shots.push(await shot(page, "sessions-list"));
+  await page.evalJs(`document.querySelector('[data-role="rail-sessions-back"]')?.click()`);
+  await delay(250);
+  check("'‹ Board' goes back to the Board panel", await page.evalJs(`document.querySelector('[data-role="rail-panel"] h2')?.textContent`), "Board");
+  await page.evalJs(`document.querySelector('[data-role="rail-switch-session"]')?.click()`);
+  await delay(250);
+  await page.evalJs(`document.querySelector('[data-role="session-row"][data-active="true"] [data-role="edit-session"]')?.click()`);
+  await delay(400);
+  check("the pencil opens the edit modal and the list steps aside", await page.evalJs(`!!document.querySelector(".modal-root") && !document.querySelector('[data-role="rail-panel"]')`), true);
+  await page.evalJs(`[...document.querySelectorAll(".modal-root button")].find((b) => b.textContent.trim() === "Cancelar")?.click()`);
+  await delay(250);
+  await page.click(700, 400);
+  await delay(250);
+
   // ---- old top bar is gone ------------------------------------------------
   check(
     "no floating home, agents counter or chips",

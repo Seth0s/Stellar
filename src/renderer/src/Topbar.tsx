@@ -5,11 +5,17 @@ import { SessionModal } from "./SessionModal";
 import { ArchivedCardsPanel } from "./ArchivedCardsPanel";
 import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
-import { groupByProject, type Board, type BoardCounts as Counts } from "./sessions";
+import type { Board } from "./sessions";
 import { t } from "../../shared/i18n";
 import { GlobalComposer } from "./GlobalComposer";
 import { BoardMountProgress } from "./BoardMountProgress";
 import type { BoardMountProgress as BoardMountProgressState } from "./useBoardMountQueue";
+import {
+  ARCHIVED_OPEN_EVENT,
+  OPEN_BOARD_PANEL_EVENT,
+  SESSION_CREATE_EVENT,
+  SESSION_EDIT_EVENT,
+} from "./rail-visibility-decision";
 import {
   RailGlyphFullscreen,
   RailGlyphFullscreenExit,
@@ -19,15 +25,11 @@ import {
   RailGlyphZoomOut,
 } from "./RailGlyphs";
 
-/** Dispatched by the rail's Board panel to open the session switcher. */
-export const OPEN_SESSIONS_EVENT = "stellar:open-sessions";
-
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
 export function Topbar({
   boards,
   activeBoardId,
-  boardCounts,
   rootName,
   workspaceRoot,
   defaultCwd,
@@ -40,7 +42,6 @@ export function Topbar({
   bgStyleLabel,
   onCycleBgStyle,
   onOpenRemote,
-  onSwitchBoard,
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
@@ -49,7 +50,6 @@ export function Topbar({
 }: {
   boards: Board[];
   activeBoardId: string;
-  boardCounts: Record<string, Counts>;
   /** Last path segment of the current workspace root — "📁 {rootName}" in
    * the breadcrumb. Was a hardcoded "Projects" until the root itself
    * became changeable (see App.tsx's `workspaceRoot`). */
@@ -70,7 +70,6 @@ export function Topbar({
   bgStyleLabel: string;
   onCycleBgStyle: () => void;
   onOpenRemote: () => void;
-  onSwitchBoard: (id: string) => void;
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
@@ -82,27 +81,36 @@ export function Topbar({
   /** Real card-mount progress while a board is opening (docs/PERF.md §17). */
   boardMountProgress?: BoardMountProgressState | null;
 }) {
-  const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   /** Vista dos arquivados do board ativo (task d3c005dc). */
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [zoomDraft, setZoomDraft] = useState("");
   const [agentsOpen, setAgentsOpen] = useState(false);
-  const titleBtnRef = useRef<HTMLButtonElement>(null);
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const agentsBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const [fullscreen, setFullscreen] = useState(false);
   const { missing: missingAgents } = useAgentAvailability();
 
-  // The Board panel on the rail asks for the session switcher this way, so the
-  // popover stays anchored to the breadcrumb that owns it.
+  // The rail's session list asks for these modals (create / edit / archived)
+  // by event; they keep living here, unchanged.
   useEffect(() => {
-    const openSessions = () => setOpen(true);
-    window.addEventListener(OPEN_SESSIONS_EVENT, openSessions);
-    return () => window.removeEventListener(OPEN_SESSIONS_EVENT, openSessions);
-  }, []);
+    const create = () => setModal({ mode: "create" });
+    const edit = (e: Event) => {
+      const board = boards.find((b) => b.id === (e as CustomEvent<{ boardId: string }>).detail?.boardId);
+      if (board) setModal({ mode: "edit", board });
+    };
+    const archived = () => setArchivedOpen(true);
+    window.addEventListener(SESSION_CREATE_EVENT, create);
+    window.addEventListener(SESSION_EDIT_EVENT, edit);
+    window.addEventListener(ARCHIVED_OPEN_EVENT, archived);
+    return () => {
+      window.removeEventListener(SESSION_CREATE_EVENT, create);
+      window.removeEventListener(SESSION_EDIT_EVENT, edit);
+      window.removeEventListener(ARCHIVED_OPEN_EVENT, archived);
+    };
+  }, [boards]);
 
   // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
   // header for it) already worked, but had NO visible trigger at all
@@ -129,10 +137,12 @@ export function Topbar({
           title strip (layout.css `.topbar-title`). Home, the autonomous /
           orchestrator marks and the agents list moved to the rail. */}
       <button
-        ref={titleBtnRef}
         className="topbar-title"
+        data-rail-anchor
         aria-label={t("topbar.sessionCurrent", { name: activeBoard?.name ?? t("topbar.sessionFallback") })}
-        onClick={() => setOpen((o) => !o)}
+        // The path opens the rail's Board panel; switching session is its
+        // "Trocar de sessão…" link, which leads to the rail's session list.
+        onClick={() => window.dispatchEvent(new Event(OPEN_BOARD_PANEL_EVENT))}
       >
         {rootName}
         <span className="topbar-crumb-sep">›</span>
@@ -144,72 +154,6 @@ export function Topbar({
       {/* Always mounted: it is the row that carries the board-open progress chip
           and the marker other surfaces use for "a board is open". */}
       <div className="topbar">{boardMountProgress ? <BoardMountProgress progress={boardMountProgress} /> : null}</div>
-      {/* Just the switcher now (DESIGN-BACKLOG.md item 11) — pick a session,
-          jump to its pencil to edit, or "+ nova sessão" for the dedicated
-          create modal. Editing/renaming/deleting a session both moved out
-          of this cramped space into SessionModal (mode="edit"), same
-          fields/layout as create. */}
-      <Popover anchorRef={titleBtnRef} open={open} onClose={() => setOpen(false)}>
-        <div className="board-list">
-          <div className="board-list-heading">{t("topbar.sessions")}</div>
-          {groupByProject(boards).map(([project, group]) => (
-            <div key={project} className="board-project-group">
-              <div className="board-project-label">{project.toUpperCase()}</div>
-              {group.map((b) => {
-                const counts = boardCounts[b.id];
-                return (
-                  <div key={b.id} className={`board-row${b.id === activeBoardId ? " active" : ""}`}>
-                    <button
-                      className="board-row-name"
-                      title={b.cwd || undefined}
-                      onClick={() => {
-                        onSwitchBoard(b.id);
-                        setOpen(false);
-                      }}
-                    >
-                      <span className="board-row-name-line">
-                        {b.name}
-                        {b.id === activeBoardId && <Icon name="check" size={14} />}
-                      </span>
-                      <span className="board-row-counts">
-                        {counts ? t("home.agentsCount", { agents: counts.agents }) : t("home.agentsZero")}
-                      </span>
-                    </button>
-                    <button data-role="edit-session" title={t("topbar.editSession")} onClick={() => setModal({ mode: "edit", board: b })}>
-                      <Icon name="pen" size={13} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-        <div className="popover-actions popover-actions-stretch board-create">
-          <button
-            className="primary"
-            onClick={() => {
-              setOpen(false);
-              setModal({ mode: "create" });
-            }}
-          >
-            {t("topbar.newSession")}
-          </button>
-          {/* Vista dos ARQUIVADOS (task d3c005dc). Fica aqui, junto do que já
-              lida com SESSÃO, porque é onde um card arquivado do board ativo
-              reaparece: até esta task ele não tinha lugar nenhum fora da
-              sidebar de chats. */}
-          <button
-            type="button"
-            data-role="open-archived"
-            onClick={() => {
-              setOpen(false);
-              setArchivedOpen(true);
-            }}
-          >
-            {t("archived.title")}
-          </button>
-        </div>
-      </Popover>
       {archivedOpen && activeBoardId && (
         <ArchivedCardsPanel boardId={activeBoardId} onClose={() => setArchivedOpen(false)} />
       )}

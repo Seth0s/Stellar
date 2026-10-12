@@ -28,6 +28,15 @@ export function RailGlyphPen({ size = 16 }: GlyphProps) {
   );
 }
 
+/** Check mark of the active session row (RailPassos.dc.html). */
+export function RailGlyphCheck({ size = 16 }: GlyphProps) {
+  return (
+    <svg {...base(size)} viewBox="0 0 16 16" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.4 8.4l3 3 6-6.4" />
+    </svg>
+  );
+}
+
 /** Line with two endpoint dots — not a chain-link. */
 export function RailGlyphConnector({ size = 16 }: GlyphProps) {
   return (

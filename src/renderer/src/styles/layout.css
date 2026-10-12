@@ -92,6 +92,21 @@ body {
   -webkit-app-region: drag;
 }
 
+/* The Stellar mark (16 px, the small variant), centred on the rail column on
+   Windows/Linux and placed after the native traffic lights on macOS. It sits
+   to the left of the board path (`.topbar-title`) and never takes clicks. */
+.titlebar-brand {
+  position: absolute;
+  left: calc((var(--rail-width-strip) - 16px) / 2); /* sd:allow: 16 px mark, centred on the rail column (RailPassos.dc.html #titlebar-brand) */
+  top: calc((var(--titlebar-h) - 16px) / 2); /* sd:allow: 16 px mark, centred in the strip (RailPassos.dc.html #titlebar-brand) */
+  display: flex;
+  pointer-events: none;
+}
+
+[data-platform="darwin"] .titlebar-brand {
+  left: 78px; /* sd:allow: just past the native traffic lights (RailPassos.dc.html #titlebar-brand) */
+}
+
 .titlebar-drag {
   flex: 1;
   height: 100%;
@@ -229,7 +244,7 @@ body {
 }
 
 [data-platform="darwin"] .topbar-title {
-  left: 78px;
+  left: 102px; /* sd:allow: traffic lights (78) + 16 px mark + 8 px gap (RailPassos.dc.html #titlebar-brand) */
 }
 
 .topbar-title strong {
@@ -427,54 +442,12 @@ body {
   font-size: var(--text-3);
 }
 
-.board-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 340px;
-  overflow-y: auto;
-  margin-bottom: 8px;
-}
-
 .board-list-heading {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--muted);
   padding: 2px 8px 4px;
-}
-
-.board-project-group + .board-project-group {
-  margin-top: 10px;
-}
-
-.board-project-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  padding: 4px 8px 2px;
-}
-
-.board-row-name-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: inherit;
-}
-
-.board-row-name-line svg {
-  color: var(--foam);
-  flex: none;
-}
-
-.board-row-counts {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 1px;
 }
 
 /* PathPicker.tsx (item 1 revisited) — a real directory tree instead of
@@ -641,66 +614,6 @@ select.resume-input {
   font-size: 12px;
   width: 100%;
   font-family: var(--font-ui);
-}
-
-.board-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 6px;
-  padding: 2px;
-}
-
-.board-row:hover {
-  background: var(--surface);
-}
-
-.board-row.active .board-row-name {
-  color: var(--foam);
-  font-weight: 600;
-}
-
-.board-row-name {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-  background: none;
-  border: none;
-  color: var(--text);
-  cursor: pointer;
-  padding: 6px 8px;
-  font-size: 13px;
-  overflow: hidden;
-}
-
-.board-row-name-line {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.board-row button[title] {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 4px;
-  flex: none;
-}
-
-.board-row button[title]:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.board-row button[title]:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.board-create {
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 
 .zoom-pill {

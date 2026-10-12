@@ -25,8 +25,16 @@ import {
   RailGlyphTerminal,
 } from "./RailGlyphs";
 import { RailBoardPanel, type RailBoardInfo } from "./RailBoardPanel";
+import { RailSessionsPanel } from "./RailSessionsPanel";
+import type { Board, BoardCounts } from "./sessions";
+import { ACCOUNT_SESSIONS_CHANGED_EVENT, sessionsInScope } from "./rail-sessions-scope-decision";
 import {
   HIDE_DELAY_MS,
+  ARCHIVED_OPEN_EVENT,
+  OPEN_BOARD_PANEL_EVENT,
+  OPEN_SESSIONS_EVENT,
+  SESSION_CREATE_EVENT,
+  SESSION_EDIT_EVENT,
   REVEAL_DELAY_MS,
   isEdgeSwipe,
   isInRevealZone,
@@ -37,7 +45,7 @@ import {
 import styles from "./Rail.module.css";
 
 /** `closed` = only the strip; every other step is a panel floating over the board. */
-export type RailStep = "closed" | "pen" | "add" | "terminal1" | "terminal2" | "cards" | "ai" | "board";
+export type RailStep = "closed" | "pen" | "add" | "terminal1" | "terminal2" | "cards" | "ai" | "board" | "sessions";
 
 export type RailCard = {
   id: string;
@@ -111,6 +119,26 @@ const PROTO_BOARD_CARDS: RailCard[] = [
   { id: "mock-b", kind: "terminal", label: "Agent B", statusText: "espera você", statusTone: "wait", isAgent: true },
   { id: "mock-c", kind: "terminal", label: "Agent C", statusText: "parado", statusTone: "idle", isAgent: true },
 ];
+
+/** Prototype session list (RailPassos.dc.html #rail-sessions). */
+const protoBoard = (id: string, name: string, project: string): Board => ({
+  id,
+  name,
+  project,
+  cwd: "",
+  autonomous: false,
+  concurrency_cap: null,
+  orchestrator_card_id: null,
+});
+const PROTO_SESSIONS = {
+  boards: [
+    protoBoard("proto-board", "Sprint board", "Demo project"),
+    protoBoard("proto-backlog", "Backlog", "Demo project"),
+    protoBoard("proto-notes", "Notes", "Estudos"),
+  ],
+  counts: { "proto-board": { agents: 3 }, "proto-backlog": { agents: 1 }, "proto-notes": { agents: 0 } } as Record<string, BoardCounts>,
+  activeId: "proto-board",
+};
 
 function clearTimer(ref: { current: number | null }) {
   if (ref.current !== null) {
@@ -186,7 +214,9 @@ export function Rail({
   onOpenPalette,
   paletteOpen,
   board,
-  onOpenSessions,
+  boards,
+  boardCounts,
+  onSwitchBoard,
   summarizeProviderLabel,
 }: {
   tool: Tool;
@@ -230,8 +260,10 @@ export function Rail({
   paletteOpen: boolean;
   /** Board / session facts shown by the Board panel and the strip dot. */
   board: RailBoardInfo;
-  /** Opens the session switcher (breadcrumb popover). */
-  onOpenSessions: () => void;
+  /** Sessions of the current scope (local or account), for the session list. */
+  boards: Board[];
+  boardCounts: Record<string, BoardCounts>;
+  onSwitchBoard: (id: string) => void;
   summarizeProviderLabel?: string;
 }) {
   const availableProviders = useAvailableAgentProviders();
@@ -263,6 +295,12 @@ export function Rail({
   const [mockTerminal1Rows, setMockTerminal1Rows] = useState<MockProviderRow[] | null>(null);
   /** Board panel fed with the prototype's facts (verify seed only). */
   const [mockBoard, setMockBoard] = useState<RailBoardInfo | null>(null);
+  /** Session list fed with the prototype's sessions (verify seed only). */
+  const [mockSessions, setMockSessions] = useState<{
+    boards: Board[];
+    counts: Record<string, BoardCounts>;
+    activeId: string;
+  } | null>(null);
 
   const showAgentFields = newProvider !== "bash";
   const effortValues = availableProviders.find((p) => p.id === newProvider)?.effortValues ?? [];
@@ -302,6 +340,9 @@ export function Rail({
     const onDown = (e: PointerEvent) => {
       const target = e.target;
       if (target instanceof Node && dockRef.current?.contains(target)) return;
+      // The board-path button toggles the Board panel itself; closing here first
+      // would make its click reopen what the press just closed.
+      if (target instanceof Element && target.closest("[data-rail-anchor]")) return;
       closePanel();
     };
     const onKey = (e: KeyboardEvent) => {
@@ -325,6 +366,51 @@ export function Rail({
   }, [hidden, revealed, panelOpen, pointerInside]);
 
   useEffect(() => () => clearTimer(revealTimer), []);
+
+  // The session list shows the scope of the open board (local, or one account
+  // profile): the owners come from the database, read when the list opens and
+  // again when the account code says they changed.
+  const [owners, setOwners] = useState<{ id: string; account_profile_id?: string | null }[] | null>(null);
+  const sessionsOpen = step === "sessions";
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    let cancelled = false;
+    const read = () => {
+      void window.store.boards
+        .list()
+        .then((rows) => {
+          if (!cancelled) setOwners(rows);
+        })
+        .catch(() => undefined);
+    };
+    read();
+    window.addEventListener(ACCOUNT_SESSIONS_CHANGED_EVENT, read);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(ACCOUNT_SESSIONS_CHANGED_EVENT, read);
+    };
+  }, [sessionsOpen, boards.length]);
+
+  // "Trocar de sessão…" can also be asked for from outside the rail.
+  useEffect(() => {
+    const openSessions = () => {
+      setRevealed(true);
+      setStep("sessions");
+    };
+    window.addEventListener(OPEN_SESSIONS_EVENT, openSessions);
+    return () => window.removeEventListener(OPEN_SESSIONS_EVENT, openSessions);
+  }, []);
+
+  // The board path in the title strip opens (or closes) the Board panel, even
+  // when the rail is hidden — it then slides in to hold the panel.
+  useEffect(() => {
+    const toggleBoard = () => {
+      setRevealed(true);
+      setStep((current) => (current === "board" ? "closed" : "board"));
+    };
+    window.addEventListener(OPEN_BOARD_PANEL_EVENT, toggleBoard);
+    return () => window.removeEventListener(OPEN_BOARD_PANEL_EVENT, toggleBoard);
+  }, []);
 
   const hideRail = useCallback(() => {
     clearTimer(revealTimer);
@@ -367,9 +453,15 @@ export function Rail({
     return () => window.clearInterval(id);
   }, []);
 
+  // Keyed by the ids themselves: `providerGroups` is a new object every render, and an
+  // effect on it would re-read the usage (and re-render) forever.
+  const usageIdsKey = [...providerGroups.native, ...providerGroups.generic]
+    .map((p) => p.id)
+    .filter((id) => id !== "bash")
+    .join(",");
   useEffect(() => {
     let cancelled = false;
-    const ids = [...providerGroups.native, ...providerGroups.generic].map((p) => p.id).filter((id) => id !== "bash");
+    const ids = usageIdsKey === "" ? [] : usageIdsKey.split(",");
     void Promise.all(
       ids.map(async (id) => {
         try {
@@ -388,7 +480,7 @@ export function Rail({
     return () => {
       cancelled = true;
     };
-  }, [providerGroups]);
+  }, [usageIdsKey]);
 
   useEffect(() => {
     const api = {
@@ -414,7 +506,17 @@ export function Rail({
       },
       isHidden: () => hidden,
       /** Drop the prototype board seed. */
-      unseedBoard: () => setMockBoard(null),
+      unseedBoard: () => {
+        setMockBoard(null);
+        setMockSessions(null);
+      },
+      /** Session list with the prototype's sessions (RailPassos.dc.html). */
+      seedSessions: () => {
+        setMockBoard(PROTO_BOARD);
+        setMockSessions(PROTO_SESSIONS);
+        setHidden(false);
+        setStep("sessions");
+      },
       /** Board panel with the prototype's mock facts (RailPassos.dc.html). */
       seedBoard: () => {
         setMockBoard(PROTO_BOARD);
@@ -558,6 +660,7 @@ export function Rail({
     cards: [t("rail.v3.title.find"), `${MOD} F`],
     ai: [t("rail.v3.title.ai"), ""],
     board: [t("rail.v3.title.board"), (mockBoard ?? board).project],
+    sessions: [t("rail.v3.title.sessions"), (mockBoard ?? board).project],
   };
 
   const activeStep = step === "closed" ? null : step;
@@ -795,9 +898,31 @@ export function Rail({
                 board={boardInfo}
                 cards={mockBoard ? PROTO_BOARD_CARDS : cards}
                 loadAgentRoles={mockBoard ? false : true}
-                onOpenSessions={() => {
+                onOpenSessions={() => setStep("sessions")}
+              />
+            )}
+
+            {activeStep === "sessions" && (
+              <RailSessionsPanel
+                boards={mockSessions?.boards ?? sessionsInScope(boards, owners, board.boardId)}
+                boardCounts={mockSessions?.counts ?? boardCounts}
+                activeBoardId={mockSessions ? mockSessions.activeId : board.boardId}
+                onBack={() => setStep("board")}
+                onSwitch={(id) => {
                   setStep("closed");
-                  onOpenSessions();
+                  onSwitchBoard(id);
+                }}
+                onEdit={(id) => {
+                  setStep("closed");
+                  window.dispatchEvent(new CustomEvent(SESSION_EDIT_EVENT, { detail: { boardId: id } }));
+                }}
+                onNew={() => {
+                  setStep("closed");
+                  window.dispatchEvent(new Event(SESSION_CREATE_EVENT));
+                }}
+                onArchived={() => {
+                  setStep("closed");
+                  window.dispatchEvent(new Event(ARCHIVED_OPEN_EVENT));
                 }}
               />
             )}

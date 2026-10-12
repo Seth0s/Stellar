@@ -9,6 +9,16 @@
 
 export const RAIL_HIDDEN_KEY = "ac.railHidden";
 
+/** The board-path button in the title strip asks the rail to show its Board panel. */
+export const OPEN_BOARD_PANEL_EVENT = "stellar:open-board-panel";
+
+/** Asks the rail to show its session list (the Board panel's "Trocar de sessão…"). */
+export const OPEN_SESSIONS_EVENT = "stellar:open-sessions";
+/** The session list asks the top bar's modals to open (create / edit / archived). */
+export const SESSION_CREATE_EVENT = "stellar:session-create";
+export const SESSION_EDIT_EVENT = "stellar:session-edit";
+export const ARCHIVED_OPEN_EVENT = "stellar:open-archived";
+
 /** Pointer (mouse/pen) activation band, measured from the window's left edge. */
 export const EDGE_POINTER_PX = 12;
 /** Touch activation band — wider because a finger is less precise. */

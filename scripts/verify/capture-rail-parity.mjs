@@ -109,6 +109,13 @@ const FRAMES = [
     ],
   },
   {
+    id: "titlebar-brand-win",
+    pairs: [
+      ["brand mark", '[data-part="brand"]', ".titlebar-brand", ["@x", "@y", "@width", "@height"]],
+      ["crumb (after the mark)", '[data-part="crumb"]', ".topbar-title", ["@x", "fontSize", "color"]],
+    ],
+  },
+  {
     id: "no-topbar-b",
     pairs: [
       ["board row", '[data-part="brow"]', '[data-role="rail-board-panel"] > div:nth-child(1)', ["@width", "paddingTop", "paddingLeft", "gap", "backgroundColor", "borderTopLeftRadius", "flexDirection"]],
@@ -117,6 +124,23 @@ const FRAMES = [
       ["agent row", '[data-part="bagent"]', '[data-role="topbar-agent-row"]', ["gap", "fontSize", "color"]],
       ["agent status", '[data-part="bagent"] > span:last-child', '[data-role="topbar-agent-row"] > span:last-child', ["fontSize", "color"]],
       ["panel title", "section > header > h2", '[data-role="rail-panel"] h2', TEXT],
+    ],
+  },
+  {
+    id: "rail-sessions-list",
+    pairs: [
+      ["panel title", "section > header h2", '[data-role="rail-panel"] h2', TEXT],
+      ["panel hint", "section > header > div > span:last-child", '[data-role="rail-panel"] > header > div > span:last-child', ["fontSize", "color"]],
+      ["back link", "section > div > button:first-child", '[data-role="rail-sessions-back"]', [...TEXT, "@x", "@y"]],
+      ["group head", '[data-part="sh"]', '[data-role="rail-sessions"] > div:nth-child(2) > div:nth-child(1) > span', [...TEXT, "paddingBottom", "letterSpacing", "textTransform"]],
+      ["row (active)", '[data-part="session-row"]', '[data-role="session-row"][data-active="true"]', ["@width", "@height", "gap", "backgroundColor", "borderTopLeftRadius"]],
+      ["row (plain)", '[data-part="session-row"]:nth-of-type(2)', '[data-role="session-row"]:not([data-active])', ["@height", "backgroundColor"]],
+      ["row pick", '[data-part="session-row"] > button:first-child', '[data-role="session-row"] > button:first-child', ["@height", "paddingLeft", "gap", "fontSize", "color"]],
+      ["row sub", '[data-part="session-row"] > button:first-child > span > span:last-child', '[data-role="session-row"] > button:first-child > span > span:last-child', ["fontSize", "color"]],
+      ["row check", '[data-part="session-row"] > button:first-child svg', '[data-role="session-row"][data-active] > button:first-child svg', ["@width", "@height", "color"]],
+      ["pencil", '[data-part="session-row"] > button:last-child', '[data-role="edit-session"]', ["@width", "@height", "color", "borderTopLeftRadius", "marginRight"]],
+      ["new session", ".rpprimary", '[data-role="session-new"]', [...BTN, "fontSize", "fontWeight", "borderTopColor"]],
+      ["archived", ".rpbtn:not(.rpprimary)", '[data-role="open-archived"]', ["@width", "@height", "fontSize", "color", "backgroundColor", "borderTopColor"]],
     ],
   },
 ];
@@ -230,6 +254,14 @@ try {
       await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
       await page.evalJs(`window.__stellarRail?.setStep("closed")`);
+      await mouseMove(page, 700, 500);
+    },
+    "titlebar-brand-win": async () => {
+      await page.evalJs(`window.__stellarRail?.setStep("closed")`);
+      await mouseMove(page, 700, 500);
+    },
+    "rail-sessions-list": async () => {
+      await page.evalJs(`window.__stellarRail?.seedSessions()`);
       await mouseMove(page, 700, 500);
     },
     "no-topbar-b": async () => {

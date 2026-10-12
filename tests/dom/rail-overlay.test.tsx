@@ -7,7 +7,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { Rail } from "@renderer/Rail";
-import { RAIL_HIDDEN_KEY, HIDE_DELAY_MS, REVEAL_DELAY_MS } from "@renderer/rail-visibility-decision";
+import {
+  RAIL_HIDDEN_KEY,
+  HIDE_DELAY_MS,
+  OPEN_BOARD_PANEL_EVENT,
+  OPEN_SESSIONS_EVENT,
+  REVEAL_DELAY_MS,
+  SESSION_CREATE_EVENT,
+  SESSION_EDIT_EVENT,
+  ARCHIVED_OPEN_EVENT,
+} from "@renderer/rail-visibility-decision";
 import { setLocale } from "../../src/shared/i18n";
 
 vi.mock("@renderer/useAgentAvailability", () => ({
@@ -68,7 +77,13 @@ function rail(over: Partial<React.ComponentProps<typeof Rail>> = {}) {
         orchestratorCardId: null,
         orchestratorPresent: true,
       }}
-      onOpenSessions={noop}
+      boards={[
+        { id: "b1", name: "Sprint board", project: "Demo project", cwd: "", autonomous: false, concurrency_cap: null, orchestrator_card_id: null },
+        { id: "b2", name: "Backlog", project: "Demo project", cwd: "", autonomous: false, concurrency_cap: null, orchestrator_card_id: null },
+        { id: "b3", name: "Notes", project: "Estudos", cwd: "", autonomous: false, concurrency_cap: null, orchestrator_card_id: null },
+      ]}
+      boardCounts={{ b1: { agents: 3 }, b2: { agents: 1 } }}
+      onSwitchBoard={noop}
       {...over}
     />
   );
@@ -83,12 +98,24 @@ beforeEach(() => {
   localStorage.clear();
   Object.assign(window, {
     providerUsage: { get: vi.fn(async () => undefined) },
-    store: { boardAgentRoles: vi.fn(async () => []) },
+    store: { boardAgentRoles: vi.fn(async () => []), boards: { list: vi.fn(async () => []) } },
   });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("provider usage reads", () => {
+  it("reads each provider's usage once, not on every render", async () => {
+    const get = window.providerUsage.get as ReturnType<typeof vi.fn>;
+    render(rail());
+    await act(async () => {});
+    const first = get.mock.calls.length;
+    await act(async () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect(get.mock.calls.length).toBe(first);
+  });
 });
 
 describe("rail strip", () => {
@@ -277,5 +304,114 @@ describe("hide and edge reveal", () => {
     });
     expect(dock().getAttribute("data-rail-revealed")).toBe("1");
     expect(panelEl()).toBeTruthy();
+  });
+});
+
+describe("board path in the title strip", () => {
+  const fire = () => act(() => void window.dispatchEvent(new Event(OPEN_BOARD_PANEL_EVENT)));
+
+  it("opens the Board panel and a second request closes it", () => {
+    render(rail());
+    fire();
+    expect(panelEl()?.getAttribute("aria-label")).toBe("Board");
+    fire();
+    expect(panelEl()).toBeNull();
+  });
+
+  it("brings a hidden rail in to hold the panel", () => {
+    render(rail());
+    fireEvent.click(document.querySelector('[data-role="rail-hide"]')!);
+    expect(dock().getAttribute("data-rail-revealed")).toBe("0");
+    fire();
+    expect(dock().getAttribute("data-rail-revealed")).toBe("1");
+    expect(panelEl()?.getAttribute("aria-label")).toBe("Board");
+    // It stays while the panel is open.
+    expect(localStorage.getItem(RAIL_HIDDEN_KEY)).toBe("1");
+  });
+
+  it("a press on the path button does not close the panel before its click toggles it", () => {
+    render(rail());
+    const anchor = document.createElement("button");
+    anchor.setAttribute("data-rail-anchor", "");
+    document.body.appendChild(anchor);
+    fire();
+    expect(panelEl()).toBeTruthy();
+    fireEvent.pointerDown(anchor);
+    expect(panelEl()).toBeTruthy();
+    anchor.remove();
+  });
+});
+
+describe("session list", () => {
+  const openList = () => {
+    fireEvent.click(byLabel("Board e sessão"));
+    fireEvent.click(document.querySelector('[data-role="rail-switch-session"]')!);
+  };
+  const rows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-role="session-row"]'));
+
+  it("'Trocar de sessão…' swaps the Board panel for the list; Board goes back", () => {
+    render(rail());
+    openList();
+    expect(panelEl()?.getAttribute("aria-label")).toBe("Sessões");
+    expect(document.querySelector(".board-list")).toBeNull();
+    fireEvent.click(document.querySelector('[data-role="rail-sessions-back"]')!);
+    expect(panelEl()?.getAttribute("aria-label")).toBe("Board");
+  });
+
+  it("lists the sessions of the scope grouped by project, active marked, with agent counts", () => {
+    render(rail());
+    openList();
+    expect(rows().map((r) => r.textContent)).toEqual([
+      "Sprint board3 agentes abertos",
+      "Backlog1 agente aberto",
+      "Notesnenhum agente aberto",
+    ]);
+    expect(rows().map((r) => r.getAttribute("data-active"))).toEqual(["true", null, null]);
+    expect(document.querySelector('[data-role="rail-sessions"]')?.textContent).toContain("Estudos");
+  });
+
+  it("shows only the sessions of the open board's scope (owners read from the database)", async () => {
+    (window.store.boards.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "b1", account_profile_id: null },
+      { id: "b2", account_profile_id: "p1" },
+      { id: "b3", account_profile_id: null },
+    ]);
+    render(rail());
+    openList();
+    await act(async () => {});
+    expect(rows().map((r) => r.getAttribute("data-board-id"))).toEqual(["b1", "b3"]);
+  });
+
+  it("picking a session switches and closes the panel", () => {
+    const onSwitchBoard = vi.fn();
+    render(rail({ onSwitchBoard }));
+    openList();
+    fireEvent.click(rows()[1]!.querySelector("button")!);
+    expect(onSwitchBoard).toHaveBeenCalledWith("b2");
+    expect(panelEl()).toBeNull();
+  });
+
+  it("the pencil, '+ Nova sessão' and the archived button ask the top bar's modals", () => {
+    render(rail());
+    const seen: string[] = [];
+    const on = (name: string) => window.addEventListener(name, (e) => seen.push(`${name}:${(e as CustomEvent).detail?.boardId ?? ""}`), { once: true });
+    openList();
+    on(SESSION_EDIT_EVENT);
+    fireEvent.click(rows()[2]!.querySelector('[data-role="edit-session"]')!);
+    openList();
+    on(SESSION_CREATE_EVENT);
+    fireEvent.click(document.querySelector('[data-role="session-new"]')!);
+    openList();
+    on(ARCHIVED_OPEN_EVENT);
+    fireEvent.click(document.querySelector('[data-role="open-archived"]')!);
+    expect(seen).toEqual([`${SESSION_EDIT_EVENT}:b3`, `${SESSION_CREATE_EVENT}:`, `${ARCHIVED_OPEN_EVENT}:`]);
+  });
+
+  it("the open-sessions event shows the list even from a hidden rail", () => {
+    render(rail());
+    fireEvent.click(document.querySelector('[data-role="rail-hide"]')!);
+    act(() => void window.dispatchEvent(new Event(OPEN_SESSIONS_EVENT)));
+    expect(dock().getAttribute("data-rail-revealed")).toBe("1");
+    expect(panelEl()?.getAttribute("aria-label")).toBe("Sessões");
   });
 });

@@ -2743,6 +2743,17 @@ export const ptBR = {
   "update.icon.ready": "Atualização {version} pronta — clique para reiniciar quando quiser",
   "update.icon.error": "A atualização não terminou — clique para ver",
   "update.icon.installing": "Instalando a atualização…",
+  // Rail session list (RailPassos.dc.html #rail-sessions).
+  "rail.v3.title.sessions": "Sessões",
+  "rail.v3.sessions.new": "+ Nova sessão",
+  "rail.v3.sessions.agentsOne": "1 agente aberto",
+  "rail.v3.sessions.agentsMany": "{count} agentes abertos",
+  "rail.v3.sessions.agentsNone": "nenhum agente aberto",
+  // Right-click menu side panel (RailPassos.dc.html #context-submenu).
+  "boardCanvasMenu.sub.back": "volta",
+  "boardCanvasMenu.sub.open": "abre",
+  "boardCanvasMenu.sub.pick": "escolhe",
+  "boardCanvasMenu.sub.close": "fecha",
 } as const;
 
 export type MessageKey = keyof typeof ptBR;
@@ -5427,6 +5438,17 @@ export const en: Record<MessageKey, string> = {
   "update.icon.ready": "Update {version} ready — click to restart whenever you like",
   "update.icon.error": "The update did not finish — click to view",
   "update.icon.installing": "Installing the update…",
+  // Rail session list (RailPassos.dc.html #rail-sessions).
+  "rail.v3.title.sessions": "Sessions",
+  "rail.v3.sessions.new": "+ New session",
+  "rail.v3.sessions.agentsOne": "1 open agent",
+  "rail.v3.sessions.agentsMany": "{count} open agents",
+  "rail.v3.sessions.agentsNone": "no open agents",
+  // Right-click menu side panel (RailPassos.dc.html #context-submenu).
+  "boardCanvasMenu.sub.back": "back",
+  "boardCanvasMenu.sub.open": "open",
+  "boardCanvasMenu.sub.pick": "choose",
+  "boardCanvasMenu.sub.close": "close",
 };
 
 export const CATALOGS = {

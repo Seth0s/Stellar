@@ -146,10 +146,11 @@ try {
   // ---------------------------------------------------------------
   // Sintoma 3 — modo autônomo com e sem identidade do chamador.
   // ---------------------------------------------------------------
-  const titleBtn = await centerOf(page, ".topbar-title");
-  await page.click(titleBtn.x, titleBtn.y);
+  // The path now opens the rail's Board panel; the session switcher is asked for the way
+  // its "Trocar de sessão…" link does.
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
-  const pencilBtn = await centerOf(page, '.board-row.active button[data-role="edit-session"]');
+  const pencilBtn = await centerOf(page, '[data-role="session-row"][data-active="true"] [data-role="edit-session"]');
   await page.click(pencilBtn.x, pencilBtn.y);
   await new Promise((r) => setTimeout(r, 300));
   const checkbox = await centerOf(page, '.autonomous-toggle-label input[type="checkbox"]');

@@ -1,0 +1,153 @@
+/* Session list — measures from RailPassos.dc.html (#rail-sessions). */
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-body);
+}
+
+.back {
+  border: 0;
+  background: transparent;
+  color: var(--rail-link);
+  font: inherit;
+  font-size: var(--rail-text-12);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  align-self: flex-start;
+}
+
+.groups {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-body);
+  overflow-y: auto;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.groupHead {
+  margin: 0;
+  padding: 0 0 var(--space-3);
+  font-size: var(--rail-text-11);
+  letter-spacing: var(--rail-track);
+  text-transform: uppercase;
+  color: var(--rail-muted);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--rail-item-radius);
+}
+
+.row:hover {
+  background: var(--rail-item-hover);
+}
+
+.rowOn,
+.rowOn:hover {
+  background: var(--rail-item-on);
+}
+
+.pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--rail-gap-item);
+  min-height: 44px; /* sd:allow: two-line session row (RailPassos.dc.html) */
+  padding: 0 var(--space-5);
+  border: 0;
+  background: transparent;
+  color: var(--rail-text);
+  font: inherit;
+  font-size: var(--rail-text-13);
+  text-align: left;
+  cursor: pointer;
+}
+
+.stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.check {
+  color: var(--rail-link);
+  display: inline-flex;
+}
+
+.sub {
+  font-size: var(--rail-text-11-5);
+  color: var(--rail-muted);
+}
+
+.edit {
+  width: 28px; /* sd:allow: prototype pencil button (RailPassos.dc.html) */
+  height: 28px; /* sd:allow: prototype pencil button (RailPassos.dc.html) */
+  margin-right: var(--space-3);
+  border-radius: 7px; /* sd:allow: prototype pencil button radius (RailPassos.dc.html) */
+  border: 0;
+  background: transparent;
+  color: var(--rail-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+}
+
+.edit:hover {
+  background: var(--rail-item-hover);
+  color: var(--rail-text);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: auto;
+}
+
+.btn {
+  width: 100%;
+  min-height: var(--rail-field-height);
+  padding: 0 var(--space-6);
+  border-radius: var(--rail-field-radius);
+  border: 1px solid var(--rail-field-border);
+  background: var(--rail-btn-bg);
+  color: var(--rail-text);
+  font: inherit;
+  font-size: var(--rail-text-13);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.btnPrimary {
+  background: var(--rail-primary);
+  border-color: var(--rail-primary);
+  color: var(--rail-on-primary);
+  font-weight: 600;
+}

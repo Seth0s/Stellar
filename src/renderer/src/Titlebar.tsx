@@ -3,6 +3,7 @@ import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import { useUpdateStatus } from "./useUpdateStatus";
 import { UpdateTitlebarIcon } from "./UpdateDialogIcon";
+import { StellarMark } from "./StellarMark";
 
 // Header nativo do Mac (2026-09-08) — `main/index.ts`'s `titleBarStyle:
 // "hidden"` só existe no darwin (`frame:false` nas outras plataformas,
@@ -64,6 +65,11 @@ export function Titlebar() {
 
   return (
     <div className="titlebar">
+      {/* The brand mark, left of the board path. Decoration only — no title text,
+          no click — so the strip keeps dragging the window. */}
+      <span className="titlebar-brand">
+        <StellarMark size={16} title="Stellar" />
+      </span>
       <span className="titlebar-drag" />
       <div className="titlebar-controls">
         <button

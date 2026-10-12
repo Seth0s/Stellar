@@ -55,7 +55,7 @@ import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { Rail } from "./Rail";
 import type { RailBoardInfo } from "./RailBoardPanel";
 import { Compass } from "./Compass";
-import { Topbar, OPEN_SESSIONS_EVENT } from "./Topbar";
+import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
 import { AppShell } from "./AppShell";
@@ -3882,7 +3882,9 @@ export function App() {
         onOpenPalette={() => setBoardCmdOpen(true)}
         paletteOpen={boardCmdOpen}
         board={railBoardInfo}
-        onOpenSessions={() => window.dispatchEvent(new Event(OPEN_SESSIONS_EVENT))}
+        boards={boards}
+        boardCounts={effectiveBoardCounts}
+        onSwitchBoard={switchBoard}
         summarizeProviderLabel={
           availableAgentProviders.find((a) => a.id === newProvider)?.label ?? newProvider
         }
@@ -4587,7 +4589,6 @@ export function App() {
       <Topbar
         boards={boards}
         activeBoardId={activeBoardId!}
-        boardCounts={effectiveBoardCounts}
         rootName={rootDisplayName(workspaceRoot)}
         workspaceRoot={workspaceRoot}
         defaultCwd={DEFAULT_CWD}
@@ -4600,7 +4601,6 @@ export function App() {
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
         onOpenRemote={() => setSettingsPage("devices")}
-        onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}

@@ -305,10 +305,11 @@ try {
 
   // Isolamento entre boards — um board novo nasce false mesmo com outro
   // board autônomo, e um card daquele board novo ainda pede consentimento.
-  const newSessionBtn = await centerOf(page, ".topbar-title");
-  await page.click(newSessionBtn.x, newSessionBtn.y);
+  // The path now opens the rail's Board panel; the session switcher is asked for the way
+  // its "Trocar de sessão…" link does.
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
-  const plusBtn = await centerOf(page, ".board-create button.primary");
+  const plusBtn = await centerOf(page, '[data-role="session-new"]');
   await page.click(plusBtn.x, plusBtn.y);
   await new Promise((r) => setTimeout(r, 300));
   await page.evalJs(`

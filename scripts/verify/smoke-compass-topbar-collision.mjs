@@ -90,8 +90,9 @@ try {
   // breadcrumb, clica o lápis de editar da própria sessão ativa, digita
   // um nome bem comprido no campo controlado (setter nativo + evento
   // 'input', truque padrão pra um <input> controlado por React) e salva.
-  const titleBtn = await centerOf(page, ".topbar-title");
-  await page.click(titleBtn.x, titleBtn.y);
+  // The path now opens the rail's Board panel; the session switcher is asked for the way
+  // its "Trocar de sessão…" link does.
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
   const editBtn = await centerOf(page, '[data-role="edit-session"]');
   await page.click(editBtn.x, editBtn.y);

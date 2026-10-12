@@ -37,26 +37,19 @@ try {
   }
 
   // open the switcher
-  const titleCoords = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = document.querySelector('.topbar-title');
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
-  );
-  await page.click(titleCoords.x, titleCoords.y);
+  // The path opens the rail's Board panel; the session list is what its
+  // "Trocar de sessão…" link leads to.
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
-  const popoverOpen = await page.evalJs(`JSON.stringify(!!document.querySelector('.board-list'))`);
-  check("switcher popover opens", JSON.parse(popoverOpen), true);
+  const popoverOpen = await page.evalJs(`JSON.stringify(!!document.querySelector('[data-role="rail-sessions"]'))`);
+  check("session list opens in the rail", JSON.parse(popoverOpen), true);
 
-  // no inline create form left in the popover — just the list + one CTA
-  const noInlineCreate = await page.evalJs(`JSON.stringify(!document.querySelector('.board-list ~ .popover-field'))`);
-  check("popover has no inline create form (moved to modal)", JSON.parse(noInlineCreate), true);
+  // no inline create form in the list — just the rows + the two actions
+  const noInlineCreate = await page.evalJs(`JSON.stringify(!document.querySelector('[data-role="rail-sessions"] input'))`);
+  check("list has no inline create form (moved to modal)", JSON.parse(noInlineCreate), true);
 
   // "+ nova sessão" opens the create modal
-  await clickByText(".popover-actions-stretch button", "nova sessão");
+  await clickByText('[data-role="session-new"]', "Nova sessão");
   await new Promise((r) => setTimeout(r, 300));
   const createModalOpen = await page.evalJs(`JSON.stringify(!!document.querySelector('.modal-root'))`);
   check("create modal opens", JSON.parse(createModalOpen), true);
@@ -135,9 +128,9 @@ try {
   check("seeded terminals use the template's providers", afterCreate.tags.includes("claude") && afterCreate.tags.includes("bash"), true);
 
   // reopen switcher, edit the new session via its pencil button
-  await page.click(titleCoords.x, titleCoords.y);
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
-  await clickByText(".board-row.active button[title='Editar sessão']", "");
+  await clickByText('[data-role="session-row"][data-active="true"] [data-role="edit-session"]', "");
   await new Promise((r) => setTimeout(r, 300));
   const editPrefill = JSON.parse(
     await page.evalJs(`
@@ -176,13 +169,13 @@ try {
   check("renamed session's name persisted to the DB row", persisted?.name, "Sessão Renomeada");
 
   // delete it via the edit modal (>1 session exists, so it's enabled)
-  await page.click(titleCoords.x, titleCoords.y);
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
   const renamedRowCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const row = [...document.querySelectorAll('.board-row')].find((r) => r.textContent.includes('Sessão Renomeada'));
-        const btn = row?.querySelector("button[title='Editar sessão']");
+        const row = [...document.querySelectorAll('[data-role="session-row"]')].find((r) => r.textContent.includes('Sessão Renomeada'));
+        const btn = row?.querySelector('[data-role="edit-session"]');
         if (!btn) return JSON.stringify(null);
         const r = btn.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
@@ -207,9 +200,9 @@ try {
   // look (no dimmed/disabled affordance either). Only "Sessão Inicial" is
   // left now — its Excluir must look disabled AND explain why via toast
   // when clicked, without actually deleting it.
-  await page.click(titleCoords.x, titleCoords.y);
+  await page.evalJs(`window.dispatchEvent(new Event("stellar:open-sessions"))`);
   await new Promise((r) => setTimeout(r, 300));
-  await clickByText(".board-row button[title='Editar sessão']", "");
+  await clickByText('[data-role="session-row"] [data-role="edit-session"]', "");
   await new Promise((r) => setTimeout(r, 300));
   const lastDeleteBtn = JSON.parse(
     await page.evalJs(`
