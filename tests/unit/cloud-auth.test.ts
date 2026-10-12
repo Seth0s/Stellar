@@ -45,6 +45,10 @@ type Backend = {
     /** How the fake answers POST /v1/auth/email; `hang` never answers. */
     emailReply: { status: number; error?: { code: string; message: string } } | "hang";
     emailRequests: number;
+    /** When set, refresh tokens are single-use like the real server's: only these are accepted. */
+    strictRefresh: { valid: Set<string>; counter: number; log: { used: string; ok: boolean }[]; delayMs?: number } | null;
+    /** When set, the authorization_code exchange hands out these tokens (a different account's session). */
+    exchangeTokens: { access: string; refresh: string } | null;
   };
 };
 
@@ -62,11 +66,13 @@ async function startBackend(): Promise<Backend> {
     lastExchangeRedirectUri: null,
     emailReply: { status: 202 },
     emailRequests: 0,
+    strictRefresh: null,
+    exchangeTokens: null,
   };
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
-    req.on("end", () => {
+    req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const json = (status: number, payload: unknown) => {
         res.writeHead(status, { "Content-Type": "application/json" });
@@ -95,12 +101,26 @@ async function startBackend(): Promise<Backend> {
         return json(202, { status: "sent" });
       }
       if (req.method === "POST" && url.pathname === "/v1/auth/token") {
+        if (body.grant_type === "refresh_token" && state.strictRefresh) {
+          const strict = state.strictRefresh;
+          const ok = strict.valid.delete(body.refresh_token);
+          strict.log.push({ used: body.refresh_token, ok });
+          // A little latency, so that concurrent callers really overlap.
+          await new Promise((r) => setTimeout(r, strict.delayMs ?? 30));
+          if (!ok) return json(400, { error: { code: "invalid_grant", message: "refresh token reused or revoked" } });
+          const next = `S${++strict.counter}`;
+          strict.valid.add(next);
+          return json(200, { access_token: `A${strict.counter}`, refresh_token: next, expires_in: 900, refresh_expires_in: 2592000 });
+        }
         if (body.grant_type === "refresh_token") {
           state.refreshRequests++;
           return json(200, { access_token: "A2", refresh_token: "R2", expires_in: 900, refresh_expires_in: 2592000 });
         }
         state.tokenRequests++;
         state.lastExchangeRedirectUri = body.redirect_uri;
+        if (state.exchangeTokens) {
+          return json(200, { access_token: state.exchangeTokens.access, refresh_token: state.exchangeTokens.refresh, expires_in: 900, refresh_expires_in: 2592000 });
+        }
         return json(200, { access_token: "A1", refresh_token: "R1", expires_in: 900, refresh_expires_in: 2592000 });
       }
       if (req.method === "POST" && url.pathname === "/v1/auth/logout") {
@@ -110,7 +130,7 @@ async function startBackend(): Promise<Backend> {
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/me") {
-        if (req.headers.authorization !== "Bearer A1" && req.headers.authorization !== "Bearer A2") {
+        if (!/^Bearer A\d+$/.test(req.headers.authorization ?? "")) {
           return json(401, { error: { code: "unauthorized", message: "missing bearer token" } });
         }
         return json(200, {
@@ -440,6 +460,33 @@ describe("cloud-auth (loopback, backend falso)", () => {
     expect(second.getStatus()).toMatchObject({ state: "logged-in" });
   });
 
+  it("retry() manual: restaura na hora, sem esperar o timer", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+
+    let down = true;
+    const second = createCloudAuth({
+      apiBaseUrl: backend.baseUrl,
+      dataDir: dir,
+      identity: () => ({ userId: USER_ID, installId: INSTALL_ID }),
+      openUrl,
+      deviceLabel: "test",
+      now: () => clock,
+      fetchImpl: ((...args: Parameters<typeof fetch>) =>
+        down ? Promise.reject(new TypeError("fetch failed")) : fetch(...args)) as typeof fetch,
+      restoreRetryMs: 0, // no automatic retry: only the manual one
+    });
+    auths.push(second);
+    await second.restore();
+    expect(second.getStatus()).toMatchObject({ state: "logged-out", sessionOffline: true });
+    expect(await second.retry()).toMatchObject({ state: "logged-out", sessionOffline: true }); // still down
+
+    down = false;
+    expect(await second.retry()).toMatchObject({ state: "logged-in" });
+  });
+
   it("restore com a API fora do ar (5xx): api_unavailable, também com retry", async () => {
     const first = make();
     await first.beginLogin("github");
@@ -460,6 +507,90 @@ describe("cloud-auth (loopback, backend falso)", () => {
     auths.push(second);
     await second.restore();
     expect(second.getStatus()).toMatchObject({ state: "logged-out", lastError: "api_unavailable", sessionOffline: true });
+  });
+
+  it("boot com vários pedidos de token ao mesmo tempo: UM refresh só, e a sessão salva sobrevive", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    // From here the refresh token is single-use, and the saved one is the login's.
+    backend.state.strictRefresh = { valid: new Set(["R1"]), counter: 0, log: [] };
+
+    const second = make(); // a restart: nothing in memory, a refresh token on disk
+    const results = await Promise.all([
+      second.restore(),
+      second.ensureAccessToken(),
+      second.ensureAccessToken(),
+      second.ensureAccessToken(),
+    ]);
+    expect(results[0].state).toBe("logged-in");
+    expect(results.slice(1)).toEqual(["A1", "A1", "A1"]);
+    expect(backend.state.strictRefresh.log).toEqual([{ used: "R1", ok: true }]); // never presented twice
+    expect(storedRefresh()).toBe("S1"); // the rotated token is what is saved
+
+    // And the next restart still finds a live session.
+    const third = make();
+    await third.restore();
+    expect(third.getStatus().state).toBe("logged-in");
+    expect(backend.state.strictRefresh.log.map((e) => e.ok)).toEqual([true, true]);
+  });
+
+  it("refresh em voo + logout: a resposta atrasada NÃO ressuscita a sessão", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    backend.state.strictRefresh = { valid: new Set(["R1"]), counter: 0, log: [], delayMs: 200 };
+
+    const second = make(); // a restart with the saved session
+    const inFlight = second.ensureAccessToken();
+    await waitFor(() => backend.state.strictRefresh!.log.length === 1); // the refresh is out
+    await second.logout();
+    expect(storedRefresh()).toBeNull();
+
+    expect(await inFlight).toBeNull(); // the late answer is dropped
+    await new Promise((r) => setTimeout(r, 300));
+    expect(second.getStatus().state).toBe("logged-out");
+    expect(storedRefresh()).toBeNull(); // the rotated token was NOT written back
+    expect(await second.ensureAccessToken()).toBeNull();
+  });
+
+  it("refresh em voo + novo login: o token atrasado da conta antiga não sobrescreve o da nova", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    backend.state.strictRefresh = { valid: new Set(["R1"]), counter: 0, log: [], delayMs: 400 };
+
+    const second = make();
+    const stale = second.ensureAccessToken(); // refresh of the OLD account's session, slow
+    await waitFor(() => backend.state.strictRefresh!.log.length === 1);
+
+    // Meanwhile another account signs in on this app.
+    backend.state.exchangeTokens = { access: "A99", refresh: "R-new" };
+    await second.beginLogin("github");
+    await browserStep();
+    await waitStatus(second, "logged-in");
+    expect(storedRefresh()).toBe("R-new");
+
+    expect(await stale).toBeNull(); // dropped, not applied
+    expect(storedRefresh()).toBe("R-new"); // the new account's token survives
+    const status = second.getStatus();
+    expect(status.state).toBe("logged-in");
+  });
+
+  it("refresh recusado com invalid_grant: a sessão morta é apagada (e só ela)", async () => {
+    const first = make();
+    await first.beginLogin("github");
+    await browserStep();
+    await waitStatus(first, "logged-in");
+    backend.state.strictRefresh = { valid: new Set(), counter: 0, log: [] }; // R1 is already spent
+
+    const second = make();
+    clock += 10_000_000; // access long expired
+    await second.ensureAccessToken(); // R1 is refused and it is still the saved one -> cleared
+    expect(storedRefresh()).toBeNull();
   });
 
   it("restore: com refresh guardado, renova e volta logado", async () => {

@@ -121,6 +121,11 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   // Bumped by every beginLogin/cancel: an e-mail request still in flight when
   // the user cancels or starts over must not resurrect a stale pending login.
   let attempt = 0;
+  // Bumped when the session the app holds is replaced or ended (logout, a new
+  // login). A refresh or `/me` that was already in flight belongs to the OLD
+  // session: when it comes back it must not write its tokens (that would
+  // resurrect a signed-out session or overwrite the new account's token).
+  let sessionEpoch = 0;
 
   const listeners = new Set<(status: CloudStatus) => void>();
 
@@ -179,7 +184,10 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   }
 
   async function loadMe(): Promise<void> {
+    const epoch = sessionEpoch;
     const token = await ensureAccessToken();
+    // Signed out or replaced while the token was being fetched: nothing to load.
+    if (epoch !== sessionEpoch) return;
     if (!token) {
       clearSession();
       emit();
@@ -187,6 +195,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       return;
     }
     const res = await api.meWithPlan(token);
+    if (epoch !== sessionEpoch) return;
     if (!res.ok) {
       // Access acabou de ser obtido; falha aqui é rede/contrato, não credencial.
       lastError = classifyAccountError(res.error);
@@ -214,21 +223,54 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     if (typeof restoreTimer.unref === "function") restoreTimer.unref();
   }
 
+  // The refresh token is single-use: the server rotates it on every refresh and
+  // answers a reused one with `invalid_grant`. Several callers ask for a token
+  // at the same time (the restore at boot, the inbox, the team and work-home
+  // IPC), so they all share ONE refresh in flight. Without that, the first
+  // refresh wins and the others present the already-spent token, get
+  // `invalid_grant`, and wipe a perfectly good saved session.
+  let refreshing: Promise<string | null> | null = null;
+
+  /** The session was replaced or ended: whatever is in flight no longer counts. */
+  function endSessionEpoch(): void {
+    sessionEpoch++;
+    refreshing = null;
+    if (restoreTimer) {
+      clearTimeout(restoreTimer);
+      restoreTimer = null;
+    }
+  }
+
   /** Garante um access válido, renovando ANTES de expirar. `null` = precisa
    *  entrar de novo. */
   async function ensureAccessToken(): Promise<string | null> {
     if (access && decideTokenRenewal({ obtainedAtMs: access.obtainedAtMs, expiresInSec: access.expiresInSec, nowMs: now() }) === "valid") {
       return access.token;
     }
+    if (refreshing) return refreshing;
+    const inFlight = refreshAccess().finally(() => {
+      if (refreshing === inFlight) refreshing = null;
+    });
+    refreshing = inFlight;
+    return inFlight;
+  }
+
+  async function refreshAccess(): Promise<string | null> {
     const refreshToken = tokens.getRefreshToken();
     if (!refreshToken) return access?.token ?? null;
 
+    const epoch = sessionEpoch;
     const ident = cfg.identity();
     const res = await api.refresh(
       buildRefreshBody({ refreshToken, installId: ident?.installId ?? "", deviceLabel: cfg.deviceLabel }),
     );
+    // The session changed while this refresh was out (logout, another login, a
+    // different token saved): its answer is about a session that is gone.
+    if (epoch !== sessionEpoch || tokens.getRefreshToken() !== refreshToken) return null;
     if (!res.ok) {
-      // invalid_grant = refresh revogado/reusado: a sessão morreu.
+      // invalid_grant = refresh revogado/reusado: a sessão morreu. Only when the
+      // saved token is still the one that was refused: if something else saved
+      // a newer one meanwhile, that session is alive and stays.
       if (res.error.code === "invalid_grant") {
         tokens.clear();
         clearSession();
@@ -256,6 +298,8 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
       emit();
       return;
     }
+    // A new login replaces whatever session (and refresh in flight) came before.
+    endSessionEpoch();
     applyPair(res.value);
     await loadMe();
   }
@@ -390,6 +434,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
 
   async function logout(): Promise<CloudStatus> {
     stopPending();
+    endSessionEpoch();
     const refreshToken = tokens.getRefreshToken();
     if (refreshToken) await api.logout(refreshToken).catch(() => undefined);
     tokens.clear();
@@ -429,6 +474,14 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     },
     logout,
     restore,
+    /** The "try again" of an offline saved session: restores now instead of waiting for the timer. */
+    async retry(): Promise<CloudStatus> {
+      if (restoreTimer) {
+        clearTimeout(restoreTimer);
+        restoreTimer = null;
+      }
+      return restore();
+    },
     ensureAccessToken,
     onStatusChanged(cb: (status: CloudStatus) => void): () => void {
       listeners.add(cb);
