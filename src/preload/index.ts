@@ -1,3 +1,4 @@
+import type { UpdaterSnapshot } from "../main/update-state";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { homedir } from "node:os";
 // Só TIPO: apagado no build, então nada de `node:fs` (que aquele módulo
@@ -1771,8 +1772,10 @@ const remote = {
 /** In-app updater (DESIGN-BACKLOG.md item 13 — see main/updater.ts's own
  * doc comment for the full product-behavior contract). `check()` is a
  * no-op in dev (`{checked: false}`) — never throws, safe to call
- * unconditionally at boot. `onAvailable`/`onDownloaded` only ever fire in
- * a packaged build with a real update actually found. */
+ * unconditionally at boot. The dialog follows the main process's single
+ * state snapshot (`getState` once, then `onState` pushes); the download
+ * runs in main and survives the dialog being closed. Restarting to install
+ * only ever happens from `install()`. */
 const updater = {
   /** O resultado do check carrega, alem do veredito, os FATOS que a tela precisa
    *  para nao mentir (task 5fb0c21b): `install` diz se esta INSTALACAO consegue
@@ -1788,44 +1791,46 @@ const updater = {
     feed?: { configured: boolean; source?: "app-update.yml" | "override" };
     install?: {
       canInstall: boolean;
-      how?: "appimage" | "rpm" | "deb";
+      how?: "appimage" | "rpm" | "deb" | "nsis" | "mac-swap";
       needsElevation?: boolean;
       message?: string;
     };
     releaseUrl?: string | null;
     currentVersion?: string;
-    /** A versão que o usuário adiou, persistida — o banner nasce escondido
+    /** A versão que o usuário adiou, persistida — o diálogo nasce fechado
      *  nela e volta para uma versão MAIS NOVA. */
     remindLaterVersion?: string | null;
   }> => ipcRenderer.invoke("updater:check"),
+  /** The dialog's whole state, as main holds it right now. */
+  getState: (): Promise<UpdaterSnapshot> => ipcRenderer.invoke("updater:get-state"),
+  onState: (cb: (snapshot: UpdaterSnapshot) => void) => {
+    const listener = (_e: unknown, snapshot: UpdaterSnapshot) => cb(snapshot);
+    ipcRenderer.on("updater:state", listener);
+    return () => ipcRenderer.removeListener("updater:state", listener);
+  },
+  /** "Baixar" — starts the download; progress arrives through `onState`. */
+  download: (): Promise<{ ok: boolean; cancelled?: boolean; error?: string }> =>
+    ipcRenderer.invoke("updater:download"),
+  /** "Cancelar download" (the library's cancellation token). */
+  cancel: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("updater:cancel"),
+  /** "Reiniciar agora" — the only call that closes the app to install. */
   // `swapLogPath` só vem no darwin: é o arquivo que a troca escreve e que o
   // testador manda se algo falhar (task d0fef4e7).
   install: (): Promise<{ ok: boolean; error?: string; swapLogPath?: string }> =>
     ipcRenderer.invoke("updater:install"),
-  /** O aviso traz as duas partes JÁ SEPARADAS pelo main (task 5fb0c21b):
-   *  `changelog` é o corpo da release SEM a seção de commits, e `commits` é a
-   *  lista que o `release.yml` escreve no corpo (o parser mora em
-   *  `shared/release-notes.ts`). Lista vazia = a release não trouxe a seção, e a
-   *  tela não promete dropdown. */
-  onAvailable: (cb: (version: string, changelog: string, commits: string[]) => void) => {
-    const listener = (_e: unknown, version: string, changelog: string, commits: string[]) =>
-      cb(version, changelog, commits);
-    ipcRenderer.on("updater:available", listener);
-    return () => ipcRenderer.removeListener("updater:available", listener);
-  },
+  /** How many live terminals/agents a restart would end. */
+  runningCounts: (): Promise<{ terminals: number; agents: number; sessions: number }> =>
+    ipcRenderer.invoke("updater:running-counts"),
   /** "Lembrar mais tarde" PERSISTIDO por versão (task 5fb0c21b, item 5). */
   remindLater: (version: string | null): Promise<{ ok: boolean; remindLaterVersion: string | null }> =>
     ipcRenderer.invoke("updater:remind-later", version),
-  onDownloaded: (cb: () => void) => {
-    const listener = () => cb();
-    ipcRenderer.on("updater:downloaded", listener);
-    return () => ipcRenderer.removeListener("updater:downloaded", listener);
-  },
-  /** Test-only (item 17's E2E coverage) — no-op in a packaged build, see
-   * main/updater.ts's guard. Lets `scripts/verify/smoke-updater.mjs`
-   * exercise the banner/changelog/dot UI without a real publish feed. */
-  testEmitAvailable: (version: string, releaseNotes: string | null): Promise<void> =>
-    ipcRenderer.invoke("updater:test-emit-available", version, releaseNotes),
+  /** Test-only — no-op in a packaged build, see main/updater.ts's guard. Puts
+   * the dialog in any state so `scripts/verify/smoke-update-dialog.mjs` can
+   * exercise every screen without a real feed. */
+  testSetState: (
+    partial: Partial<UpdaterSnapshot>,
+    runningCounts?: { terminals: number; agents: number; sessions: number } | null,
+  ): Promise<void> => ipcRenderer.invoke("updater:test-set-state", partial, runningCounts ?? null),
 };
 
 export type AgentAvailability = {

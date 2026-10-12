@@ -1,0 +1,472 @@
+/* Update dialog — measures from Atualizacao.dc.html. */
+
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.veil {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 6, 10, 0.74); /* sd:allow: prototype dialog veil (Atualizacao.dc.html) */
+}
+
+.dialog {
+  position: relative;
+  width: 540px; /* sd:allow: prototype dialog width (Atualizacao.dc.html) */
+  max-width: calc(100vw - 32px);
+  max-height: min(760px, calc(100vh - 32px)); /* sd:allow: prototype dialog max height (Atualizacao.dc.html) */
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px; /* sd:allow: prototype dialog radius (Atualizacao.dc.html) */
+  background: var(--rail-panel-bg);
+  border: 1px solid #262b3a; /* sd:allow: prototype dialog border (Atualizacao.dc.html) */
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55); /* sd:allow: prototype dialog shadow (Atualizacao.dc.html) */
+  color: var(--rail-text);
+  font-family: var(--font-ui);
+}
+
+.header {
+  padding: 22px 24px 4px; /* sd:allow: prototype dialog header padding (Atualizacao.dc.html) */
+  display: flex;
+  gap: 14px; /* sd:allow: prototype dialog header gap (Atualizacao.dc.html) */
+  align-items: flex-start;
+}
+
+.tile {
+  width: 44px; /* sd:allow: prototype icon tile (Atualizacao.dc.html) */
+  height: 44px; /* sd:allow: prototype icon tile (Atualizacao.dc.html) */
+  border-radius: 12px; /* sd:allow: prototype icon tile (Atualizacao.dc.html) */
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.toneInfo {
+  background: #1b2242; /* sd:allow: prototype info tile (Atualizacao.dc.html) */
+  color: #b9c4ff; /* sd:allow: prototype info tile (Atualizacao.dc.html) */
+}
+
+.toneOk {
+  background: #14301f; /* sd:allow: prototype ok tile (Atualizacao.dc.html) */
+  color: #8ee6a8; /* sd:allow: prototype ok tile (Atualizacao.dc.html) */
+}
+
+.toneError {
+  background: #3a1717; /* sd:allow: prototype error tile (Atualizacao.dc.html) */
+  color: #ff9b9b; /* sd:allow: prototype error tile (Atualizacao.dc.html) */
+}
+
+.toneWarn {
+  background: #3a2f12; /* sd:allow: prototype warning tile (Atualizacao.dc.html) */
+  color: #f2c96a; /* sd:allow: prototype warning tile (Atualizacao.dc.html) */
+}
+
+.heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* sd:allow: prototype heading gap (Atualizacao.dc.html) */
+  padding-top: 2px; /* sd:allow: prototype heading offset (Atualizacao.dc.html) */
+}
+
+.title {
+  margin: 0;
+  font-size: 19px; /* sd:allow: prototype dialog title (Atualizacao.dc.html) */
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.subtitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: var(--rail-text-13);
+  color: var(--rail-muted);
+}
+
+.jump {
+  font-size: var(--rail-text-11);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-3);
+  background: #1b2242; /* sd:allow: prototype jump badge (Atualizacao.dc.html) */
+  color: #b9c4ff; /* sd:allow: prototype jump badge (Atualizacao.dc.html) */
+}
+
+.closeBtn {
+  width: 32px; /* sd:allow: prototype close button (Atualizacao.dc.html) */
+  height: 32px; /* sd:allow: prototype close button (Atualizacao.dc.html) */
+  border-radius: 9px; /* sd:allow: prototype close button (Atualizacao.dc.html) */
+  border: 1px solid var(--rail-field-border);
+  background: var(--rail-btn-bg);
+  color: var(--rail-kbd-fg);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.body {
+  padding: 14px 24px 6px; /* sd:allow: prototype dialog body padding (Atualizacao.dc.html) */
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* sd:allow: prototype dialog body gap (Atualizacao.dc.html) */
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.sectionHead {
+  margin: 0;
+  font-size: var(--rail-text-12);
+  font-weight: 600;
+  letter-spacing: var(--rail-track);
+  color: var(--rail-muted);
+}
+
+.note {
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+  font-size: var(--rail-text-13-5);
+  line-height: 1.5;
+  color: #d6dae4; /* sd:allow: prototype body text (Atualizacao.dc.html) */
+}
+
+.noteDot {
+  width: 6px; /* sd:allow: prototype note dot (Atualizacao.dc.html) */
+  height: 6px; /* sd:allow: prototype note dot (Atualizacao.dc.html) */
+  border-radius: var(--radius-circle);
+  background: #7c8cff; /* sd:allow: prototype note dot (Atualizacao.dc.html) */
+  margin-top: 8px; /* sd:allow: prototype note dot offset (Atualizacao.dc.html) */
+  flex: none;
+}
+
+.link {
+  font-size: var(--rail-text-13);
+  color: #8f9cff; /* sd:allow: prototype link (Atualizacao.dc.html) */
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.text {
+  font-size: var(--rail-text-13-5);
+  line-height: 1.5;
+  color: #d6dae4; /* sd:allow: prototype body text (Atualizacao.dc.html) */
+}
+
+.hint {
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-muted);
+  line-height: 1.5;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.progressTop {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+}
+
+.percent {
+  font-size: 26px; /* sd:allow: prototype download percentage (Atualizacao.dc.html) */
+  font-weight: 500;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.transferred {
+  font-size: var(--rail-text-12-5);
+  color: #9aa1b2; /* sd:allow: prototype transferred bytes (Atualizacao.dc.html) */
+}
+
+.bar {
+  height: var(--space-4);
+  border-radius: var(--radius-3);
+  background: var(--rail-line);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: var(--radius-3);
+  background: #7c8cff; /* sd:allow: prototype progress fill (Atualizacao.dc.html) */
+}
+
+.slide {
+  width: 38%; /* sd:allow: prototype indeterminate bar (Atualizacao.dc.html) */
+  height: 100%;
+  border-radius: var(--radius-3);
+  background: #7c8cff; /* sd:allow: prototype progress fill (Atualizacao.dc.html) */
+  animation: slide 1.4s ease-in-out infinite; /* sd:allow: prototype indeterminate bar timing (Atualizacao.dc.html) */
+}
+
+@keyframes slide {
+  0% {
+    margin-left: -38%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide {
+    animation: none;
+    width: 60%;
+  }
+}
+
+.speedRow {
+  display: flex;
+  gap: 14px; /* sd:allow: prototype speed row gap (Atualizacao.dc.html) */
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-muted);
+}
+
+.box {
+  border-radius: 12px; /* sd:allow: prototype notice radius (Atualizacao.dc.html) */
+  padding: var(--space-6) 14px; /* sd:allow: prototype notice padding (Atualizacao.dc.html) */
+  font-size: var(--rail-text-13);
+  line-height: 1.5;
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.boxWarn {
+  background: #3a2f12; /* sd:allow: prototype warning box (Atualizacao.dc.html) */
+  color: #f2c96a; /* sd:allow: prototype warning box (Atualizacao.dc.html) */
+}
+
+.boxOk {
+  background: #14301f; /* sd:allow: prototype ok box (Atualizacao.dc.html) */
+  color: #8ee6a8; /* sd:allow: prototype ok box (Atualizacao.dc.html) */
+}
+
+.boxError {
+  background: #3a1717; /* sd:allow: prototype error box (Atualizacao.dc.html) */
+  color: #ff9b9b; /* sd:allow: prototype error box (Atualizacao.dc.html) */
+}
+
+.boxIcon {
+  flex: none;
+  margin-top: var(--space-1);
+}
+
+.boxText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.boxStrong {
+  font-weight: 600;
+}
+
+.boxSoft {
+  color: #e8d29a; /* sd:allow: prototype warning body (Atualizacao.dc.html) */
+}
+
+.boxSoftError {
+  color: #f4b4b4; /* sd:allow: prototype error body (Atualizacao.dc.html) */
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.detailLabel {
+  font-size: var(--rail-text-12);
+  color: var(--rail-muted);
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-12);
+  color: var(--rail-kbd-fg);
+  background: var(--rail-kbd-bg);
+  border: 1px solid #20242f; /* sd:allow: prototype code box border (Atualizacao.dc.html) */
+  border-radius: var(--radius-4);
+  padding: var(--space-4) var(--space-5);
+  word-break: break-all;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.step {
+  display: flex;
+  gap: var(--space-6);
+  align-items: flex-start;
+  font-size: var(--rail-text-13-5);
+  line-height: 1.5;
+  color: #d6dae4; /* sd:allow: prototype body text (Atualizacao.dc.html) */
+}
+
+.stepNo {
+  width: 22px; /* sd:allow: prototype step number (Atualizacao.dc.html) */
+  height: 22px; /* sd:allow: prototype step number (Atualizacao.dc.html) */
+  border-radius: var(--radius-circle);
+  background: #1b2242; /* sd:allow: prototype step number (Atualizacao.dc.html) */
+  color: #b9c4ff; /* sd:allow: prototype step number (Atualizacao.dc.html) */
+  display: grid;
+  place-items: center;
+  font-size: var(--rail-text-12);
+  font-weight: 600;
+  flex: none;
+  margin-top: 1px; /* sd:allow: prototype step number offset (Atualizacao.dc.html) */
+}
+
+.stepBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: var(--rail-kbd-bg);
+  border: 1px solid #20242f; /* sd:allow: prototype command box border (Atualizacao.dc.html) */
+  border-radius: var(--radius-4);
+  padding: var(--space-4) var(--space-5);
+}
+
+.commandText {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-12);
+  color: #d6dae4; /* sd:allow: prototype command text (Atualizacao.dc.html) */
+  word-break: break-all;
+}
+
+.footer {
+  padding: 16px 24px 22px; /* sd:allow: prototype dialog footer padding (Atualizacao.dc.html) */
+  display: flex;
+  gap: var(--space-5);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.btn {
+  height: 40px; /* sd:allow: prototype dialog button (Atualizacao.dc.html) */
+  padding: 0 18px; /* sd:allow: prototype dialog button (Atualizacao.dc.html) */
+  border-radius: var(--radius-5);
+  border: 1px solid var(--rail-field-border);
+  background: var(--rail-kbd-bg);
+  color: #d6dae4; /* sd:allow: prototype dialog button text (Atualizacao.dc.html) */
+  font: inherit;
+  font-size: var(--rail-text-14);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
+.btn:hover {
+  border-color: var(--rail-menu-line);
+  color: #fff; /* sd:allow: prototype dialog button hover (Atualizacao.dc.html) */
+}
+
+.btnPrimary {
+  border: 0;
+  background: var(--rail-primary);
+  color: #fff; /* sd:allow: prototype primary button (Atualizacao.dc.html) */
+  font-weight: 600;
+}
+
+.btnPrimary:hover {
+  background: #5770f0; /* sd:allow: prototype primary hover (Atualizacao.dc.html) */
+  color: #fff; /* sd:allow: prototype primary button (Atualizacao.dc.html) */
+}
+
+.btnQuiet {
+  border-color: transparent;
+  background: transparent;
+  color: #9aa1b2; /* sd:allow: prototype quiet button (Atualizacao.dc.html) */
+}
+
+.btnQuiet:hover {
+  color: #fff; /* sd:allow: prototype quiet button hover (Atualizacao.dc.html) */
+  border-color: transparent;
+}
+
+.btnSmall {
+  height: 28px; /* sd:allow: prototype copy button (Atualizacao.dc.html) */
+  padding: 0 var(--space-5);
+  font-size: var(--rail-text-12);
+  border-radius: 7px; /* sd:allow: prototype copy button radius (Atualizacao.dc.html) */
+}
+
+.status {
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-muted);
+}
+
+/* Title-bar icon states (UpdateDialogIcon.tsx). */
+.ringTrack {
+  stroke: var(--rail-line);
+}
+
+.ringFill {
+  stroke: #7c8cff; /* sd:allow: same fill colour as the dialog progress bar (Atualizacao.dc.html) */
+  color: #7c8cff; /* sd:allow: same fill colour as the dialog progress bar (Atualizacao.dc.html) */
+}
+
+.iconOk {
+  color: #8ee6a8; /* sd:allow: ready tone from the prototype (Atualizacao.dc.html) */
+}
+
+.iconError {
+  color: #ff9b9b; /* sd:allow: error tone from the prototype (Atualizacao.dc.html) */
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .iconSpin {
+    animation: icon-spin 0.9s linear infinite; /* sd:allow: title-bar spinner timing, same family as the check button's 0.8s */
+  }
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

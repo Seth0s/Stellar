@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import { useUpdateStatus } from "./useUpdateStatus";
+import { UpdateTitlebarIcon } from "./UpdateDialogIcon";
 
 // Header nativo do Mac (2026-09-08) — `main/index.ts`'s `titleBarStyle:
 // "hidden"` só existe no darwin (`frame:false` nas outras plataformas,
@@ -31,7 +32,7 @@ document.documentElement.dataset.platform = window.system.platform;
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const { version: updateVersion, checking: updateChecking, checkError: updateCheckError, updatesUnavailable, undismiss, checkNow } = useUpdateStatus();
+  const { checking: updateChecking, checkError: updateCheckError, updatesUnavailable, checkNow } = useUpdateStatus();
 
   useEffect(() => {
     window.winControls.isMaximized().then(setMaximized);
@@ -80,15 +81,7 @@ export function Titlebar() {
         >
           <Icon name="reload" size={14} />
         </button>
-        {updateVersion && (
-          <button
-            className="titlebar-update-dot"
-            title={t("titlebar.updateAvailable", { version: updateVersion })}
-            onClick={undismiss}
-          >
-            <span className="titlebar-update-dot-mark" />
-          </button>
-        )}
+        <UpdateTitlebarIcon />
         {/* No darwin, os 3 abaixo somem — o traffic-light cluster nativo
             do `titleBarStyle: "hidden"` (main/index.ts) já minimiza/
             maximiza/fecha, desenhado pelo próprio macOS no canto superior

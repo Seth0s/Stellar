@@ -4953,7 +4953,13 @@ function createWindow() {
   ipcMain.handle("remote:revoke-device", (_e, id: string) => remoteServer!.revokeDevice(id));
   ipcMain.handle("remote:revoke-all", () => remoteServer!.revokeAll());
 
-  registerUpdater(win);
+  // The second argument says what a restart to install would end — live shells
+  // vs. agents and how many sessions hold them (shown by the update dialog).
+  registerUpdater(win, () => {
+    const live = store.listAllCards().filter((c) => c.kind === "terminal" && registry.isAlive(c.id));
+    const agents = live.filter((c) => c.provider !== "bash").length;
+    return { terminals: live.length - agents, agents, sessions: new Set(live.map((c) => c.board_id)).size };
+  });
 
   // `browserRegistry.destroyAll()` touches `win.contentView` — needs `win`
   // still alive, so it has to run on "close" (before teardown), not

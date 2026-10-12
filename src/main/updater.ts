@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { statfs } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { app, ipcMain, type BrowserWindow } from "electron";
@@ -9,6 +10,20 @@ import {
   type UpdateFeedState,
 } from "./update-feed-decision";
 import { decideUpdateInstall, type UpdateInstallState } from "./update-install-decision";
+import { classifyUpdateError, firstLine, isUpdateCancellation } from "./update-error-decision";
+import { decideManualInstall } from "./update-manual-decision";
+import {
+  IDLE_SNAPSHOT,
+  onDownloadCancelled,
+  onDownloadProgress,
+  onDownloadStarted,
+  onDownloaded,
+  onInstallStarted,
+  onUpdateAvailable,
+  onUpdateFailed,
+  type UpdaterError,
+  type UpdaterSnapshot,
+} from "./update-state";
 import { parseReleaseNotes } from "../shared/release-notes";
 import { readUpdatePrefs, writeRemindLaterVersion } from "./update-prefs";
 import {
@@ -25,7 +40,7 @@ import {
 // instead (confirmed live, the exact fix Node's own error message
 // suggests).
 import electronUpdaterPkg from "electron-updater";
-const { autoUpdater } = electronUpdaterPkg;
+const { autoUpdater, CancellationToken } = electronUpdaterPkg;
 
 /**
  * In-app updater (DESIGN-BACKLOG.md item 13, "updater e padronizar
@@ -37,9 +52,14 @@ const { autoUpdater } = electronUpdaterPkg;
  * - Check once at boot, silently — no toast/UI if there's no update, no
  *   network, or no publish feed configured yet (just `console.warn`).
  * - Never auto-download or auto-install. `checkForUpdates()` only learns
- *   whether one exists; downloading and restarting only happen from an
- *   explicit `install()` call, itself only reachable from the user
- *   clicking the update pill in the UI (`UpdateBanner.tsx`).
+ *   whether one exists. Downloading starts from the user's "Baixar" in the
+ *   update dialog (`UpdateDialog.tsx`); restarting to install happens ONLY
+ *   from an explicit "Reiniciar agora" (`updater:install`). Closing the
+ *   dialog, "Reiniciar depois" and quitting the app never install anything
+ *   (`autoInstallOnAppQuit` is off).
+ * - The dialog's state lives here, in one snapshot (`update-state.ts`): the
+ *   download outlives the window, so the renderer follows it through
+ *   `updater:state` and can ask for it again after a reload.
  * - Any failure (network, signature, no feed) surfaces to the renderer as
  *   a plain error string instead of installing anything.
  *
@@ -110,13 +130,73 @@ let lastMacZipSha512: string | null = null;
  */
 const macSwapLogPath = (): string => join(app.getPath("userData"), MAC_SWAP_LOG_FILENAME);
 
-export function registerUpdater(win: BrowserWindow) {
+/** Where `electron-updater` caches its download (its `baseCachePath`). */
+function updaterCacheDir(): string {
+  const home = app.getPath("home");
+  if (process.platform === "darwin") return join(home, "Library", "Caches");
+  if (process.platform === "win32") return process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+  return process.env.XDG_CACHE_HOME || join(home, ".cache");
+}
+
+/** Free bytes where the updater caches its download. */
+async function freeDiskBytes(): Promise<number | null> {
+  try {
+    const st = await statfs(updaterCacheDir());
+    return Number(st.bavail) * Number(st.bsize);
+  } catch {
+    return null;
+  }
+}
+
+/** What a restart to install would end (live shells, agents, sessions holding them). */
+export type RunningCounts = { terminals: number; agents: number; sessions: number };
+
+export function registerUpdater(win: BrowserWindow, countRunning: () => RunningCounts) {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
+
+  let snapshot: UpdaterSnapshot = IDLE_SNAPSHOT;
+  let cancelToken: InstanceType<typeof CancellationToken> | null = null;
+  /** macOS: the zip the library fetched, handed to the swap on restart. */
+  let downloadedZipPath: string | null = null;
+  let lastProgressPush = 0;
+  /** Test-only: counts the dialog shows instead of the real ones. */
+  let testCounts: RunningCounts | null = null;
 
   function send(channel: string, ...args: unknown[]) {
     if (win.isDestroyed()) return;
     win.webContents.send(channel, ...args);
+  }
+
+  function setSnapshot(next: UpdaterSnapshot, opts: { throttle?: boolean } = {}) {
+    if (next === snapshot) return;
+    snapshot = next;
+    if (opts.throttle) {
+      const now = Date.now();
+      if (now - lastProgressPush < 150) return;
+      lastProgressPush = now;
+    }
+    send("updater:state", snapshot);
+  }
+
+  async function failureFrom(err: unknown, stage: UpdaterError["stage"], extra: { swapLogPath?: string | null } = {}) {
+    const message = err instanceof Error ? err.message : String(err);
+    const rawCode = (err as { code?: unknown } | null)?.code;
+    const code = typeof rawCode === "string" ? rawCode : null;
+    const kind = classifyUpdateError({ code, message });
+    const failure = {
+      kind,
+      code,
+      detail: firstLine(message),
+      swapLogPath: extra.swapLogPath ?? null,
+      neededBytes: null as number | null,
+      freeBytes: null as number | null,
+    };
+    if (kind === "disk") {
+      failure.neededBytes = snapshot.progress?.total || snapshot.downloadBytes || null;
+      failure.freeBytes = await freeDiskBytes();
+    }
+    setSnapshot(onUpdateFailed(snapshot, stage, failure));
   }
 
   autoUpdater.on("update-available", (info) => {
@@ -130,17 +210,61 @@ export function registerUpdater(win: BrowserWindow) {
     );
     // `info.releaseNotes` can be a string (GitHub provider — the release
     // body, as written) or an array of per-version note objects depending on
-    // provider/update path. O CORPO é o caso do provider GitHub e é ele que
-    // traz a seção de commits (ver `shared/release-notes.ts`); o formato de
-    // array não é interpretado aqui — sem lista, o dropdown simplesmente não
-    // aparece, em vez de inventar commit.
+    // provider/update path. O CORPO é o caso do provider GitHub; o parser
+    // (`shared/release-notes.ts`) separa as notas da seção de commits, e o
+    // diálogo mostra só as notas (os commits ficam na página da release). O
+    // formato de array não é interpretado aqui — sem notas, a lista simplesmente
+    // não aparece.
     const notes = parseReleaseNotes(
       typeof info.releaseNotes === "string" ? info.releaseNotes : null,
     );
-    send("updater:available", info.version, notes.changelog, notes.commits);
+    const files = info.files ?? [];
+    const file = process.platform === "darwin" ? files.find((f) => /\.zip$/i.test(f.url)) : files[0];
+    const install = installState();
+    let osRelease: string | null = null;
+    if (!install.canInstall && process.platform === "linux") {
+      try {
+        osRelease = readFileSync("/etc/os-release", "utf8");
+      } catch {
+        osRelease = null;
+      }
+    }
+    setSnapshot(
+      onUpdateAvailable(snapshot, {
+        version: info.version,
+        changelog: notes.changelog,
+        downloadBytes: typeof file?.size === "number" ? file.size : null,
+        manual: install.canInstall
+          ? null
+          : decideManualInstall({
+              platform: process.platform,
+              arch: process.arch,
+              version: info.version,
+              packageType: readPackageType(),
+              osRelease,
+            }),
+      }),
+    );
   });
-  autoUpdater.on("error", (err) => console.warn("[updater]", err.message));
-  autoUpdater.on("update-downloaded", () => send("updater:downloaded"));
+  autoUpdater.on("download-progress", (p) =>
+    setSnapshot(
+      onDownloadProgress(snapshot, {
+        percent: p.percent,
+        transferred: p.transferred,
+        total: p.total,
+        bytesPerSecond: p.bytesPerSecond,
+      }),
+      { throttle: true },
+    ),
+  );
+  autoUpdater.on("error", (err) => {
+    console.warn("[updater]", err.message);
+    // `quitAndInstall` reports a failed install through this event instead of
+    // throwing; a download failure is handled where `downloadUpdate` rejects.
+    if (snapshot.phase === "installing") void failureFrom(err, "install");
+  });
+
+  ipcMain.handle("updater:get-state", () => snapshot);
 
   ipcMain.handle("updater:check", async () => {
     // Never in dev — electron-updater throws synchronously ("only
@@ -217,12 +341,6 @@ export function registerUpdater(win: BrowserWindow) {
     }
   });
 
-  // Test-only trigger (item 17's E2E coverage) — `update-available` only
-  // ever fires for real from a packaged build with a working publish feed
-  // (see the PENDENTE note above), so there's no way to exercise the
-  // renderer UI (banner/changelog/dot) against the real event in dev.
-  // Guarded the same way every other updater IPC handler already is
-  // (`app.isPackaged`) — inert, a no-op, in any real build a user runs.
   /** "Lembrar mais tarde" PERSISTIDO (task 5fb0c21b, item 5): o renderer diz
    *  qual versão adiar e o main grava. `null` limpa (o usuário voltou atrás). */
   ipcMain.handle("updater:remind-later", (_e, version: string | null) => {
@@ -230,21 +348,70 @@ export function registerUpdater(win: BrowserWindow) {
     return { ok: true, remindLaterVersion: next.remindLaterVersion };
   });
 
+  // Test-only: puts the dialog in any state (with whatever facts the caller
+  // supplies) without a real feed. Guarded like every other updater IPC —
+  // inert in a packaged build.
   ipcMain.handle(
-    "updater:test-emit-available",
-    (_e, version: string, releaseNotes: string | null) => {
+    "updater:test-set-state",
+    (_e, partial: Partial<UpdaterSnapshot>, counts?: RunningCounts | null) => {
       if (app.isPackaged) return;
-      send("updater:available", version, releaseNotes);
+      testCounts = counts ?? null;
+      setSnapshot({ ...IDLE_SNAPSHOT, ...partial });
     },
   );
 
-  ipcMain.handle("updater:install", async () => {
+  ipcMain.handle("updater:running-counts", () => testCounts ?? countRunning());
+
+  /** "Baixar": the download starts here, never by itself. */
+  ipcMain.handle("updater:download", async () => {
     if (!app.isPackaged) return { ok: false, error: "dev build" };
     // A VERDADE ANTES DA TENTATIVA (task 5fb0c21b, item 2): no formato que o
     // dono usa (rpm sem `package-type`) a lib nem chega a instalar — dizer
     // "baixe o rpm" é melhor que um botão que baixa e falha no meio.
     const install = installState();
     if (!install.canInstall) return { ok: false, error: install.message, install };
+    const started = onDownloadStarted(snapshot);
+    if (started === snapshot) return { ok: false, error: "nothing to download" };
+    setSnapshot(started);
+    const token = new CancellationToken();
+    cancelToken = token;
+    try {
+      const files = await autoUpdater.downloadUpdate(token);
+      if (process.platform === "darwin") {
+        const helper = (autoUpdater as unknown as { downloadedUpdateHelper?: { file?: string } }).downloadedUpdateHelper;
+        downloadedZipPath = files[0] ?? helper?.file ?? null;
+      }
+      setSnapshot(onDownloaded(snapshot));
+      return { ok: true };
+    } catch (err) {
+      if (isUpdateCancellation(err)) {
+        setSnapshot(onDownloadCancelled(snapshot));
+        return { ok: false, cancelled: true };
+      }
+      await failureFrom(err, "download");
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      cancelToken = null;
+    }
+  });
+
+  ipcMain.handle("updater:cancel", () => {
+    cancelToken?.cancel();
+    return { ok: true };
+  });
+
+  /**
+   * "Reiniciar agora" — the ONLY path that closes the app to install. The
+   * state flips to `installing` first so the dialog can say so, then the swap
+   * (macOS) or the library's `quitAndInstall` runs.
+   */
+  ipcMain.handle("updater:install", async () => {
+    if (!app.isPackaged) return { ok: false, error: "dev build" };
+    const install = installState();
+    if (!install.canInstall) return { ok: false, error: install.message, install };
+    const started = onInstallStarted(snapshot);
+    if (started === snapshot) return { ok: false, error: "no downloaded update to install", install };
+    setSnapshot(started);
 
     // ---- MAC: A TROCA É NOSSA (task d0fef4e7) ----
     // A lib NÃO instala aqui (Squirrel/ShipIt exige bundle assinado); o que ela
@@ -253,36 +420,24 @@ export function registerUpdater(win: BrowserWindow) {
     if (install.how === "mac-swap") {
       const bundle = bundlePathFromExe(app.getPath("exe"));
       if (bundle === null) {
-        return {
-          ok: false,
-          error:
-            "Não consegui identificar o bundle .app em execução — baixe a versão nova pela release.",
-          install,
-        };
+        const error =
+          "Não consegui identificar o bundle .app em execução — baixe a versão nova pela release.";
+        await failureFrom(new Error(error), "install");
+        return { ok: false, error, install };
       }
       try {
-        await autoUpdater.downloadUpdate();
-        const downloaded = (
-          autoUpdater as unknown as { downloadedUpdateHelper?: { file?: string } }
-        ).downloadedUpdateHelper;
-        const zipPath = downloaded?.file;
+        const zipPath = downloadedZipPath;
         if (typeof zipPath !== "string" || !existsSync(zipPath)) {
-          return {
-            ok: false,
-            error:
-              "O electron-updater não disse onde baixou o pacote — baixe a versão nova pela release.",
-            install,
-            swapLogPath: macSwapLogPath(),
-          };
+          const error =
+            "O electron-updater não disse onde baixou o pacote — baixe a versão nova pela release.";
+          await failureFrom(new Error(error), "install", { swapLogPath: macSwapLogPath() });
+          return { ok: false, error, install, swapLogPath: macSwapLogPath() };
         }
         const expected = lastMacZipSha512 ?? "";
         if (expected === "") {
-          return {
-            ok: false,
-            error: "A checagem não deixou o sha512 do pacote — não vou instalar sem conferir.",
-            install,
-            swapLogPath: macSwapLogPath(),
-          };
+          const error = "A checagem não deixou o sha512 do pacote — não vou instalar sem conferir.";
+          await failureFrom(new Error(error), "install", { swapLogPath: macSwapLogPath() });
+          return { ok: false, error, install, swapLogPath: macSwapLogPath() };
         }
         const workDir = mkdtempSync(join(tmpdir(), "stellar-swap-"));
         const result = await performMacSwap(
@@ -297,12 +452,9 @@ export function registerUpdater(win: BrowserWindow) {
           macSwapNodeIo,
         );
         if (!result.ok) {
-          return {
-            ok: false,
-            error: `${result.error} (passo: ${result.failedStep})`,
-            install,
-            swapLogPath: macSwapLogPath(),
-          };
+          const error = `${result.error} (passo: ${result.failedStep})`;
+          await failureFrom(new Error(error), "install", { swapLogPath: macSwapLogPath() });
+          return { ok: false, error, install, swapLogPath: macSwapLogPath() };
         }
         // A resposta do IPC precisa SAIR antes do quit, senão o renderer não
         // mostra nada e o usuário fica sem saber o que aconteceu.
@@ -318,6 +470,7 @@ export function registerUpdater(win: BrowserWindow) {
           },
         };
       } catch (err) {
+        await failureFrom(err, "install", { swapLogPath: macSwapLogPath() });
         return {
           ok: false,
           error: err instanceof Error ? err.message : String(err),
@@ -328,10 +481,14 @@ export function registerUpdater(win: BrowserWindow) {
     }
 
     try {
-      await autoUpdater.downloadUpdate();
-      autoUpdater.quitAndInstall();
+      // Let the renderer paint "installing" before the window goes away.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      // `(false, true)`: not silent, and run again afterwards — the dialog
+      // promises the app reopens on its own.
+      autoUpdater.quitAndInstall(false, true);
       return { ok: true, install };
     } catch (err) {
+      await failureFrom(err, "install");
       return { ok: false, error: err instanceof Error ? err.message : String(err), install };
     }
   });
