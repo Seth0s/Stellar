@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Atualização do app</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#05060a}
+.scene{height:28px;padding:0 10px;border-radius:8px;border:1px solid #2a2f3d;background:transparent;color:#a3aabb;font:inherit;font-size:12px;cursor:pointer}
+.sceneOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.sub{height:24px;padding:0 9px;border-radius:7px;border:1px solid #2a2f3d;background:transparent;color:#8d94a6;font:inherit;font-size:11.5px;cursor:pointer}
+.subOn{background:#1d2333;color:#e8eaf0;border-color:#3b4570}
+.mono{font-family:'JetBrains Mono',monospace}
+.btn{height:40px;padding:0 18px;border-radius:10px;border:1px solid #2a2f3d;background:#12151d;color:#d6dae4;font:inherit;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;box-sizing:border-box}
+.btn:hover{border-color:#2a3042;color:#fff}
+.btnPrimary{border:0;background:#4a5fe0;color:#fff;font-weight:600}
+.btnPrimary:hover{background:#5770f0;color:#fff}
+.btnQuiet{border-color:transparent;background:transparent;color:#9aa1b2}
+.btnQuiet:hover{color:#fff;border-color:transparent}
+.tile{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;flex:none}
+.note{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.5;color:#d6dae4}
+.noteDot{width:6px;height:6px;border-radius:50%;background:#7c8cff;margin-top:8px;flex:none}
+.box{border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.5;display:flex;gap:10px;align-items:flex-start}
+.step{display:flex;gap:12px;align-items:flex-start;font-size:13.5px;line-height:1.5;color:#d6dae4}
+.stepNo{width:22px;height:22px;border-radius:50%;background:#1b2242;color:#b9c4ff;display:grid;place-items:center;font-size:12px;font-weight:600;flex:none;margin-top:1px}
+.bar{height:8px;border-radius:6px;background:#1d2230;overflow:hidden}
+.fill{height:100%;border-radius:6px;background:#7c8cff}
+.slide{width:38%;height:100%;border-radius:6px;background:#7c8cff;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-38%}100%{margin-left:100%}}
+@media (prefers-reduced-motion: reduce){.slide{animation:none;width:60%}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #05060a; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; position: relative; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: relative; z-index: 3" data-part="prototype-scenes">
+    <span style="font-size: 12px; color: #8d94a6">Cenas do protótipo — não é UI do app</span>
+    <sc-for list="{{scenes}}" as="s" hint-placeholder-count="6"><button type="button" class="{{s.cls}}" onClick="{{s.go}}">{{s.label}}</button></sc-for>
+    <span style="flex: 1"></span>
+    <span style="font-size: 12px; color: #8d94a6">{{cenaLabel}}</span>
+  </div>
+  <div style="display: flex; align-items: center; gap: 6px; position: relative; z-index: 3; min-height: 24px">
+    <sc-if value="{{showSubs}}" hint-placeholder-val="{{ false }}">
+      <span style="font-size: 11.5px; color: #8d94a6">{{subsLabel}}</span>
+      <sc-for list="{{subs}}" as="s" hint-placeholder-count="3"><button type="button" class="{{s.cls}}" onClick="{{s.go}}">{{s.label}}</button></sc-for>
+    </sc-if>
+  </div>
+
+  <!-- The app behind the dialog: only a hint of the shell, dimmed. -->
+  <div style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; display: flex; z-index: 0" aria-hidden="true">
+    <div style="width: 264px; background: #0b0d12; border-right: 1px solid #1a1e29; padding: 70px 14px 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+      <div style="height: 52px; border-radius: 12px; background: #12151d; border: 1px solid #20242f"></div>
+      <div style="height: 34px; border-radius: 9px; background: #151a2a"></div>
+      <div style="height: 34px; border-radius: 9px"></div>
+      <div style="height: 34px; border-radius: 9px"></div>
+    </div>
+    <div style="flex: 1; padding: 70px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; background: #0b0d12">
+      <div style="height: 26px; width: 180px; border-radius: 7px; background: #12151d"></div>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px">
+        <div style="height: 150px; border-radius: 12px; background: #12151d; border: 1px solid #20242f"></div>
+        <div style="height: 150px; border-radius: 12px; background: #12151d; border: 1px solid #20242f"></div>
+        <div style="height: 150px; border-radius: 12px; background: #12151d; border: 1px solid #20242f"></div>
+      </div>
+    </div>
+  </div>
+  <div style="position: absolute; left: 0; top: 0; width: 1440px; height: 900px; background: rgba(5, 6, 10, 0.74); z-index: 1"></div>
+
+  <div style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative; z-index: 2; min-height: 0">
+    <section role="dialog" aria-modal="true" aria-labelledby="ud-title" data-part="update-dialog" data-state="{{cena}}" style="width: 540px; max-height: 760px; border-radius: 16px; background: #0f1218; border: 1px solid #262b3a; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box">
+      <header style="padding: 22px 24px 4px; display: flex; gap: 14px; align-items: flex-start">
+        <span class="tile" style="{{tileStyle}}">
+          <sc-if value="{{iconDown}}" hint-placeholder-val="{{ true }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3.5v10M6.8 9.6L11 13.8l4.2-4.2M4.5 17.5h13"></path></svg></sc-if>
+          <sc-if value="{{iconCheck}}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.8 11.4l4.2 4.2 8.2-8.6"></path></svg></sc-if>
+          <sc-if value="{{iconWarn}}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.2l8 14H3z"></path><path d="M11 9.6v4M11 16v.2"></path></svg></sc-if>
+          <sc-if value="{{iconBox}}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.2L11 3.5l7.5 3.7v7.6L11 18.5l-7.5-3.7z"></path><path d="M3.8 7.4L11 11l7.2-3.6M11 11v7.2"></path></svg></sc-if>
+        </span>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 2px">
+          <h1 id="ud-title" style="margin: 0; font-size: 19px; font-weight: 600; line-height: 1.25">{{title}}</h1>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: #8d94a6">
+            <span>{{subtitle}}</span>
+            <sc-if value="{{showJump}}" hint-placeholder-val="{{ true }}"><span style="font-size: 11px; padding: 2px 8px; border-radius: 6px; background: #1b2242; color: #b9c4ff" data-part="update-jump">novidades</span></sc-if>
+          </div>
+        </div>
+        <sc-if value="{{showClose}}" hint-placeholder-val="{{ true }}">
+          <button type="button" aria-label="{{closeLabel}}" title="{{closeLabel}}" style="width: 32px; height: 32px; border-radius: 9px; border: 1px solid #2a2f3d; background: #161a24; color: #c9cede; cursor: pointer; display: grid; place-items: center; flex: none"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"></path></svg></button>
+        </sc-if>
+      </header>
+
+      <div style="padding: 14px 24px 6px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0">
+
+        <sc-if value="{{showAvailable}}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 10px" data-part="update-notes">
+            <h2 style="margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; color: #8d94a6">O QUE MUDA</h2>
+            <sc-for list="{{notes}}" as="n" hint-placeholder-count="4"><div class="note"><span class="noteDot"></span><span>{{n}}</span></div></sc-for>
+            <a href="#" style="font-size: 13px; color: #8f9cff; text-decoration: none">Ver todas as mudanças na página de releases</a>
+          </div>
+          <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">O download roda em segundo plano. O Stellar só reinicia quando você pedir.</div>
+        </sc-if>
+
+        <sc-if value="{{showDownloading}}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 10px" data-part="update-progress">
+            <div style="display: flex; align-items: baseline; gap: 10px">
+              <span class="mono" style="font-size: 26px; font-weight: 500">48%</span>
+              <span style="flex: 1"></span>
+              <span class="mono" style="font-size: 12.5px; color: #9aa1b2">18,4 de 38,2 MB</span>
+            </div>
+            <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="48" aria-label="Baixando a atualização"><div class="fill" style="width: 48%"></div></div>
+            <div style="display: flex; gap: 14px; font-size: 12.5px; color: #8d94a6">
+              <span class="mono">3,1 MB/s</span>
+              <span>faltam cerca de 7 s</span>
+            </div>
+          </div>
+          <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">Você pode fechar esta janela: o download continua e o ícone na barra de título mostra o andamento.</div>
+        </sc-if>
+
+        <sc-if value="{{showReady}}" hint-placeholder-val="{{ false }}">
+          <div style="font-size: 13.5px; line-height: 1.5; color: #d6dae4">A versão 0.9.0 foi baixada e a assinatura conferida. Falta só reiniciar para instalar.</div>
+          <sc-if value="{{hasRunning}}" hint-placeholder-val="{{ true }}">
+            <div class="box" style="background: #3a2f12; color: #f2c96a" role="alert" data-part="update-running-warning">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M8 2.3l6.2 11H1.8z"></path><path d="M8 6.8v3M8 11.8v.2"></path></svg>
+              <span style="display: flex; flex-direction: column; gap: 4px">
+                <span style="font-weight: 600">Reiniciar encerra o que está rodando</span>
+                <span style="color: #e8d29a">Há 3 terminais e 2 agentes abertos em 2 sessões. Eles serão encerrados; o histórico das sessões fica salvo. Termine ou conclua o que for importante antes.</span>
+              </span>
+            </div>
+          </sc-if>
+          <sc-if value="{{noRunning}}" hint-placeholder-val="{{ false }}">
+            <div class="box" style="background: #14301f; color: #8ee6a8" data-part="update-running-warning">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M3.4 8.4l3 3 6-6.4"></path></svg>
+              <span>Nenhum terminal ou agente aberto agora: nada será perdido ao reiniciar.</span>
+            </div>
+          </sc-if>
+          <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">O Stellar não reinicia sozinho. Se escolher “Reiniciar depois”, a atualização fica guardada e o ícone na barra de título lembra de você.</div>
+        </sc-if>
+
+        <sc-if value="{{showInstalling}}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 12px" data-part="update-installing">
+            <div class="bar" role="progressbar" aria-label="Instalando a atualização" aria-busy="true"><div class="slide"></div></div>
+            <div style="font-size: 13.5px; line-height: 1.5; color: #d6dae4">O Stellar vai fechar e abrir de novo em instantes. Não desligue o computador.</div>
+            <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">Se não abrir sozinho em um minuto, abra o Stellar pelo menu de aplicativos.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{showError}}" hint-placeholder-val="{{ false }}">
+          <div class="box" style="background: #3a1717; color: #ff9b9b" role="alert" data-part="update-error-message">
+            <span style="display: flex; flex-direction: column; gap: 4px">
+              <span style="font-weight: 600">{{errTitle}}</span>
+              <span style="color: #f4b4b4">{{errText}}</span>
+            </span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-size: 12px; color: #8d94a6">Detalhe técnico</span>
+            <code class="mono" style="font-size: 12px; color: #c9cede; background: #12151d; border: 1px solid #20242f; border-radius: 8px; padding: 8px 10px; word-break: break-all" data-part="update-error-detail">{{errCode}}</code>
+          </div>
+          <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">{{errHint}} O Stellar atual continua funcionando normalmente.</div>
+        </sc-if>
+
+        <sc-if value="{{showManual}}" hint-placeholder-val="{{ false }}">
+          <div style="font-size: 13.5px; line-height: 1.5; color: #d6dae4">Este formato de instalação (pacote rpm sem dados de atualização) não consegue baixar e instalar sozinho. A versão nova está na página de releases.</div>
+          <div style="display: flex; flex-direction: column; gap: 12px" data-part="update-manual-steps">
+            <div class="step"><span class="stepNo">1</span><span>Baixe o pacote da versão 0.9.0 na página de releases.</span></div>
+            <div class="step"><span class="stepNo">2</span><span style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+              <span>Instale pelo terminal:</span>
+              <span style="display: flex; align-items: center; gap: 8px; background: #12151d; border: 1px solid #20242f; border-radius: 8px; padding: 8px 10px">
+                <code class="mono" style="flex: 1; font-size: 12px; color: #d6dae4; word-break: break-all">sudo dnf install ./stellar-0.9.0-1.x86_64.rpm</code>
+                <button type="button" class="btn" style="height: 28px; padding: 0 10px; font-size: 12px; border-radius: 7px">Copiar</button>
+              </span>
+            </span></div>
+            <div class="step"><span class="stepNo">3</span><span>Feche e abra o Stellar de novo.</span></div>
+          </div>
+          <div style="font-size: 12.5px; color: #8d94a6; line-height: 1.5">Seus dados e sessões ficam como estão; só o programa é trocado.</div>
+        </sc-if>
+      </div>
+
+      <footer style="padding: 16px 24px 22px; display: flex; gap: 10px; align-items: center; justify-content: flex-end">
+        <sc-if value="{{showAvailable}}" hint-placeholder-val="{{ true }}">
+          <button type="button" class="btn btnQuiet">Agora não</button>
+          <button type="button" class="btn btnPrimary" data-part="update-primary">Baixar · 38 MB</button>
+        </sc-if>
+        <sc-if value="{{showDownloading}}" hint-placeholder-val="{{ false }}">
+          <button type="button" class="btn btnQuiet">Cancelar download</button>
+          <button type="button" class="btn">Continuar em segundo plano</button>
+        </sc-if>
+        <sc-if value="{{showReady}}" hint-placeholder-val="{{ false }}">
+          <button type="button" class="btn btnQuiet">Reiniciar depois</button>
+          <button type="button" class="btn btnPrimary" data-part="update-primary">Reiniciar agora</button>
+        </sc-if>
+        <sc-if value="{{showInstalling}}" hint-placeholder-val="{{ false }}">
+          <span style="font-size: 12.5px; color: #8d94a6">Reiniciando…</span>
+        </sc-if>
+        <sc-if value="{{showError}}" hint-placeholder-val="{{ false }}">
+          <a href="#" class="btn btnQuiet" data-part="update-releases-link">Abrir página de releases</a>
+          <button type="button" class="btn btnPrimary" data-part="update-primary">Tentar de novo</button>
+        </sc-if>
+        <sc-if value="{{showManual}}" hint-placeholder-val="{{ false }}">
+          <button type="button" class="btn btnQuiet">Agora não</button>
+          <a href="#" class="btn btnPrimary" data-part="update-primary">Abrir página de releases</a>
+        </sc-if>
+      </footer>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // `#available`, `#downloading`, `#ready`, `#installing`, `#error`,
+    // `#linux-manual` (also `#ready-empty`, `#error-signature`, `#error-disk`);
+    // `#cena=<name>` and `?cena=<name>` work too.
+    const raw = (location.hash || "").replace(/^#/, "");
+    const fromHash = raw.startsWith("cena=") ? raw.slice(5) : raw;
+    const cena = fromHash || new URLSearchParams(location.search).get("cena") || "available";
+    this.state = { cena };
+  }
+
+  renderVals() {
+    const cena = this.state.cena;
+    const go = (k) => () => { this.setState({ cena: k }); };
+    const isErr = cena === "error" || cena === "error-signature" || cena === "error-disk";
+    const group = isErr ? "error" : cena === "ready-empty" ? "ready" : cena;
+    const sc = (k) => (group === k ? "scene sceneOn" : "scene");
+    const scenes = [
+      ["available", "Disponível"],
+      ["downloading", "Baixando"],
+      ["ready", "Pronta"],
+      ["installing", "Instalando"],
+      ["error", "Erro"],
+      ["linux-manual", "Linux sem auto-update"],
+    ].map(([k, label]) => ({ label, cls: sc(k), go: go(k) }));
+    const subsOf = (pairs, current) =>
+      pairs.map(([k, label]) => ({ label, cls: current === k ? "sub subOn" : "sub", go: go(k) }));
+    const subs = isErr
+      ? subsOf([["error", "Rede"], ["error-signature", "Assinatura"], ["error-disk", "Espaço em disco"]], cena)
+      : group === "ready"
+        ? subsOf([["ready", "Com terminais abertos"], ["ready-empty", "Nada aberto"]], cena)
+        : [];
+
+    const labels = {
+      available: "Versão nova achada: o usuário decide baixar. Nada baixa antes do clique",
+      downloading: "Progresso real do download; fechar a janela não cancela",
+      ready: "Baixada e verificada. O app só reinicia pelo clique em Reiniciar agora",
+      "ready-empty": "Sem terminais ou agentes abertos, o aviso vira confirmação",
+      installing: "Só aparece depois do clique em Reiniciar agora",
+      error: "Falha de rede: tentar de novo e link para as releases",
+      "error-signature": "Assinatura inválida: o arquivo é descartado",
+      "error-disk": "Sem espaço: diz quanto falta",
+      "linux-manual": "Formato sem auto-update (ex.: rpm antigo): instruções e link",
+    };
+
+    const err = {
+      error: {
+        title: "Falha de rede ao baixar",
+        text: "O download parou em 62% e não voltou. Confira a conexão e tente de novo; o que já foi baixado é reaproveitado.",
+        code: "net::ERR_INTERNET_DISCONNECTED (62% · 23,7 de 38,2 MB)",
+        hint: "Se a rede é filtrada por proxy, baixe pela página de releases.",
+      },
+      "error-signature": {
+        title: "A assinatura do arquivo não confere",
+        text: "O arquivo baixado foi descartado e nada foi instalado. Isso pode ser uma conexão interceptada ou um download corrompido.",
+        code: "sha512 checksum mismatch (esperado 7f3a…c91e, recebido 02bd…44a7)",
+        hint: "Tente de novo; se repetir, baixe pela página de releases e confira o hash publicado.",
+      },
+      "error-disk": {
+        title: "Sem espaço para baixar",
+        text: "A atualização precisa de 120 MB livres e há 41 MB no disco. Libere espaço e tente de novo.",
+        code: "ENOSPC: no space left on device, write (necessário 120 MB, livre 41 MB)",
+        hint: "Esvaziar a lixeira ou apagar downloads antigos costuma bastar.",
+      },
+    }[cena] || { title: "", text: "", code: "", hint: "" };
+
+    const tone = {
+      available: "background: #1b2242; color: #b9c4ff",
+      downloading: "background: #1b2242; color: #b9c4ff",
+      ready: "background: #14301f; color: #8ee6a8",
+      installing: "background: #1b2242; color: #b9c4ff",
+      error: "background: #3a1717; color: #ff9b9b",
+      "linux-manual": "background: #3a2f12; color: #f2c96a",
+    }[group];
+
+    const head = {
+      available: ["Atualização disponível", "Stellar 0.9.0 · você usa a 0.8.7"],
+      downloading: ["Baixando a atualização", "Stellar 0.9.0"],
+      ready: ["Pronta para instalar", "Stellar 0.9.0 · baixada e verificada"],
+      installing: ["Instalando a atualização", "Stellar 0.9.0"],
+      error: ["Não foi possível atualizar", "Stellar 0.9.0"],
+      "linux-manual": ["Esta instalação não se atualiza sozinha", "Stellar 0.9.0 está disponível"],
+    }[group];
+
+    return {
+      cena,
+      cenaLabel: labels[cena] || "",
+      scenes,
+      subs,
+      showSubs: subs.length > 0,
+      subsLabel: isErr ? "Causa" : "Variante",
+      tileStyle: tone,
+      iconDown: group === "available" || group === "downloading" || group === "installing",
+      iconCheck: group === "ready",
+      iconWarn: group === "error",
+      iconBox: group === "linux-manual",
+      title: head[0],
+      subtitle: head[1],
+      showJump: group === "available",
+      showClose: group !== "installing",
+      closeLabel: group === "available" || group === "linux-manual" ? "Fechar" : "Fechar (o download continua)",
+      showAvailable: group === "available",
+      showDownloading: group === "downloading",
+      showReady: group === "ready",
+      hasRunning: cena === "ready",
+      noRunning: cena === "ready-empty",
+      showInstalling: group === "installing",
+      showError: group === "error",
+      showManual: group === "linux-manual",
+      notes: [
+        "Novo: a atualização agora tem janela própria, com progresso e reinício pelo botão.",
+        "Melhor: erros de conexão dizem o que houve e oferecem tentar de novo.",
+        "Corrigido: arquivar duas tasks seguidas travava a Fila por alguns segundos.",
+        "Corrigido: o menu de perfil não alternava entre conta e local.",
+      ],
+      errTitle: err.title,
+      errText: err.text,
+      errCode: err.code,
+      errHint: err.hint,
+    };
+  }
+}
+</script>
+</body>
+</html>
