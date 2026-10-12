@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import type { MessageKey } from "../../shared/i18n";
 import type {
@@ -61,6 +61,25 @@ import { PlanNotice } from "./PlanGate";
 import { useCloudPlan, usePlansUrl } from "./PlanHooks";
 import { ImportWizard } from "./ImportWizard";
 import { IntegrationsPage } from "./IntegrationsPage";
+import { readTeamCache, writeTeamCache } from "./team-cache";
+import {
+  COLUMN_SKELETON_CARDS,
+  EMPTY_SECTION,
+  applyCache,
+  applyFailure,
+  applyLive,
+  beginLoad,
+  isDetailData,
+  isListData,
+  isOverviewData,
+  overviewCacheBelongsTo,
+  showsSkeleton,
+  decideSectionState,
+  type SectionRecord,
+  type TeamSection,
+} from "./team-load-decision";
+import { TeamSectionNotices } from "./TeamSectionNotice";
+import { ActivitySkeleton, AsideSkeleton, AvatarBar, Bar, ColumnCardsSkeleton, MemberRowsSkeleton, PillBar, StatBars } from "./TeamSkeleton";
 import styles from "./TeamPage.module.css";
 
 type TeamRef = { id: string; name: string };
@@ -123,7 +142,20 @@ export function TeamPage({
   initialUnassigned?: boolean;
 }) {
   const [overview, setOverview] = useState<TeamOverviewInfo | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // What each backend-dependent section is doing (loading / ready / error / stale).
+  // The page paints at once; every section fills in when its own answer arrives.
+  const [sections, setSections] = useState<Record<TeamSection, SectionRecord>>({
+    overview: EMPTY_SECTION,
+    detail: EMPTY_SECTION,
+    sprints: EMPTY_SECTION,
+    invites: EMPTY_SECTION,
+    tasks: EMPTY_SECTION,
+  });
+  const patchSection = useCallback((section: TeamSection, fn: (rec: SectionRecord) => SectionRecord) => {
+    setSections((prev) => ({ ...prev, [section]: fn(prev[section]) }));
+  }, []);
+  /** The team whose answers still count: a late answer for another team is dropped. */
+  const activeTeam = useRef<string | null>(null);
   const [selected, setSelected] = useState<string | null>(initialTeamId ?? null);
   const [detail, setDetail] = useState<TeamDetailInfo | null>(null);
   const [tasks, setTasks] = useState<TeamTaskInfo[]>([]);
@@ -140,7 +172,6 @@ export function TeamPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [offline, setOffline] = useState(false);
   const [invites, setInvites] = useState<TeamInviteInfo[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [filter, setFilter] = useState({ assigneeId: "", project: "", unassigned: false, search: "", mine: false });
@@ -153,7 +184,7 @@ export function TeamPage({
   const [deleteInitial, setDeleteInitial] = useState<DeleteMode>("archive");
   const [requested, setRequested] = useState<Record<string, boolean>>({});
 
-  const { plan: cloudPlan, loggedIn } = useCloudPlan();
+  const { status, plan: cloudPlan, loggedIn } = useCloudPlan();
   const plansUrl = usePlansUrl();
 
   useEffect(() => {
@@ -188,88 +219,177 @@ export function TeamPage({
   const planNotice = teamAccess.kind === "expired" ? teamAccess : errorDisplay?.kind === "plan" ? errorDisplay.access : null;
 
   const refreshOverview = useCallback(async () => {
+    patchSection("overview", beginLoad);
     try {
       const res = await window.team.overview();
       if (res.ok) {
         setOverview(res.view);
-        setLoadError(null);
-        setSelected((cur) => cur ?? res.view.teams[0]?.id ?? null);
+        writeTeamCache("overview", "account", res.view, Date.now(), res.view.displayName);
+        patchSection("overview", () => applyLive(Date.now()));
+        setSelected((cur) => (cur !== null && res.view.teams.some((x) => x.id === cur) ? cur : (res.view.teams[0]?.id ?? null)));
       } else {
-        setOverview(null);
-        setLoadError(res.error);
+        patchSection("overview", (rec) => applyFailure(rec, res.error));
       }
     } catch {
-      setOverview(null);
-      setLoadError(t("teamTask.error"));
+      patchSection("overview", (rec) => applyFailure(rec, t("teamTask.error")));
     }
-  }, []);
+  }, [patchSection]);
 
   useEffect(() => {
     void refreshOverview();
   }, [refreshOverview]);
 
-  const loadTasks = useCallback(async (teamId: string, silent = false) => {
-    try {
-      const res = await window.team.tasks(teamId, { includeArchived: false });
-      if (res.ok) {
-        setTasks(res.list.tasks);
-        setOffline(false);
-        localStorage.setItem(`stellar.team.tasks.${teamId}`, JSON.stringify(res.list.tasks));
-      } else if (!silent) {
-        setError(res.error);
-      }
-    } catch {
-      const cached = localStorage.getItem(`stellar.team.tasks.${teamId}`);
-      if (cached) {
-        try {
-          setTasks(JSON.parse(cached) as TeamTaskInfo[]);
-          setOffline(true);
-        } catch {
-          /* ignore */
+  // What this machine last saw of the account's teams paints the page while the
+  // backend answers, marked stale. It is shown only to the account that saved it.
+  const accountName = status?.state === "logged-in" ? status.account.displayName : null;
+  useEffect(() => {
+    if (accountName === null) return;
+    const entry = readTeamCache("overview", "account", isOverviewData);
+    if (!entry || !overviewCacheBelongsTo(entry.owner, accountName)) return;
+    const cached = entry.data as TeamOverviewInfo;
+    setOverview((cur) => cur ?? cached);
+    setSelected((cur) => cur ?? cached.teams[0]?.id ?? null);
+    patchSection("overview", (rec) => applyCache(rec, entry.savedAtMs));
+  }, [accountName, patchSection]);
+
+  /**
+   * One section's request: it is marked loading, and its answer — only if the
+   * team is still the open one — fills the section and the cache; a failure is
+   * recorded on the section and leaves whatever it already showed.
+   */
+  const runSection = useCallback(
+    async <T,>(
+      section: Exclude<TeamSection, "overview">,
+      teamId: string,
+      call: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>,
+      apply: (data: T) => void,
+    ) => {
+      patchSection(section, beginLoad);
+      try {
+        const res = await call();
+        if (activeTeam.current !== teamId) return;
+        if (res.ok) {
+          apply(res.data);
+          const now = Date.now();
+          writeTeamCache(section, teamId, res.data, now);
+          patchSection(section, () => applyLive(now));
+        } else {
+          patchSection(section, (rec) => applyFailure(rec, res.error));
         }
+      } catch {
+        if (activeTeam.current === teamId) patchSection(section, (rec) => applyFailure(rec, t("teamTask.error")));
       }
-    }
-  }, []);
+    },
+    [patchSection],
+  );
+
+  const loadTasks = useCallback(
+    (teamId: string) =>
+      runSection(
+        "tasks",
+        teamId,
+        async () => {
+          const res = await window.team.tasks(teamId, { includeArchived: false });
+          return res.ok ? { ok: true as const, data: res.list.tasks } : { ok: false as const, error: res.error };
+        },
+        setTasks,
+      ),
+    [runSection],
+  );
+
+  const loadDetail = useCallback(
+    (teamId: string) =>
+      runSection(
+        "detail",
+        teamId,
+        async () => {
+          const res = await window.team.detail(teamId);
+          return res.ok ? { ok: true as const, data: res.detail } : { ok: false as const, error: res.error };
+        },
+        setDetail,
+      ),
+    [runSection],
+  );
+
+  const loadSprints = useCallback(
+    (teamId: string) =>
+      runSection(
+        "sprints",
+        teamId,
+        async () => {
+          const res = await window.team.sprints(teamId);
+          return res.ok ? { ok: true as const, data: res.sprints } : { ok: false as const, error: res.error };
+        },
+        setSprints,
+      ),
+    [runSection],
+  );
+
+  const loadInvites = useCallback(
+    (teamId: string) =>
+      runSection(
+        "invites",
+        teamId,
+        async () => {
+          const res = await window.team.listInvites(teamId);
+          return res.ok ? { ok: true as const, data: res.invites } : { ok: false as const, error: res.error };
+        },
+        setInvites,
+      ),
+    [runSection],
+  );
 
   const loadTeam = useCallback(
-    async (teamId: string) => {
+    (teamId: string) => {
+      activeTeam.current = teamId;
       setTaskDetail(null);
       setSelectedTask(null);
-      setInvites([]);
-      try {
-        const [d, s, inv] = await Promise.all([window.team.detail(teamId), window.team.sprints(teamId), window.team.listInvites(teamId)]);
-        if (d.ok) setDetail(d.detail);
-        if (s.ok) setSprints(s.sprints);
-        if (inv.ok) setInvites(inv.invites);
-      } catch {
-        /* keep cached tasks */
-      }
-      const cached = localStorage.getItem(`stellar.team.tasks.${teamId}`);
-      if (cached) {
-        try {
-          setTasks(JSON.parse(cached) as TeamTaskInfo[]);
-        } catch {
-          /* ignore */
-        }
-      }
-      await loadTasks(teamId);
+      // Start from what this machine last saw of THIS team (marked stale), never
+      // from the previous team's data; the four requests then run side by side.
+      const cachedDetail = readTeamCache("detail", teamId, isDetailData);
+      const cachedSprints = readTeamCache("sprints", teamId, isListData);
+      const cachedInvites = readTeamCache("invites", teamId, isListData);
+      const cachedTasks = readTeamCache("tasks", teamId, isListData);
+      setDetail(cachedDetail ? (cachedDetail.data as TeamDetailInfo) : null);
+      setSprints(cachedSprints ? (cachedSprints.data as TeamSprintInfo[]) : []);
+      setInvites(cachedInvites ? (cachedInvites.data as TeamInviteInfo[]) : []);
+      setTasks(cachedTasks ? (cachedTasks.data as TeamTaskInfo[]) : []);
+      const seed = (entry: { savedAtMs: number } | null): SectionRecord => (entry ? applyCache(EMPTY_SECTION, entry.savedAtMs) : EMPTY_SECTION);
+      setSections((prev) => ({
+        ...prev,
+        detail: seed(cachedDetail),
+        sprints: seed(cachedSprints),
+        invites: seed(cachedInvites),
+        tasks: seed(cachedTasks),
+      }));
+      void loadDetail(teamId);
+      void loadSprints(teamId);
+      void loadInvites(teamId);
+      void loadTasks(teamId);
     },
-    [loadTasks],
+    [loadDetail, loadSprints, loadInvites, loadTasks],
   );
 
   useEffect(() => {
+    activeTeam.current = selected;
     if (!selected) return;
-    void loadTeam(selected);
+    loadTeam(selected);
     // Team board refresh follows the account SSE stream instead of a timed
     // poll — inbox/task events nudge a silent reload of the open board.
     if (!window.inbox?.onEvent) return;
     return window.inbox.onEvent((event) => {
       if (document.visibilityState !== "visible") return;
       if (event.name === "task" || event.name === "inbox" || event.name === "") {
-        void loadTasks(selected, true);
+        void loadTasks(selected);
       }
     });
   }, [selected, loadTeam, loadTasks]);
+
+  /** The "try again" of a section's notice. */
+  const retrySection = (section: TeamSection) => {
+    if (section === "overview") void refreshOverview();
+    else if (selected) void { detail: loadDetail, sprints: loadSprints, invites: loadInvites, tasks: loadTasks }[section](selected);
+  };
 
   useEffect(() => {
     if (!initialTeamId) return;
@@ -348,8 +468,7 @@ export function TeamPage({
 
   /** Reads the team back after a change that moves members or seats. */
   async function reloadDetail(teamId: string) {
-    const res = await window.team.detail(teamId);
-    if (res.ok) setDetail(res.detail);
+    await loadDetail(teamId);
   }
 
   /** The invite dialog renders the outcome itself; this only keeps the page's
@@ -548,25 +667,24 @@ export function TeamPage({
     });
   }
 
-  if (loadError) {
+  // The overview failed and there is nothing saved to show: the head stays, and
+  // the failure says why (or asks for the login) with its retry.
+  if (overview === null && decideSectionState(sections.overview) === "error") {
     return (
-      <div className={styles.page}>
-        <h1 className={styles.title}>{t("shell.team")}</h1>
-        <div className={styles.muted}>{t("teamTask.noLogin")}</div>
+      <div className={styles.page} data-part="team-page">
+        <div className={styles.pageHead} data-part="team-head">
+          <div className={styles.pageHeadText}>
+            <h1 className={styles.title} data-part="team-title">
+              {t("shell.team")}
+            </h1>
+          </div>
+        </div>
+        {loggedIn ? <TeamSectionNotices sections={sections} onRetry={retrySection} /> : <div className={styles.muted}>{t("teamTask.noLogin")}</div>}
       </div>
     );
   }
 
-  if (!overview) {
-    return (
-      <div className={styles.page}>
-        <h1 className={styles.title}>{t("shell.team")}</h1>
-        <div className={styles.muted}>{t("teamTask.loading")}</div>
-      </div>
-    );
-  }
-
-  if (overview.teams.length === 0) {
+  if (overview !== null && overview.teams.length === 0) {
     return (
       <CreateTeamScreen
         locked={loggedIn && teamAccess.kind === "upgrade"}
@@ -578,6 +696,12 @@ export function TeamPage({
     );
   }
 
+
+  // A section with no answer yet (and no failure) shows its skeleton.
+  const detailLoading = showsSkeleton(sections.detail);
+  const tasksLoading = showsSkeleton(sections.tasks);
+  const invitesLoading = showsSkeleton(sections.invites);
+  const sprintsLoading = showsSkeleton(sections.sprints);
 
   const activeSprint = sprints.find((s) => s.state === "ativa") ?? null;
 
@@ -657,6 +781,9 @@ export function TeamPage({
   const boardElement =
     sub === "board" ? (
       <TeamBoard
+        detailLoading={detailLoading}
+        tasksLoading={tasksLoading}
+        sprintsLoading={sprintsLoading}
         writable={teamWritable}
         tasks={tasks}
         grouped={grouped}
@@ -819,7 +946,9 @@ export function TeamPage({
             {team?.name ?? t("shell.team")}
           </h1>
           <div className={styles.metaRow}>
-            {seats.kind !== "unlimited" ? (
+            {detailLoading ? (
+              <PillBar />
+            ) : seats.kind !== "unlimited" ? (
               <span
                 className={`${styles.pill} ${seats.kind === "full" ? styles.pillBad : styles.pillOk}`}
                 data-part="seats-pill"
@@ -835,7 +964,7 @@ export function TeamPage({
             ) : null}
           </div>
         </div>
-        {overview.teams.length > 1 ? (
+        {overview !== null && overview.teams.length > 1 ? (
           <select className={styles.select} value={selected ?? ""} onChange={(e) => setSelected(e.target.value)} aria-label={t("teamTask.selectTeam")}>
             {overview.teams.map((x) => (
               <option key={x.id} value={x.id}>
@@ -924,7 +1053,7 @@ export function TeamPage({
       ) : null}
 
       {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
-      {offline ? <div className={styles.banner}>{t("teamTask.offline")}</div> : null}
+      <TeamSectionNotices sections={sections} onRetry={retrySection} />
       {note ? <div className={styles.note}>{note}</div> : null}
       {sub === "board" ? (
         errorDisplay?.kind === "raw" ? (
@@ -963,6 +1092,7 @@ export function TeamPage({
               busy={busy || !teamWritable}
               auditOnly={sub === "audit"}
               membersOnly={sub === "members"}
+              loading={{ detail: detailLoading, tasks: tasksLoading, invites: invitesLoading }}
               onChangeRole={(member, role) => void handleChangeRole(member, role)}
               onRemove={(member) => void handleRemoveMember(member, members)}
               onLeave={() => void handleLeave()}
@@ -1379,6 +1509,7 @@ function TeamAdminView({
   busy,
   auditOnly,
   membersOnly,
+  loading,
   onChangeRole,
   onRemove,
   onLeave,
@@ -1394,6 +1525,8 @@ function TeamAdminView({
   busy: boolean;
   auditOnly: boolean;
   membersOnly: boolean;
+  /** Sections still waiting for their answer: their cells are skeletons, not zeros. */
+  loading: { detail: boolean; tasks: boolean; invites: boolean };
   onChangeRole: (member: TeamMemberInfo, role: TeamRole) => void;
   onRemove: (member: TeamMemberInfo) => void;
   onLeave: () => void;
@@ -1417,14 +1550,22 @@ function TeamAdminView({
             value={String(members.length)}
             hint={invites.length === 1 ? t("teamTask.stat.invitePending", { n: "1" }) : t("teamAdmin.stat.invitesPending", { n: String(invites.length) })}
             part="members"
+            loadingSection={loading.detail ? "detail" : loading.invites ? "invites" : undefined}
           />
           <Stat
             label={t("teamAdmin.stat.seats")}
             value={seats.kind === "unlimited" ? t("teamAdmin.stat.seatsNone") : t("teamAdmin.stat.seatsValue", { used: seats.used, total: seats.total })}
             hint={seats.kind === "unlimited" ? t("teamAdmin.stat.seatsNoneHint") : t("teamAdmin.stat.seatsHint")}
             part="seats"
+            loadingSection={loading.detail ? "detail" : undefined}
           />
-          <Stat label={t("teamTask.stat.open")} value={String(stats.open)} hint={t("teamTask.stat.noOwnerCount", { n: String(stats.unassigned) })} part="open" />
+          <Stat
+            label={t("teamTask.stat.open")}
+            value={String(stats.open)}
+            hint={t("teamTask.stat.noOwnerCount", { n: String(stats.unassigned) })}
+            part="open"
+            loadingSection={loading.tasks ? "tasks" : undefined}
+          />
         </div>
       ) : null}
 
@@ -1449,6 +1590,7 @@ function TeamAdminView({
                 </tr>
               </thead>
               <tbody>
+                {loading.detail ? <MemberRowsSkeleton rows={3} section="detail" /> : null}
                 {members.map((m) => {
                   const row = memberRowState({ members, member: m, accountId, myRole });
                   const isSelf = m.accountId === accountId;
@@ -1485,7 +1627,7 @@ function TeamAdminView({
                           ))}
                         </select>
                       </td>
-                      <td>{tasks.filter((task) => task.assigneeId === m.accountId).length}</td>
+                      <td>{loading.tasks ? <Bar w={2} /> : tasks.filter((task) => task.assigneeId === m.accountId).length}</td>
                       <td>
                         <span className={styles.rowActions}>
                           {row.action === "leave" ? (
@@ -1516,6 +1658,7 @@ function TeamAdminView({
                     </tr>
                   );
                 })}
+                {!loading.detail && loading.invites ? <MemberRowsSkeleton rows={1} section="invites" /> : null}
                 {invites.map((inv) => {
                   const days = inviteDaysLeft(inv, now);
                   const meta =
@@ -1585,7 +1728,9 @@ function TeamAdminView({
             </div>
             <div className={styles.cardHead}>
               <div className={styles.activity}>
-                {activity.length === 0 ? (
+                {loading.tasks ? (
+                  <ActivitySkeleton lines={3} />
+                ) : activity.length === 0 ? (
                   <span className={styles.muted}>{t("teamTask.activity.empty")}</span>
                 ) : (
                   activity.map((task) => (
@@ -1606,17 +1751,41 @@ function TeamAdminView({
   );
 }
 
-function Stat({ label, value, hint, warn, part }: { label: string; value: string; hint: string; warn?: boolean; part?: string }) {
+function Stat({
+  label,
+  value,
+  hint,
+  warn,
+  part,
+  loadingSection,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  warn?: boolean;
+  part?: string;
+  /** The section this figure waits for; while it has no answer the figure is a skeleton. */
+  loadingSection?: string;
+}) {
   return (
     <div className={`${styles.stat}${warn ? ` ${styles.statWarn}` : ""}`} data-part={part ? `stat-${part}` : undefined}>
       <span className={styles.statLabel}>{label}</span>
-      <span className={`${styles.statBig}${warn ? ` ${styles.statValueWarn}` : ""}`}>{value}</span>
-      <span className={styles.statHint}>{hint}</span>
+      {loadingSection ? (
+        <StatBars section={loadingSection} />
+      ) : (
+        <>
+          <span className={`${styles.statBig}${warn ? ` ${styles.statValueWarn}` : ""}`}>{value}</span>
+          <span className={styles.statHint}>{hint}</span>
+        </>
+      )}
     </div>
   );
 }
 
 function TeamBoard({
+  detailLoading,
+  tasksLoading,
+  sprintsLoading,
   tasks,
   grouped,
   members,
@@ -1660,6 +1829,12 @@ function TeamBoard({
   onCreateSubtasks,
   onPatchSharePaths,
 }: {
+  /** The members/role are not known yet: the role-dependent parts are skeletons, never the member view. */
+  detailLoading: boolean;
+  /** The tasks have no answer yet: the columns hold skeleton cards instead of zeros. */
+  tasksLoading: boolean;
+  /** The sprints have no answer yet: the sprint name in the bar is not known. */
+  sprintsLoading: boolean;
   tasks: TeamTaskInfo[];
   grouped: Record<TeamColumn, TeamTaskInfo[]>;
   members: TeamMemberInfo[];
@@ -1718,11 +1893,24 @@ function TeamBoard({
     <div className={styles.board} data-part="team-board">
       <div className={styles.boardBar}>
         <span className={styles.boardMeta}>
-          {sprintName ? `${sprintName} · ` : ""}
-          {t("teamTask.board.openCount", { n: String(openCount) })}
+          {tasksLoading || sprintsLoading ? (
+            <Bar w={16} />
+          ) : (
+            <>
+              {sprintName ? `${sprintName} · ` : ""}
+              {t("teamTask.board.openCount", { n: String(openCount) })}
+            </>
+          )}
         </span>
         <span className={styles.headerSpacer} />
         <div className={styles.avatarRow} aria-label={t("teamTask.board.filterPerson")}>
+          {detailLoading ? (
+            <>
+              <AvatarBar small />
+              <AvatarBar small />
+              <AvatarBar small />
+            </>
+          ) : null}
           {members.map((m) => {
             const av = memberAvatar(members, m.accountId);
             return (
@@ -1780,7 +1968,11 @@ function TeamBoard({
             {t("teamTask.member.mine")}
           </button>
         </div>
-        {isAdmin ? (
+        {detailLoading ? (
+          <span className={styles.btn} data-part="team-skeleton" data-section="detail" aria-busy="true">
+            <Bar w={9} />
+          </span>
+        ) : isAdmin ? (
           <button
             type="button"
             className={`${styles.btn} ${styles.btnPrimary}`}
@@ -1793,11 +1985,11 @@ function TeamBoard({
         ) : null}
       </div>
 
-      {!isAdmin ? <div className={styles.boardBanner}>{t("teamTask.member.banner")}</div> : null}
+      {!detailLoading && !isAdmin ? <div className={styles.boardBanner}>{t("teamTask.member.banner")}</div> : null}
 
       <div className={`${styles.boardBody}${detailOpen ? ` ${styles.boardBodyDetail}` : ""}`}>
         <div className={styles.columns}>
-          {TEAM_COLUMNS.map((column) => (
+          {TEAM_COLUMNS.map((column, columnIndex) => (
             <section
               key={column}
               className={styles.col}
@@ -1814,9 +2006,10 @@ function TeamBoard({
                 <span className={`${styles.colTitle}${column === "aguardando_revisao" ? ` ${styles.colTitleReview}` : ""}`}>
                   {t(TEAM_COLUMN_LABEL_KEY[column])}
                 </span>
-                <span className={styles.colCount}>{grouped[column].length}</span>
+                <span className={styles.colCount}>{tasksLoading ? <Bar w={1} /> : grouped[column].length}</span>
               </div>
               <div className={styles.colList}>
+                {tasksLoading ? <ColumnCardsSkeleton cards={COLUMN_SKELETON_CARDS[columnIndex] ?? 1} /> : null}
                 {grouped[column].map((task) => {
                   const mine = isAssignee(task, accountId);
                   const draggable =
@@ -1916,7 +2109,7 @@ function TeamBoard({
                 })}
               </div>
               {column === "aguardando_revisao" ? (
-                <div className={styles.colFoot}>{t("teamTask.card.sprintDone", { n: String(sprintDone) })}</div>
+                <div className={styles.colFoot}>{tasksLoading ? <Bar w={12} /> : t("teamTask.card.sprintDone", { n: String(sprintDone) })}</div>
               ) : null}
             </section>
           ))}
@@ -1952,7 +2145,9 @@ function TeamBoard({
           </aside>
         ) : (
           <aside className={styles.boardAside} aria-label={isAdmin ? t("teamTask.distribute.title") : t("teamTask.member.arrived")}>
-            {isAdmin ? (
+            {detailLoading ? (
+              <AsideSkeleton />
+            ) : isAdmin ? (
               <DistributePanel
                 task={selected}
                 candidates={candidates}

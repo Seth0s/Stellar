@@ -1,0 +1,32 @@
+/* Placeholders of the Team page. They sit inside the real elements (see
+   TeamSkeleton.tsx), so only the fill lives here: the field token the board's
+   card skeleton already uses, plus its shimmer (global `card-skeleton-shimmer`). */
+
+.bar {
+  position: relative;
+  overflow: hidden;
+  background: var(--v2-field);
+  border-radius: var(--v2-r5);
+}
+
+/* A run of text: one line of the surrounding font. */
+.text {
+  display: inline-block;
+  height: 0.9em;
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+/* A full-width field in a side panel. */
+.block {
+  display: block;
+  height: var(--v2-s14);
+  max-width: 100%;
+}
+
+/* The avatar keeps its own size and round shape; only its fill is the field. */
+.avatarBar.avatarBar {
+  position: relative;
+  overflow: hidden;
+  background: var(--v2-field);
+}

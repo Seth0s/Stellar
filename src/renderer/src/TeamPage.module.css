@@ -1416,6 +1416,24 @@
   border-color: var(--v2-danger-line);
 }
 
+/* Per-section freshness notices (stale / failed), under the page head. */
+.sectionNotices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s4);
+}
+
+.sectionNotice {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s6);
+}
+
+.sectionNotice > span {
+  flex: 1;
+  min-width: 0;
+}
+
 .hint {
   margin: 0;
   font-size: var(--v2-f12h);

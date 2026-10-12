@@ -125,8 +125,10 @@ describe("TeamPage overview: header, seats, members", () => {
     install({ seats: null });
     render(<TeamPage boards={[]} />);
     await screen.findByText("Nebula Labs");
+    // The seats come with the team detail: until it answers the figure is a skeleton, not "no limit".
+    expect(screen.queryByText("sem limite de assentos")).toBeNull();
+    expect(await screen.findByText("sem limite de assentos")).toBeTruthy();
     expect(part("seats-pill")).toBeNull();
-    expect(screen.getByText("sem limite de assentos")).toBeTruthy();
   });
 
   it("the sole owner cannot be demoted or leave, and the page says why", async () => {
