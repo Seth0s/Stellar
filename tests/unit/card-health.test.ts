@@ -7,6 +7,7 @@ import {
   contextWarning,
   formatTokenCount,
   healthAlerts,
+  healthCoolKeys,
   isContextAboveThreshold,
   parseTokenCount,
   readCardHealth,
@@ -121,6 +122,84 @@ describe("claude — the footer bar `NN% <used>/<window>` is the context", () =>
     expect(health.context).toEqual({ usedTokens: 900_000, source: "synthetic", at: 1 });
     expect(isContextAboveThreshold(health.context!, usedOnly)).toBe(false);
     expect(contextWarning(health, { context: usedOnly })).toBeNull();
+  });
+});
+
+/** The footer of a healthy card, exactly as `read_card` showed it when a false
+ *  "111% and near its limit" was sent: 11% of a 1m window. */
+const HEALTHY_FOOTER =
+  "Sonnet 5.5 | Código | [██░░░░░░░░░░░░░░░░░░] 11% 105k/1m | 5h [█████░░░░░░░░░░░░░░░] 27% ↻12:30  7d [████████░░░░░░░░░░░░] 44% ↻17/10";
+
+describe("claude — a torn read of the repainted footer is never a reading", () => {
+  const claude = () => providerCapacity("claude")?.health;
+  const readOf = (screen: string) => readCardHealth(claude(), screen, 1).context;
+
+  it("the healthy footer is read whole: 105k of 1m, and the 5h/7d bars are not context", () => {
+    expect(readOf(HEALTHY_FOOTER)).toEqual({
+      usedTokens: 105_000,
+      windowTokens: 1_000_000,
+      source: "claude status-bar context fill (used/window)",
+      at: 1,
+    });
+    const alerts = healthAlerts({ health: readCardHealth(claude(), HEALTHY_FOOTER, 1), capability: claude(), cardLabel: "Sonnet", provider: "claude" });
+    expect(alerts).toEqual([]);
+  });
+
+  it("a digit glued in front of the used count (1 + 105k = 1105k, 111%) is refused", () => {
+    expect(readOf(HEALTHY_FOOTER.replace("11% 105k/1m", "11% 1105k/1m"))).toBeNull();
+  });
+
+  it("a digit glued onto the bar's own percent (111% next to 105k/1m) is refused", () => {
+    expect(readOf(HEALTHY_FOOTER.replace("11% 105k/1m", "111% 105k/1m"))).toBeNull();
+  });
+
+  it("the cause, pinned: 1 + 105k read as 1105k of 1m is exactly the false 111%", () => {
+    // The pattern alone, with no corroboration and no used<=window rule (what
+    // the declaration did before): the glued count is 110.5% of the window,
+    // and the alert prints Math.round(110.5) = 111.
+    const pairOnly: ContextDecl = { pattern: /([\d.]+)([km])\s*\/\s*([\d.]+)([km])/i, warnFraction: 0.7, source: "pair only" };
+    const rawPair = pairOnly.pattern.exec("11% 1105k/1m");
+    expect(Math.round((Number(rawPair![1]) * 1e3) / 1e6 * 100)).toBe(111);
+  });
+
+  it("used over the window can never be a reading, even without the bar percent", () => {
+    const bare: ContextDecl = { pattern: /([\d.]+)([km])\s*\/\s*([\d.]+)([km])/i, warnFraction: 0.7, source: "synthetic" };
+    expect(readCardHealth({ context: bare }, "222k/200k\n", 1).context).toBeNull();
+  });
+
+  it("a torn newest paint does not hide the good one before it", () => {
+    const screen = `${HEALTHY_FOOTER}\n${HEALTHY_FOOTER.replace("11% 105k/1m", "11% 1105k/1m")}\n`;
+    expect(readOf(screen)?.usedTokens).toBe(105_000);
+  });
+
+  it("a pair with no bar percent in front (prose, a log line) is not the footer", () => {
+    expect(readOf("copied 222k/200k from the log\n")).toBeNull();
+  });
+
+  it("every printed fill agrees with its own percent: 76% 758k/1m stays valid", () => {
+    expect(readOf(claudeScreen)?.usedTokens).toBe(758_000);
+  });
+});
+
+describe("healthCoolKeys — only a trustworthy reading well below a level re-arms it", () => {
+  const claude = () => providerCapacity("claude")?.health;
+  const commandcode = () => providerCapacity("commandcode")?.health;
+
+  it("11% context is cool; 68% (inside the margin) is not; 76% is not", () => {
+    expect(healthCoolKeys({ health: readCardHealth(claude(), HEALTHY_FOOTER, 1), capability: claude() })).toEqual(["context"]);
+    expect(healthCoolKeys({ health: readCardHealth(claude(), "[███] 68% 680k/1m\n", 1), capability: claude() })).toEqual([]);
+    expect(healthCoolKeys({ health: readCardHealth(claude(), claudeScreen, 1), capability: claude() })).toEqual([]);
+  });
+
+  it("a missing reading re-arms nothing", () => {
+    expect(healthCoolKeys({ health: readCardHealth(claude(), "❯ prompt\n", 1), capability: claude() })).toEqual([]);
+  });
+
+  it("quota 70% is below both levels; 78% is inside the margin of 80 only", () => {
+    const at = (percent: number) =>
+      healthCoolKeys({ health: readCardHealth(commandcode(), `Plan: ${percent}% used, 1 credits left\n`, 1), capability: commandcode() });
+    expect(at(70)).toEqual(["quota:80", "quota:95"]);
+    expect(at(78)).toEqual(["quota:95"]);
   });
 });
 

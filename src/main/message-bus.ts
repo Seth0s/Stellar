@@ -234,10 +234,12 @@ import {
   contextWarning,
   describeContextWarning,
   healthAlerts,
+  healthCoolKeys,
   readCardHealth,
   type CardHealth,
   type HealthAlert,
 } from "./card-health";
+import { createHealthAlertTracker } from "./health-alert-tracker";
 import { decideSpawnProfile } from "./spawn-profile-decision";
 import { describeSpawnBriefDelivery, type SpawnBriefMode } from "./spawn-brief-delivery-decision";
 import { FIRST_OUTPUT_DEADLINE_MS, decideSilentBoot } from "./silent-boot-decision";
@@ -2673,13 +2675,12 @@ export function createMessageBus(
     { anchor: number; idleSince: number | null; remindedAt: number | null; deliveryId: string | null }
   >();
   /**
-   * CARD HEALTH — per card, the set of health levels ALREADY warned (keys from
-   * `healthAlerts`: `quota:80`, `quota:95`, `context`). "Once per level": while
-   * the key is here the alert does not repeat; when the reading drops back
-   * below the level the key leaves, so the alert can fire again if the card
-   * fills up once more.
+   * CARD HEALTH — the levels ALREADY warned, keyed by recipient + scope + level
+   * (see `health-alert-tracker.ts`): a context level is per card, a quota level
+   * is per provider plan, so the same conclusion reaches an orchestrator once.
+   * A level re-arms only when a trustworthy reading falls well below it.
    */
-  const notifiedHealthAlerts = new Map<string, Set<string>>();
+  const healthAlertTracker = createHealthAlertTracker();
   /** Tasks already reported to the orchestrator as "ready and stuck" (once per
    *  task). See `scanStuckReservations`. */
   const reservationStuckNotified = new Set<string>();
@@ -3818,40 +3819,54 @@ export function createMessageBus(
 
   /**
    * Reads the health AND enqueues to the card's board ORCHESTRATOR the levels
-   * just crossed — once per level (see `notifiedHealthAlerts`).
+   * just crossed — once per level (see `healthAlertTracker`). Without a live
+   * orchestrator to tell (or when the card IS the orchestrator) nothing is
+   * marked as warned, so the level still warns once somebody can hear it.
    */
   function readAndTrackCardHealth(cardId: string, provider: string, label: string): CardHealth {
     const capability = providerCapacity(provider)?.health;
     const health = readCardHealth(capability, callbacks.getCardRecentOutput?.(cardId) ?? null, Date.now());
     const alerts = healthAlerts({ health, capability, cardLabel: label, provider });
-    const activeKeys = new Set(alerts.map((a) => a.key));
-    const previous = notifiedHealthAlerts.get(cardId) ?? new Set<string>();
-    const fresh = alerts.filter((a) => !previous.has(a.key));
-    if (activeKeys.size === 0) notifiedHealthAlerts.delete(cardId);
-    else notifiedHealthAlerts.set(cardId, activeKeys);
-    if (fresh.length > 0) notifyOrchestratorHealth(cardId, fresh);
+    const cool = healthCoolKeys({ health, capability });
+    const recipient = healthRecipient(cardId);
+    if (recipient === null) return health;
+    const fresh = healthAlertTracker.track({ recipient, cardId, provider, alerts, cool });
+    if (fresh.length > 0) notifyOrchestratorHealth(recipient, fresh);
     return health;
   }
 
-  function notifyOrchestratorHealth(cardId: string, alerts: HealthAlert[]): void {
+  /** The live orchestrator of the card's board, or `null` when none can hear it. */
+  function healthRecipient(cardId: string): string | null {
     const boardId = callbacks.getCardBoardId(cardId);
-    if (!boardId) return;
+    if (!boardId) return null;
     const orch = callbacks.getBoardOrchestratorCardId(boardId);
-    if (!orch || orch === cardId) return;
-    if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(orch)) return;
+    if (!orch || orch === cardId) return null;
+    if (typeof callbacks.isCardAlive === "function" && !callbacks.isCardAlive(orch)) return null;
+    return orch;
+  }
+
+  function notifyOrchestratorHealth(orch: string, alerts: HealthAlert[]): void {
     for (const alert of alerts) {
       enqueueCardDelivery(orch, formatAgentFacingAuthorship("stellar", alert.message), { steer: false });
     }
   }
 
   /** The health engine for EVERY terminal card — used by the watchdog. */
+  /** Cards the last scan saw — one that disappears frees its warned levels. */
+  let healthScannedCards = new Set<string>();
   function scanCardHealth(): void {
     if (typeof callbacks.listCards !== "function") return;
+    const seen = new Set<string>();
     for (const card of callbacks.listCards() ?? []) {
       if (card.kind !== "terminal" && card.kind !== "chat") continue;
       if (!providerCapacity(card.provider)?.health) continue;
+      seen.add(card.id);
       readAndTrackCardHealth(card.id, card.provider, card.displayName || card.id);
     }
+    for (const gone of healthScannedCards) {
+      if (!seen.has(gone)) healthAlertTracker.forgetCard(gone);
+    }
+    healthScannedCards = seen;
   }
 
   /**
@@ -10218,7 +10233,7 @@ export function createMessageBus(
     selfReminders.clear();
     writesSinceCheckpoint.clear();
     checkpointReminderNotified.clear();
-    notifiedHealthAlerts.clear();
+    healthAlertTracker.clear();
     reservationStuckNotified.clear();
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
     pendingOpens.clear();

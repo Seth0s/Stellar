@@ -945,6 +945,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
           // Used/window bar: groups 1/2 = used, groups 3/4 = window. Requiring
           // the slash keeps the spinner's `↓ 1.2k tokens` (turn volume) out.
           pattern: /([\d.]+)([km])\s*\/\s*([\d.]+)([km])/i,
+          // The bar prints its own `NN%` right before the pair; a pair that
+          // disagrees with it is a torn read of the repainted footer.
+          barPercent: /(\d{1,3})%\s*$/,
           warnFraction: 0.7,
           source: "claude status-bar context fill (used/window)",
         },

@@ -21,6 +21,7 @@ const claudeScreen = readFileSync(
   "utf8",
 );
 const coldScreen = "❯ Ask your question...\n";
+const coolReading = "Sonnet 5.5 | [██░░░░░░░░] 11% 105k/1m | 5h [█████░░░░░] 27% ↻12:30\n";
 
 function callbacksWithOverrides(
   overrides: Record<string, (...args: never[]) => unknown>,
@@ -134,8 +135,17 @@ describe("card-health no bus", () => {
     bus.scanCardHealth();
     expect(await noticesToOrch()).toBe(1);
 
-    // The card cools (the reading leaves the level): the key is retired…
+    // A screen with NO footer reading (a repaint in flight, a prompt on top)
+    // proves nothing: the level stays warned, so filling "again" is not news.
     screen = coldScreen;
+    bus.scanCardHealth();
+    screen = claudeScreen;
+    bus.scanCardHealth();
+    expect(await noticesToOrch()).toBe(1);
+
+    // The card REALLY cools (a trustworthy reading well below the level): the
+    // key is retired…
+    screen = coolReading;
     bus.scanCardHealth();
     expect(await noticesToOrch()).toBe(1);
 
@@ -220,6 +230,75 @@ describe("card-health no bus", () => {
     expect(res.contextWarning).toMatchObject({ usedTokens: 758_000, windowTokens: 1_000_000, percent: 76 });
 
     await delay(400);
+    bus.close();
+    bus = null;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uma leitura RASGADA (111%) não avisa; a barra do card dizia 11%", async () => {
+    // The footer as read_card showed it, with an old paint glued in front of the
+    // used count the way an ANSI-stripped repaint stream does it: `1` + `105k`.
+    const torn = "Sonnet 5.5 | [██░░░░░░░░] 11% 1105k/1m | 5h [█████░░░░░] 27% ↻12:30  7d [████████░░] 44% ↻17/10\n";
+    const dir = mkdtempSync(join(tmpdir(), "stellar-card-health-bus-"));
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        listCards: () => [terminalCard("c1"), terminalCard("orch")],
+        isCardAlive: () => true,
+        getCardBoardId: () => "b1",
+        getBoardOrchestratorCardId: () => "orch",
+        getCardRecentOutput: () => torn,
+        listAllConnectors: () => [],
+        writeToCard: () => undefined,
+        beginCardDelivery: () => true,
+        getCardWriteReadiness: () => ({
+          spawnedAtMs: Date.now() - 1_000,
+          hasReceivedData: true,
+          lastActivityAtMs: Date.now() - 1_000,
+          hasPendingHumanInput: false,
+          inputLineLastAtMs: null,
+        }),
+        getCardLastActivityAt: () => Date.now(),
+      }),
+    );
+    bus.scanCardHealth();
+    const res = (await bus.handleRequest({ cmd: "list_deliveries", target: "orch" } as BusRequest)) as unknown as {
+      deliveries: unknown[];
+    };
+    expect(res.deliveries.length).toBe(0);
+    bus.close();
+    bus = null;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("dois cards no mesmo nível: cada um avisa UMA vez, e uma releitura não repete", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "stellar-card-health-bus-"));
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        listCards: () => [terminalCard("c1"), terminalCard("c2"), terminalCard("orch")],
+        isCardAlive: () => true,
+        getCardBoardId: () => "b1",
+        getBoardOrchestratorCardId: () => "orch",
+        getCardRecentOutput: () => claudeScreen,
+        listAllConnectors: () => [],
+        writeToCard: () => undefined,
+        beginCardDelivery: () => true,
+        getCardWriteReadiness: () => ({
+          spawnedAtMs: Date.now() - 1_000,
+          hasReceivedData: true,
+          lastActivityAtMs: Date.now() - 1_000,
+          hasPendingHumanInput: false,
+          inputLineLastAtMs: null,
+        }),
+        getCardLastActivityAt: () => Date.now(),
+      }),
+    );
+    for (let i = 0; i < 3; i++) bus.scanCardHealth();
+    const res = (await bus.handleRequest({ cmd: "list_deliveries", target: "orch" } as BusRequest)) as unknown as {
+      deliveries: unknown[];
+    };
+    expect(res.deliveries.length).toBe(2);
     bus.close();
     bus = null;
     rmSync(dir, { recursive: true, force: true });

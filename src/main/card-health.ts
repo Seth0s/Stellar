@@ -70,9 +70,24 @@ export type ContextDecl = {
   windowTokens?: number;
   /** Window fraction (0..1) at or above which the orchestrator is warned. */
   warnFraction: number;
+  /**
+   * Corroboration by the provider's OWN percentage. When the screen prints
+   * `NN% <used>/<window>`, this pattern runs over the text right BEFORE the
+   * match (anchored at its end, group 1 = NN) and the reading only counts if
+   * NN agrees with used/window. The status bar is repainted in place and the
+   * app only sees an ANSI-stripped stream, so a number can be glued to a
+   * neighbouring fragment; a pair that disagrees with the bar's own percent
+   * is a torn read, and an absent reading beats a wrong one.
+   */
+  barPercent?: RegExp;
   /** Where the reading was taken (the reading's `source` field). */
   source: string;
 };
+
+/** How far the bar's own rounded percentage may sit from used/window (points). */
+const BAR_PERCENT_TOLERANCE = 2;
+/** How much text before a match is searched for the bar's own percentage. */
+const BAR_PERCENT_LOOKBEHIND = 16;
 
 /** How to read the PLAN/QUOTA of this provider. Group 1 is the percentage. The
  *  whole LINE that matched becomes `quota.text` (it carries the remaining
@@ -96,6 +111,16 @@ export const QUOTA_WARN_PERCENTS: readonly number[] = [80, 95];
 /** An alert ready to enqueue; `key` is what de-duplicates ("once per level").
  *  The text is AGENT-FACING (English — a model reads it). */
 export type HealthAlert = { key: string; message: string };
+
+/** Points BELOW a level the reading must fall before that level may warn again.
+ *  Without it a card hovering around a threshold would warn on every crossing. */
+export const REARM_MARGIN_POINTS = 5;
+
+/** A quota alert describes the provider's PLAN, which every card of that
+ *  provider shares; a context alert describes one card's own window. */
+export function healthAlertScope(key: string): "provider" | "card" {
+  return key.startsWith("quota:") ? "provider" : "card";
+}
 
 /** The structured warning attached to the DELIVERY of a task to a hot card:
  *  it does NOT refuse, it warns. */
@@ -147,24 +172,72 @@ function lastMatch(pattern: RegExp, text: string): RegExpExecArray | null {
   return found;
 }
 
-/** Reads the context from screen text, using the provider's declaration. */
+/** Every occurrence of the pattern, in order (same `g` clone as `lastMatch`). */
+function allMatches(pattern: RegExp, text: string): RegExpExecArray[] {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  const found: RegExpExecArray[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    found.push(m);
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  return found;
+}
+
+/**
+ * One match turned into a reading, or `null` when it cannot be trusted:
+ *  - the used number does not parse;
+ *  - the window is printed and the used count EXCEEDS it (a context cannot be
+ *    over 100% of its own window — that is a torn read, not an overflow);
+ *  - the provider declared a `barPercent` and the bar's own percentage is
+ *    missing or disagrees with used/window.
+ */
+function readingFromMatch(
+  decl: ContextDecl,
+  screenText: string,
+  m: RegExpExecArray,
+  at: number,
+): ContextReading | null {
+  const used = parseTokenCount(m[1] ?? "", m[2]);
+  if (used === null) return null;
+  // The window is optional: only when the pattern captured it.
+  const window = m[3] === undefined ? null : parseTokenCount(m[3], m[4]);
+  const hasWindow = window !== null && window > 0;
+  if (hasWindow && used > window) return null;
+  if (decl.barPercent) {
+    const before = screenText.slice(Math.max(0, m.index - BAR_PERCENT_LOOKBEHIND), m.index);
+    const bar = lastMatch(decl.barPercent, before);
+    if (!bar || bar[1] === undefined) return null;
+    const printed = Number(bar[1]);
+    if (!Number.isFinite(printed)) return null;
+    if (hasWindow && Math.abs(printed - (used / window) * 100) > BAR_PERCENT_TOLERANCE) return null;
+  }
+  return {
+    usedTokens: used,
+    ...(hasWindow ? { windowTokens: window } : {}),
+    source: decl.source,
+    at,
+  };
+}
+
+/**
+ * Reads the context from screen text, using the provider's declaration. The
+ * LAST occurrence that can be trusted wins: a status line REPAINTS, so the
+ * newest reading is the one on screen now — but a torn newest read must not
+ * hide a good earlier one, and must never become the answer.
+ */
 export function readContextReading(
   decl: ContextDecl,
   screenText: string,
   at: number,
 ): ContextReading | null {
-  const m = lastMatch(decl.pattern, screenText);
-  if (!m) return null;
-  const used = parseTokenCount(m[1] ?? "", m[2]);
-  if (used === null) return null;
-  // The window is optional: only when the pattern captured it.
-  const window = m[3] === undefined ? null : parseTokenCount(m[3], m[4]);
-  return {
-    usedTokens: used,
-    ...(window !== null && window > 0 ? { windowTokens: window } : {}),
-    source: decl.source,
-    at,
-  };
+  const matches = allMatches(decl.pattern, screenText);
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const reading = readingFromMatch(decl, screenText, matches[i]!, at);
+    if (reading) return reading;
+  }
+  return null;
 }
 
 /** Reads the plan/quota from screen text, using the provider's declaration. */
@@ -298,4 +371,32 @@ export function healthAlerts(opts: {
   }
 
   return alerts;
+}
+
+/**
+ * The alert keys this reading proves are COOL — safe to warn about again if the
+ * level is crossed once more. Only a trustworthy reading well below the level
+ * counts (by `REARM_MARGIN_POINTS`); a missing or torn reading proves nothing,
+ * so it never re-arms an alert (otherwise a repaint glitch would make the same
+ * conclusion fire again).
+ */
+export function healthCoolKeys(opts: {
+  health: CardHealth;
+  capability: HealthCapability | null | undefined;
+}): string[] {
+  const { health, capability } = opts;
+  const keys: string[] = [];
+  if (health.quota?.percent !== undefined) {
+    for (const threshold of QUOTA_WARN_PERCENTS) {
+      if (health.quota.percent < threshold - REARM_MARGIN_POINTS) keys.push(`quota:${threshold}`);
+    }
+  }
+  const decl = capability?.context;
+  if (health.context && decl) {
+    const window = resolveContextWindow(health.context, decl);
+    if (window !== null && (health.context.usedTokens / window) * 100 < decl.warnFraction * 100 - REARM_MARGIN_POINTS) {
+      keys.push("context");
+    }
+  }
+  return keys;
 }
