@@ -335,6 +335,53 @@ try {
   check("picking Nota in the menu creates a note", after, before + 1);
   check("the menu closes after a pick", await page2.evalJs(`!document.querySelector('[data-part="board-canvas-menu"]')`), true);
 
+  // ---- "Agente ou terminal": second step in a panel glued to the menu ---------
+  const geo = (sel) => `(() => { const b = document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect(); return b ? { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height } : null; })()`;
+  await page2.evalJs(`window.__stellarOpenCanvasMenu?.(334, 52)`);
+  await delay(300);
+  await page2.evalJs(`document.querySelector('[data-part="board-canvas-terminal"]')?.click()`);
+  await delay(300);
+  const menuG = await page2.evalJs(geo('[data-part="board-canvas-menu"]'));
+  const subG = await page2.evalJs(geo('[data-part="ctx-submenu"]'));
+  const rowG = await page2.evalJs(geo('[data-part="board-canvas-terminal"]'));
+  check("the row opens a side panel instead of creating", !!subG, true);
+  check("the panel is 296 px wide and glued 4 px to the right of the menu", [subG?.w, subG?.l - menuG?.r], (v) => v[0] === 296 && v[1] === 4);
+  check("it lines up with the row (7 px above its top) unless pulled back inside the window", subG?.t, (v) => v === rowG.t - 7 || (v >= 8 && subG.b <= 600 - 8 + 40));
+  check("it stays 8 px inside the window", await page2.evalJs(`(() => { const b = document.querySelector('[data-part="ctx-submenu"]').getBoundingClientRect(); return b.top >= 8 && b.bottom <= window.innerHeight - 8 && b.right <= window.innerWidth - 8; })()`), true);
+  check("the first provider has the focus", await page2.evalJs(`document.activeElement?.hasAttribute("data-provider")`), true);
+  shots.push(await shot(page2, "context-submenu"));
+  // ←: providers → closes and gives the focus back to the row.
+  await page2.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 });
+  await page2.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 });
+  await delay(200);
+  check("← closes the panel and returns to the row", await page2.evalJs(`!document.querySelector('[data-part="ctx-submenu"]') && document.activeElement?.getAttribute("data-part") === "board-canvas-terminal"`), true);
+  // →: opens again; pick the plain terminal, then the form, then create.
+  await page2.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+  await page2.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+  await delay(250);
+  check("→ opens it again", await page2.evalJs(`!!document.querySelector('[data-part="ctx-submenu"]')`), true);
+  await page2.evalJs(`document.querySelector('[data-part="ctx-submenu"] [data-provider="bash"]')?.click()`);
+  await delay(250);
+  check("picking a provider shows the form (step 2)", await page2.evalJs(`document.querySelector('[data-part="ctx-submenu"]')?.textContent.includes("Passo 2 de 2") && !!document.querySelector('[data-part="ctx-submenu"] input')`), true);
+  shots.push(await shot(page2, "context-submenu-form"));
+  const termsBefore = await page2.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`);
+  await page2.evalJs(`document.querySelector('[data-role="agent-flow-create"]')?.click()`);
+  await delay(900);
+  check("'Abrir o card' creates the terminal", await page2.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`), termsBefore + 1);
+  check("and closes the menu and the panel", await page2.evalJs(`!document.querySelector('[data-part="board-canvas-menu"]') && !document.querySelector('[data-part="ctx-submenu"]')`), true);
+  // No room on the right: the panel flips to the left of the menu.
+  await page2.evalJs(`window.__stellarOpenCanvasMenu?.(window.innerWidth - 300, 52)`);
+  await delay(300);
+  await page2.evalJs(`document.querySelector('[data-part="board-canvas-terminal"]')?.click()`);
+  await delay(300);
+  const menuF = await page2.evalJs(geo('[data-part="board-canvas-menu"]'));
+  const subF = await page2.evalJs(geo('[data-part="ctx-submenu"]'));
+  check("near the right edge the panel opens glued to the LEFT of the menu", [subF?.w, menuF?.l - subF?.r], (v) => v[0] === 296 && v[1] === 4);
+  await page2.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await page2.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await delay(250);
+  check("Esc closes menu and panel together", await page2.evalJs(`!document.querySelector('[data-part="board-canvas-menu"]') && !document.querySelector('[data-part="ctx-submenu"]')`), true);
+
   // Radial from the menu.
   await page2.evalJs(`window.__stellarOpenCanvasMenu?.(334, 52)`);
   await delay(250);

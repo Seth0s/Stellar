@@ -143,6 +143,36 @@ const FRAMES = [
       ["archived", ".rpbtn:not(.rpprimary)", '[data-role="open-archived"]', ["@width", "@height", "fontSize", "color", "backgroundColor", "borderTopColor"]],
     ],
   },
+  {
+    // The panel is as tall as the real provider list / form, so its @y and @height follow
+    // the content (the smoke checks the alignment and the 8 px edge clamp); x and width are exact.
+    id: "ctx-submenu-providers",
+    pairs: [
+      ["parent row (open)", '[data-part="ctx-parent"]', '[data-part="board-canvas-terminal"]', ["@x", "@y", "@width", "@height", "backgroundColor", "color", "borderTopLeftRadius", "fontSize"]],
+      ["chevron", '[data-part="ctx-chevron"]', '[data-part="ctx-chevron"]', ["@width", "@height", "color"]],
+      ["panel", '[data-part="ctx-submenu"]', '[data-part="ctx-submenu"]', ["@x", "@width", "backgroundColor", "borderTopColor", "borderTopWidth", "borderTopLeftRadius"]],
+      ["panel title", '[data-part="ctx-submenu"] h2', '[data-part="ctx-submenu"] h2', [...TEXT, "@x"]],
+      ["step label", '[data-part="ctx-submenu"] [data-part="steps"]', '[data-part="ctx-submenu"] header > div:last-child', ["fontSize", "color", "gap", "@height"]],
+      ["legend", '[data-part="submenu-legend"]', '[data-part="submenu-legend"]', ["@height", "paddingLeft", "paddingTop", "gap", "fontSize", "color", "borderTopWidth", "borderTopColor"]],
+      ["legend kbd", '[data-part="submenu-legend"] .rpk', '[data-part="submenu-legend"] span > span', ["@height", "fontSize", "color", "backgroundColor", "borderTopLeftRadius"]],
+      ["provider tile", '[data-part="ctx-submenu"] .rpt', '[data-part="ctx-submenu"] [data-provider]', ["@x", "@height", "paddingLeft", "gap", "borderTopLeftRadius", "fontSize"]],
+    ],
+  },
+  {
+    id: "ctx-submenu-form",
+    pairs: [
+      ["panel", '[data-part="ctx-submenu"]', '[data-part="ctx-submenu"]', ["@x", "@width", "backgroundColor", "borderTopLeftRadius"]],
+      ["folder field", '[data-part="ctx-submenu"] input', '[data-part="ctx-submenu"] input', ["@x", "@height", "paddingLeft", "borderTopLeftRadius", "backgroundColor", "fontFamily", "fontSize"]],
+      ["create button", '[data-part="ctx-submenu"] .rpprimary', '[data-role="agent-flow-create"]', ["@height", "backgroundColor", "color", "fontWeight", "borderTopLeftRadius"]],
+    ],
+  },
+  {
+    id: "ctx-submenu-flip",
+    pairs: [
+      ["menu", '[role="menu"]', '[data-part="board-canvas-menu"]', ["@x", "@y", "@width"]],
+      ["panel", '[data-part="ctx-submenu"]', '[data-part="ctx-submenu"]', ["@x", "@width"]],
+    ],
+  },
 ];
 
 const spec = {
@@ -263,6 +293,38 @@ try {
     "rail-sessions-list": async () => {
       await page.evalJs(`window.__stellarRail?.seedSessions()`);
       await mouseMove(page, 700, 500);
+    },
+    "ctx-submenu-providers": async () => {
+      await setViewport(page, H);
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await delay(150);
+      await page.evalJs(`window.__stellarRail?.setStep("closed"); window.__stellarOpenCanvasMenu?.(334, 52)`);
+      await delay(300);
+      await page.evalJs(`document.querySelector('[data-part="board-canvas-terminal"]')?.click()`);
+      await mouseMove(page, 5, 560);
+    },
+    "ctx-submenu-form": async () => {
+      await setViewport(page, H);
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await delay(150);
+      await page.evalJs(`window.__stellarRail?.setStep("closed"); window.__stellarOpenCanvasMenu?.(334, 52)`);
+      await delay(300);
+      await page.evalJs(`document.querySelector('[data-part="board-canvas-terminal"]')?.click()`);
+      await delay(300);
+      await page.evalJs(`(document.querySelector('[data-part="ctx-submenu"] button:not(:disabled)[data-provider]'))?.click()`);
+      await mouseMove(page, 5, 560);
+    },
+    "ctx-submenu-flip": async () => {
+      await setViewport(page, H);
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await delay(150);
+      await page.evalJs(`window.__stellarRail?.setStep("closed"); window.__stellarOpenCanvasMenu?.(590, 52)`);
+      await delay(300);
+      await page.evalJs(`document.querySelector('[data-part="board-canvas-terminal"]')?.click()`);
+      await mouseMove(page, 5, 560);
     },
     "no-topbar-b": async () => {
       await page.evalJs(`window.__stellarRail?.seedBoard()`);

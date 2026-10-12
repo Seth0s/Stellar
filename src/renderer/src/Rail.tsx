@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildProviderGroups } from "./provider-groups";
-import { useAvailableAgentProviders } from "./useAgentAvailability";
-import { useProviderClassification } from "./useProviderClassification";
-import { decideProviderUsage } from "./provider-usage-decision";
-import type { ProviderUsageStats } from "../../main/provider-usage";
+import { AgentHowStep, AgentWhoStep } from "./AgentFlow";
+import { useAgentProviderRows, type AgentProviderRow } from "./agent-flow-model";
 import type { Tool } from "./card-types";
 import { t, type MessageKey } from "../../shared/i18n";
 import { WIDTH_PRESETS } from "./pen-presets";
-import { providerAccentVar } from "./provider-icon-map";
 import {
   RailGlyphAi,
   RailGlyphBoard,
@@ -88,15 +84,9 @@ const PROTO_FIND_CARDS: RailCard[] = [
   { id: "mock-nota", kind: "sticky", label: "Nota · feedbacks", statusText: "editada hoje", statusTone: "note" },
 ];
 
-type MockProviderRow = {
-  id: string;
-  label: string;
-  disabled: boolean;
-  quota: { text: string; warn: boolean } | null;
-};
 
 /** Prototype terminal1 provider list (Rail.dc.html). */
-const PROTO_TERMINAL1_ROWS: MockProviderRow[] = [
+const PROTO_TERMINAL1_ROWS: AgentProviderRow[] = [
   { id: "claude", label: "Claude Code", disabled: false, quota: { text: "77% da semana", warn: false } },
   { id: "agy", label: "Antigravity", disabled: false, quota: { text: "só Gemini", warn: false } },
   { id: "commandcode", label: "Command Code", disabled: true, quota: { text: "sem cota até sex", warn: true } },
@@ -161,19 +151,6 @@ function NavTip({ label, keys }: { label: string; keys?: string[] }) {
       ))}
     </span>
   );
-}
-
-function quotaLabel(stats: ProviderUsageStats | undefined, nowMs: number): { text: string; warn: boolean } | null {
-  const view = decideProviderUsage({ stats, nowMs });
-  if (view.kind === "measured" && view.bars.length > 0) {
-    const week = view.bars.find((b) => b.key === "week") ?? view.bars[0];
-    return { text: t("rail.v3.quota.week", { value: String(week.percent) }), warn: false };
-  }
-  if (view.kind === "unavailable") {
-    // Keep the chip short — long CLI reasons belong in Settings, not the rail row.
-    return { text: t("settings.providers.quotaUnavailable"), warn: true };
-  }
-  return null;
 }
 
 export function Rail({
@@ -266,14 +243,7 @@ export function Rail({
   onSwitchBoard: (id: string) => void;
   summarizeProviderLabel?: string;
 }) {
-  const availableProviders = useAvailableAgentProviders();
-  const providerClassification = useProviderClassification();
-  const providerGroups = buildProviderGroups({
-    orderedIds: providers,
-    available: availableProviders,
-    dynamicIds: providerClassification.dynamicIds,
-    skippedIds: providerClassification.skippedIds,
-  });
+  const { rows: liveProviderRows, effortValuesFor } = useAgentProviderRows(providers);
 
   // `hidden` is the persisted preference; `revealed` is the transient edge
   // reveal of a hidden rail. There is deliberately no "open" button.
@@ -286,13 +256,11 @@ export function Rail({
   const hideTimer = useRef<number | null>(null);
   const swipeStartX = useRef<number | null>(null);
   const [findQuery, setFindQuery] = useState("");
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [pickedProviderLabel, setPickedProviderLabel] = useState("Claude Code");
-  const [providerUsage, setProviderUsage] = useState<Record<string, ProviderUsageStats | undefined>>({});
   const [mockFindCards, setMockFindCards] = useState<RailCard[] | null>(null);
   /** Proto label says "Nesta sessão · 9" while listing 6 rows — keep that surface count when seeded. */
   const [mockSessionCount, setMockSessionCount] = useState<number | null>(null);
-  const [mockTerminal1Rows, setMockTerminal1Rows] = useState<MockProviderRow[] | null>(null);
+  const [mockTerminal1Rows, setMockTerminal1Rows] = useState<AgentProviderRow[] | null>(null);
   /** Board panel fed with the prototype's facts (verify seed only). */
   const [mockBoard, setMockBoard] = useState<RailBoardInfo | null>(null);
   /** Session list fed with the prototype's sessions (verify seed only). */
@@ -302,21 +270,6 @@ export function Rail({
     activeId: string;
   } | null>(null);
 
-  const showAgentFields = newProvider !== "bash";
-  const effortValues = availableProviders.find((p) => p.id === newProvider)?.effortValues ?? [];
-  const effortLabel = (v: string) =>
-    (
-      {
-        high: "alto",
-        medium: "médio",
-        low: "baixo",
-        xhigh: "muito alto",
-        max: "máximo",
-        alto: "alto",
-        médio: "médio",
-        baixo: "baixo",
-      } as Record<string, string>
-    )[v] ?? v;
 
   const panelOpen = step !== "closed";
   const stripVisible = !hidden || revealed;
@@ -449,40 +402,6 @@ export function Rail({
   }
 
   useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  // Keyed by the ids themselves: `providerGroups` is a new object every render, and an
-  // effect on it would re-read the usage (and re-render) forever.
-  const usageIdsKey = [...providerGroups.native, ...providerGroups.generic]
-    .map((p) => p.id)
-    .filter((id) => id !== "bash")
-    .join(",");
-  useEffect(() => {
-    let cancelled = false;
-    const ids = usageIdsKey === "" ? [] : usageIdsKey.split(",");
-    void Promise.all(
-      ids.map(async (id) => {
-        try {
-          const stats = await window.providerUsage.get(id);
-          return [id, stats] as const;
-        } catch {
-          return [id, undefined] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      const next: Record<string, ProviderUsageStats | undefined> = {};
-      for (const [id, stats] of entries) next[id] = stats;
-      setProviderUsage(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [usageIdsKey]);
-
-  useEffect(() => {
     const api = {
       setStep: (next: RailStep) => {
         if (next !== "cards") {
@@ -549,7 +468,7 @@ export function Rail({
         systemPrompt?: string;
       }) => {
         const providerId = opts?.providerId ?? "claude";
-        const values = availableProviders.find((p) => p.id === providerId)?.effortValues ?? [];
+        const values = effortValuesFor(providerId);
         const wanted = opts?.effort ?? "alto";
         const effort =
           values.includes(wanted)
@@ -628,7 +547,7 @@ export function Rail({
       delete (window as unknown as { __stellarRail?: typeof api }).__stellarRail;
     };
   }, [
-    availableProviders,
+    effortValuesFor,
     hidden,
     step,
     hideRail,
@@ -668,19 +587,7 @@ export function Rail({
   const isTerm = activeStep === "terminal1" || activeStep === "terminal2";
 
 
-  const providerRows = useMemo(() => {
-    if (mockTerminal1Rows) return mockTerminal1Rows;
-    const rows: MockProviderRow[] = [];
-    for (const opt of [...providerGroups.native, ...providerGroups.generic]) {
-      if (opt.id === "bash") continue;
-      const quota = quotaLabel(providerUsage?.[opt.id], nowMs);
-      const disabled = Boolean(quota?.warn && /sem cota|sem crédito|no quota|no credit/i.test(quota.text));
-      // Prototype labels Claude as "Claude Code"; keep that surface string.
-      rows.push({ id: opt.id, label: opt.id === "claude" ? "Claude Code" : opt.label, disabled, quota });
-    }
-    rows.push({ id: "bash", label: t("rail.v3.provider.bash"), disabled: false, quota: null });
-    return rows;
-  }, [mockTerminal1Rows, providerGroups, providerUsage, nowMs]);
+  const providerRows = mockTerminal1Rows ?? liveProviderRows;
 
   const cardSource = mockFindCards ?? cards;
   const filteredCards = useMemo(() => {
@@ -699,31 +606,30 @@ export function Rail({
     setStep(next === "pen" ? "pen" : "closed");
   }
 
-  function sessionMode(): "new" | "continue" | "resume" {
-    if (newResumeId.trim()) return "resume";
-    if (newContinueLast) return "continue";
-    return "new";
-  }
-
-  function setSessionMode(mode: "new" | "continue" | "resume") {
-    if (mode === "new") {
-      setNewContinueLast(false);
-      setNewResumeId("");
-    } else if (mode === "continue") {
-      setNewContinueLast(true);
-      setNewResumeId("");
-    } else {
-      setNewContinueLast(false);
-      if (!newResumeId.trim()) setNewResumeId("");
-    }
-  }
-
   // Which strip button is lit. With a panel open only the panel's own button
   // lights; with the strip alone the real tool (V / P / C / S / export) does.
   const pointerOn = step === "closed" && tool === "pointer";
   const penOn = tool === "pen";
   const addOn = step === "add" || step === "terminal1" || step === "terminal2";
   const navClass = (on: boolean) => `rail-btn ${styles.navBtn}${on ? ` ${styles.navBtnOn}` : ""}`;
+
+  const agentForm = {
+    providers,
+    newProvider,
+    setNewProvider,
+    newResumeId,
+    setNewResumeId,
+    newContinueLast,
+    setNewContinueLast,
+    newModel,
+    setNewModel,
+    newEffort,
+    setNewEffort,
+    newSystemPrompt,
+    setNewSystemPrompt,
+    newCwd,
+    setNewCwd,
+  };
 
   const boardInfo = mockBoard ?? board;
 
@@ -1006,129 +912,28 @@ export function Rail({
             )}
 
             {activeStep === "terminal1" && (
-              <>
-                <button type="button" className={styles.back} onClick={() => go("add")}>
-                  ‹ {t("rail.v3.title.add")}
-                </button>
-                <span className={styles.sectionHead}>{t("rail.v3.whoRuns")}</span>
-                <div className={styles.section} style={{ gap: 6 }}>
-                  {providerRows.map((row) => (
-                    <button
-                      key={row.id}
-                      type="button"
-                      className={`${styles.tile} ${styles.tileRow}${row.disabled ? ` ${styles.tileRowDisabled}` : ""}`}
-                      disabled={row.disabled}
-                      onClick={() => {
-                        setNewProvider(row.id);
-                        setPickedProviderLabel(row.label);
-                        go("terminal2");
-                      }}
-                    >
-                      <span
-                        className={`${styles.providerDot}${row.id === "bash" ? ` ${styles.providerDotBash}` : ""}`}
-                        style={row.id === "bash" ? undefined : { background: providerAccentVar(row.id) }}
-                      />
-                      <span className={styles.providerName}>{row.label}</span>
-                      {row.quota && (
-                        <span className={`${styles.providerQuota}${row.quota.warn ? ` ${styles.providerQuotaWarn}` : ""}`}>
-                          {row.quota.text}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </>
+              <AgentWhoStep
+                rows={providerRows}
+                back={{ label: t("rail.v3.title.add"), onClick: () => go("add") }}
+                onPick={(row) => {
+                  setNewProvider(row.id);
+                  setPickedProviderLabel(row.label);
+                  go("terminal2");
+                }}
+              />
             )}
 
             {activeStep === "terminal2" && (
-              <>
-                <button type="button" className={styles.back} onClick={() => go("terminal1")}>
-                  ‹ {pickedProviderLabel}
-                </button>
-                <label className={styles.fieldLabel}>
-                  {t("rail.v3.label.folder")}
-                  <input className={`${styles.field} ${styles.fieldMono}`} value={newCwd} onChange={(e) => setNewCwd(e.target.value)} />
-                </label>
-                {showAgentFields && (
-                  <>
-                    <div className={styles.formGrid}>
-                      <label className={styles.fieldLabel}>
-                        {t("rail.v3.label.model")}
-                        <select className={styles.field} value={newModel} onChange={(e) => setNewModel(e.target.value)}>
-                          <option value="">{t("rail.providerDefault")}</option>
-                          <option value="Sonnet 5.5">Sonnet 5.5</option>
-                          <option value="Opus 5.5">Opus 5.5</option>
-                        </select>
-                      </label>
-                      <label className={styles.fieldLabel}>
-                        {t("rail.v3.label.effort")}
-                        <select className={styles.field} value={newEffort} onChange={(e) => setNewEffort(e.target.value)}>
-                          <option value="">{t("rail.providerDefault")}</option>
-                          {(effortValues.length > 0 ? effortValues : ["alto", "médio", "baixo"]).map((v) => (
-                            <option key={v} value={v}>
-                              {effortLabel(v)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    <span className={styles.sectionHead}>{t("rail.v3.session")}</span>
-                    <div className={styles.sessionList}>
-                      <label className={styles.sessionOption}>
-                        <input type="radio" name="rail-session" checked={sessionMode() === "new"} onChange={() => setSessionMode("new")} />
-                        {t("rail.v3.session.new")}
-                      </label>
-                      <label className={styles.sessionOption}>
-                        <input
-                          type="radio"
-                          name="rail-session"
-                          checked={sessionMode() === "continue"}
-                          onChange={() => setSessionMode("continue")}
-                        />
-                        {t("rail.v3.session.continue")}
-                      </label>
-                      <label className={styles.sessionOption}>
-                        <input type="radio" name="rail-session" checked={sessionMode() === "resume"} onChange={() => setSessionMode("resume")} />
-                        {t("rail.v3.session.resume")}
-                      </label>
-                    </div>
-                    {sessionMode() === "resume" && (
-                      <input
-                        className={styles.field}
-                        value={newResumeId}
-                        placeholder={t("rail.label.resumeId")}
-                        onChange={(e) => setNewResumeId(e.target.value)}
-                      />
-                    )}
-                    <label className={styles.fieldLabel}>
-                      <span>
-                        {t("rail.v3.label.extra")} <span className={styles.fieldOptional}>{t("rail.v3.label.optional")}</span>
-                      </span>
-                      <textarea
-                        className={`${styles.field} ${styles.fieldArea}`}
-                        value={newSystemPrompt}
-                        placeholder={t("rail.v3.label.extraPlaceholder")}
-                        onChange={(e) => setNewSystemPrompt(e.target.value)}
-                      />
-                    </label>
-                  </>
-                )}
-                <div className={styles.actions}>
-                  <button type="button" className={`${styles.btn} ${styles.btnSecondary}`} onClick={() => go("terminal1")}>
-                    {t("rail.v3.back")}
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnPrimary}`}
-                    onClick={() => {
-                      onCreateTerminal();
-                      setStep("closed");
-                    }}
-                  >
-                    {t("rail.v3.openCard")} <Kbd className={styles.btnKbd}>⏎</Kbd>
-                  </button>
-                </div>
-              </>
+              <AgentHowStep
+                form={agentForm}
+                pickedLabel={pickedProviderLabel}
+                effortValues={effortValuesFor(newProvider)}
+                onBack={() => go("terminal1")}
+                onCreate={() => {
+                  onCreateTerminal();
+                  setStep("closed");
+                }}
+              />
             )}
 
             {activeStep === "cards" && (

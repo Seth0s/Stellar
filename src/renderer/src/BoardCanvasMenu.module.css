@@ -95,3 +95,37 @@
   font-weight: 500;
   color: var(--rail-kbd-fg);
 }
+
+.chevron {
+  color: var(--rail-muted);
+  flex: none;
+}
+
+/* Side panel of the "Agente ou terminal" row — RailPassos.dc.html #context-submenu.
+   Header and body reuse the rail panel's own classes; this is only the shell. */
+.sub {
+  position: fixed;
+  z-index: var(--layer-modal);
+  width: 296px; /* sd:allow: same width as the rail panel (RailPassos.dc.html) */
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px; /* sd:allow: prototype context submenu radius (RailPassos.dc.html) */
+  background: var(--rail-panel-bg);
+  border: 1px solid var(--rail-menu-line);
+  box-shadow: var(--rail-menu-shadow);
+  font-family: var(--font-ui);
+  color: var(--rail-text);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex: none;
+  padding: var(--space-4) 14px; /* sd:allow: prototype submenu legend padding (RailPassos.dc.html) */
+  border-top: 1px solid var(--rail-line);
+  font-size: var(--rail-text-11-5);
+  color: var(--rail-muted);
+}

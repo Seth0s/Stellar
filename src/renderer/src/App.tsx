@@ -3821,6 +3821,14 @@ export function App() {
       !activeBoard?.orchestrator_card_id || cards.some((c) => c.id === activeBoard.orchestrator_card_id),
   };
 
+  // A provider pick resets an effort the new provider does not offer. Shared by the
+  // rail's "Novo agente" panel and the right-click menu's side panel.
+  const pickNewProvider = (p: string) => {
+    const nextEffortValues = availableAgentProviders.find((a) => a.id === p)?.effortValues ?? [];
+    if (!nextEffortValues.includes(newEffort)) setNewEffort("");
+    setNewProvider(p);
+  };
+
   return (
     <div className="viewport">
       <Titlebar />
@@ -3834,11 +3842,7 @@ export function App() {
         setStrokeWidth={setNewStrokeWidth}
         providers={providerOptions}
         newProvider={newProvider}
-        setNewProvider={(p) => {
-          const nextEffortValues = availableAgentProviders.find((a) => a.id === p)?.effortValues ?? [];
-          if (!nextEffortValues.includes(newEffort)) setNewEffort("");
-          setNewProvider(p);
-        }}
+        setNewProvider={pickNewProvider}
         newResumeId={newResumeId}
         setNewResumeId={setNewResumeId}
         newContinueLast={newContinueLast}
@@ -4628,6 +4632,25 @@ export function App() {
           y={canvasMenu.screen.y}
           onClose={() => setCanvasMenu(null)}
           onSelect={selectCanvasMenuAction}
+          agentFlow={{
+            form: {
+              providers: providerOptions,
+              newProvider,
+              setNewProvider: pickNewProvider,
+              newResumeId,
+              setNewResumeId,
+              newContinueLast,
+              setNewContinueLast,
+              newModel,
+              setNewModel,
+              newEffort,
+              setNewEffort,
+              newSystemPrompt,
+              setNewSystemPrompt,
+              newCwd,
+              setNewCwd,
+            },
+          }}
         />
       ) : null}
       {boardCmdOpen ? (
