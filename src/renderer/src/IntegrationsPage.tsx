@@ -36,7 +36,7 @@ export function IntegrationsPage({ teamId, teamName, role, members, onBack }: In
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectKind, setConnectKind] = useState<"github" | "linear" | "jira" | null>(null);
-  const [connectForm, setConnectForm] = useState({ repo: "Seth0s/demo", label: "stellar", projectId: "", baseUrl: "", email: "", jql: "", token: "" });
+  const [connectForm, setConnectForm] = useState({ repo: "", label: "", projectId: "", baseUrl: "", email: "", jql: "", token: "" });
   const [webhookOpen, setWebhookOpen] = useState(false);
   const [webhookForm, setWebhookForm] = useState({ url: "", secret: "", events: "task.updated" });
 
@@ -440,7 +440,7 @@ export function IntegrationsPage({ teamId, teamName, role, members, onBack }: In
             {connectKind === "github" ? (
               <>
                 <input className={styles.input} placeholder="org/repo" value={connectForm.repo} onChange={(e) => setConnectForm({ ...connectForm, repo: e.target.value })} />
-                <input className={styles.input} placeholder="label" value={connectForm.label} onChange={(e) => setConnectForm({ ...connectForm, label: e.target.value })} />
+                <input className={styles.input} placeholder="label (ex.: stellar)" value={connectForm.label} onChange={(e) => setConnectForm({ ...connectForm, label: e.target.value })} />
               </>
             ) : null}
             {connectKind === "linear" ? (
@@ -465,7 +465,7 @@ export function IntegrationsPage({ teamId, teamName, role, members, onBack }: In
               <button type="button" className={styles.ghost} onClick={() => setConnectKind(null)}>
                 {t("teamIntegrations.cancel")}
               </button>
-              <button type="button" className={styles.primary} data-part="connect-submit" disabled={busy || connectForm.token === ""} onClick={() => void submitConnect()}>
+              <button type="button" className={styles.primary} data-part="connect-submit" disabled={busy || connectForm.token === "" || (connectKind === "github" && connectForm.repo.trim() === "")} onClick={() => void submitConnect()}>
                 {t("teamIntegrations.connect")}
               </button>
             </div>

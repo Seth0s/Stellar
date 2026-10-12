@@ -536,6 +536,28 @@ try {
   );
   check("relight shows notify_review checked", afterRelight.review, true);
 
+  // The connect form starts empty (generic placeholders), and GitHub needs a repo.
+  const savedGithub = backend.integrations.get("github");
+  backend.integrations.delete("github");
+  await ownerPage.evalJs(`document.querySelector('[data-part="integrations-back"]')?.click()`);
+  await waitFor(ownerPage, `!!document.querySelector('[data-part="team-open-integrations"]')`);
+  await ownerPage.evalJs(`document.querySelector('[data-part="team-open-integrations"]')?.click()`);
+  await waitFor(ownerPage, `!!document.querySelector('[data-part="github-connect"]')`);
+  await ownerPage.evalJs(`document.querySelector('[data-part="github-connect"]')?.click()`);
+  check("connect form opens", await waitFor(ownerPage, `!!document.querySelector('[data-part="connect-modal"]')`), true);
+  const connectFields = JSON.parse(
+    await ownerPage.evalJs(`JSON.stringify([...document.querySelectorAll('[data-part="connect-modal"] input')].map((i) => [i.placeholder, i.value]))`),
+  );
+  check("connect form: repo and label start empty with generic placeholders", JSON.stringify(connectFields), JSON.stringify([["org/repo", ""], ["label (ex.: stellar)", ""], ["token / api key", ""]]));
+  await ownerPage.evalJs(
+    `(() => { const el = document.querySelector('[data-part="connect-token"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(el, "tok"); el.dispatchEvent(new Event("input", { bubbles: true })); })()`,
+  );
+  await delay(150);
+  check("connect form: a token alone does not enable GitHub connect (repo missing)", await ownerPage.evalJs(`!!document.querySelector('[data-part="connect-submit"]').disabled`), true);
+  if (savedGithub) backend.integrations.set("github", savedGithub);
+  await ownerPage.evalJs(`document.querySelector('[data-part="connect-modal"] button')?.click()`);
+  await delay(150);
+
   // Integrations is a full-page subview — go back to overview, then open Import.
   await ownerPage.evalJs(`document.querySelector('[data-part="integrations-back"]')?.click()`);
   check("back to team overview", await waitFor(ownerPage, `!!document.querySelector('[data-team-sub="import"]')`), true);

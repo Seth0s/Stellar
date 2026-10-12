@@ -765,6 +765,31 @@ try {
       check("team: no banner while seats are free", await exists(page, '[data-part="seats-full-banner"]'), false);
       await measureApp(page, "team", TEAM_PAIRS, protoReadings.team, "team");
 
+      // -- the board is a nested section: same head as Visão geral, inside the shell --
+      const headBox = `(() => { const r = ${q('[data-part="team-title"]')}.getBoundingClientRect(); return JSON.stringify([Math.round(r.left), Math.round(r.top)]); })()`;
+      const overviewHead = await page.evalJs(headBox);
+      await click(page, '[data-team-sub="board"]');
+      check("board: opens inside the team page", await waitFor(page, `!!${q('[data-part="team-page"] [data-part="team-content"] [data-part="team-board"]')}`), true);
+      await delay(400);
+      check("board: keeps the team head (title, slug, invite)", `${await text(page, '[data-part="team-title"]')}|${await exists(page, '[data-part="team-open-invite"]')}`, "Nebula Labs|true");
+      check("board: the head sits where Visão geral puts it", await page.evalJs(headBox), overviewHead);
+      check("board: a single h1 (the team name)", await page.evalJs(`JSON.stringify([...document.querySelectorAll("h1")].map((h) => h.textContent))`), JSON.stringify(["Nebula Labs"]));
+      check("board: the sidebar entry is the active one", await page.evalJs(`${q('[data-team-sub="board"]')}?.getAttribute("aria-current")`), "page");
+      check("board: no back-to-team button (the sidebar is the way back)", await exists(page, '[data-part="board-back"]'), false);
+      check(
+        "board: flows inside the content area, not a fixed overlay",
+        await page.evalJs(`(() => { const b = ${q('[data-part="team-board"]')}; const p = b.closest('[data-part="team-page"]'); const m = p.parentElement.getBoundingClientRect(); const r = b.getBoundingClientRect(); return JSON.stringify([getComputedStyle(p).position !== "fixed", r.left >= m.left, r.right <= m.right + 1, r.bottom <= window.innerHeight + 1]); })()`),
+        JSON.stringify([true, true, true, true]),
+      );
+      check(
+        "board: the four columns fit without horizontal scroll at 1440",
+        await page.evalJs(`(() => { const c = ${q('[data-part="team-board"] [data-column]')}.parentElement; return JSON.stringify([c.scrollWidth <= c.clientWidth, document.querySelectorAll('[data-part="team-board"] [data-column]').length]); })()`),
+        JSON.stringify([true, 4]),
+      );
+      await shot(page, "board-nested");
+      await click(page, '[data-team-sub="overview"]');
+      check("board: leaving it brings the overview back", await waitFor(page, `!${q('[data-part="team-board"]')} && !!${q('[data-part="members-table"]')}`), true);
+
       // -- #invite and #invite-copied --
       await click(page, '[data-part="team-open-invite"]');
       await waitFor(page, `!!${q('[data-part="invite-modal"]')}`);

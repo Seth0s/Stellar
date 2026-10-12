@@ -654,176 +654,165 @@ export function TeamPage({
     );
   }
 
-  if (sub === "board") {
-    return (
-      <div className={styles.boardScreen} data-part="team-board">
-        {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
-        {offline ? <div className={styles.banner}>{t("teamTask.offline")}</div> : null}
-        {note ? <div className={styles.note}>{note}</div> : null}
-        {errorDisplay?.kind === "raw" ? <div className={styles.error}>{errorDisplay.error}</div> : null}
-        {formElement}
-        {deleteElement}
-        <TeamBoard
-          writable={teamWritable}
-          tasks={tasks}
-          grouped={grouped}
-          members={detail?.members ?? []}
-          accountId={accountId}
-          myRole={myRole}
-          isAdmin={isAdmin}
-          filter={filter}
-          offers={offers}
-          claimable={claimable}
-          requested={requested}
-          boards={boards}
-          busy={busy || !teamWritable}
-          selectedTaskId={selectedTask?.id ?? null}
-          detail={taskDetail}
-          comment={comment}
-          teamName={team?.name ?? ""}
-          sprintName={activeSprint?.name ?? ""}
-          openCount={stats.open}
-          sprintDone={stats.done}
-          onBack={() => setTeamSub("overview")}
-          onNewTask={() => {
-            setFormEditing(null);
-            setFormOpen(true);
-          }}
-          onFilter={setFilter}
-          onSelect={(task) => void openTask(task)}
-          onDrag={(task, to) => void handleDrag(task, to)}
-          onClaim={(task) => void handleClaim(task)}
-          onReturn={(task) => void handleReturn(task)}
-          onAccept={(task, boardId) => void handleAccept(task, boardId)}
-          onComment={setComment}
-          onSendComment={(mentions) => {
-            if (selectedTask) void handleComment(selectedTask, mentions);
-          }}
-          onCloseDetail={closeDetail}
-          onEditTask={(task) => {
-            setFormEditing(task);
-            setFormOpen(true);
-          }}
-          sprints={sprints}
-          shareFilePaths={team?.shareFilePaths ?? false}
-          onCreateSubtasks={(task, subtasks) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.createSubtasks(selected, task.id, subtasks);
-              if (!res.ok) setError(res.error);
-              else {
-                await loadTasks(selected);
-                await openTask(task);
-              }
-            })
-          }
-          onPatchSharePaths={(enabled) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.patchTeam(selected, { share_file_paths: enabled });
-              if (!res.ok) {
-                setError(res.error);
-                return;
-              }
-              setOverview((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      teams: prev.teams.map((x) => (x.id === selected ? { ...x, shareFilePaths: enabled } : x)),
-                    }
-                  : prev,
-              );
-            })
-          }
-          onDuplicateTask={(task) =>
-            void run(async () => {
-              if (!selected) return;
-              const depIds = (taskDetail?.task.id === task.id ? taskDetail.deps : []).map((d) => d.id);
-              const res = await window.team.createTask(selected, {
-                title: `${task.title} (cópia)`,
-                kind: task.kind,
-                priority: task.priority,
-                territory: task.territory,
-                gates: task.gates.map((g) => g),
-                allow_commit: task.allowCommit,
-                report_schema: task.reportSchema,
-                max_retries: task.maxRetries,
-                ...(task.provider !== "" ? { provider: task.provider } : {}),
-                ...(task.reviewerId ? { reviewer_id: task.reviewerId } : {}),
-                ...(task.sprintId ? { sprint_id: task.sprintId } : {}),
-                ...(depIds.length > 0 ? { depends_on: depIds } : {}),
-              });
-              if (!res.ok) setError(res.error);
-              else await loadTasks(selected);
-            })
-          }
-          onCopyLinkTask={(task) => {
-            const link = `stellar://team/${task.teamId}/task/${task.id}`;
-            const clip = navigator.clipboard;
-            if (clip) void clip.writeText(link).catch(() => setNote(link));
-            else setNote(link);
-          }}
-          onPauseTask={(task) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.returnTask(selected, task.id);
-              if (!res.ok) setError(res.error);
-              else await loadTasks(selected);
-            })
-          }
-          onArchive={() => {
-            if (selectedTask) {
-              setDeleteInitial("archive");
-              setDeleteTarget(selectedTask);
-            }
-          }}
-          onDelete={() => {
-            if (selectedTask) {
-              setDeleteInitial("purge");
-              setDeleteTarget(selectedTask);
-            }
-          }}
-          onAssign={(task, body) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.assignTask(selected, task.id, body);
-              if (!res.ok) {
-                setError(res.error);
-                return;
-              }
+  const boardElement =
+    sub === "board" ? (
+      <TeamBoard
+        writable={teamWritable}
+        tasks={tasks}
+        grouped={grouped}
+        members={detail?.members ?? []}
+        accountId={accountId}
+        myRole={myRole}
+        isAdmin={isAdmin}
+        filter={filter}
+        offers={offers}
+        claimable={claimable}
+        requested={requested}
+        boards={boards}
+        busy={busy || !teamWritable}
+        selectedTaskId={selectedTask?.id ?? null}
+        detail={taskDetail}
+        comment={comment}
+        sprintName={activeSprint?.name ?? ""}
+        openCount={stats.open}
+        sprintDone={stats.done}
+        onNewTask={() => {
+          setFormEditing(null);
+          setFormOpen(true);
+        }}
+        onFilter={setFilter}
+        onSelect={(task) => void openTask(task)}
+        onDrag={(task, to) => void handleDrag(task, to)}
+        onClaim={(task) => void handleClaim(task)}
+        onReturn={(task) => void handleReturn(task)}
+        onAccept={(task, boardId) => void handleAccept(task, boardId)}
+        onComment={setComment}
+        onSendComment={(mentions) => {
+          if (selectedTask) void handleComment(selectedTask, mentions);
+        }}
+        onCloseDetail={closeDetail}
+        onEditTask={(task) => {
+          setFormEditing(task);
+          setFormOpen(true);
+        }}
+        sprints={sprints}
+        shareFilePaths={team?.shareFilePaths ?? false}
+        onCreateSubtasks={(task, subtasks) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.createSubtasks(selected, task.id, subtasks);
+            if (!res.ok) setError(res.error);
+            else {
               await loadTasks(selected);
-            })
+              await openTask(task);
+            }
+          })
+        }
+        onPatchSharePaths={(enabled) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.patchTeam(selected, { share_file_paths: enabled });
+            if (!res.ok) {
+              setError(res.error);
+              return;
+            }
+            setOverview((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    teams: prev.teams.map((x) => (x.id === selected ? { ...x, shareFilePaths: enabled } : x)),
+                  }
+                : prev,
+            );
+          })
+        }
+        onDuplicateTask={(task) =>
+          void run(async () => {
+            if (!selected) return;
+            const depIds = (taskDetail?.task.id === task.id ? taskDetail.deps : []).map((d) => d.id);
+            const res = await window.team.createTask(selected, {
+              title: `${task.title} (cópia)`,
+              kind: task.kind,
+              priority: task.priority,
+              territory: task.territory,
+              gates: task.gates.map((g) => g),
+              allow_commit: task.allowCommit,
+              report_schema: task.reportSchema,
+              max_retries: task.maxRetries,
+              ...(task.provider !== "" ? { provider: task.provider } : {}),
+              ...(task.reviewerId ? { reviewer_id: task.reviewerId } : {}),
+              ...(task.sprintId ? { sprint_id: task.sprintId } : {}),
+              ...(depIds.length > 0 ? { depends_on: depIds } : {}),
+            });
+            if (!res.ok) setError(res.error);
+            else await loadTasks(selected);
+          })
+        }
+        onCopyLinkTask={(task) => {
+          const link = `stellar://team/${task.teamId}/task/${task.id}`;
+          const clip = navigator.clipboard;
+          if (clip) void clip.writeText(link).catch(() => setNote(link));
+          else setNote(link);
+        }}
+        onPauseTask={(task) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.returnTask(selected, task.id);
+            if (!res.ok) setError(res.error);
+            else await loadTasks(selected);
+          })
+        }
+        onArchive={() => {
+          if (selectedTask) {
+            setDeleteInitial("archive");
+            setDeleteTarget(selectedTask);
           }
-          onAutoDispatch={(task, enabled) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.autoDispatchTask(selected, task.id, enabled);
-              if (!res.ok) setError(res.error);
-              else await loadTasks(selected);
-            })
+        }}
+        onDelete={() => {
+          if (selectedTask) {
+            setDeleteInitial("purge");
+            setDeleteTarget(selectedTask);
           }
-          onUpdateFields={(task, body) =>
-            void run(async () => {
-              if (!selected) return;
-              const res = await window.team.updateTask(selected, task.id, body, task.version);
-              if (!res.ok) {
-                setError(res.conflict ? t("teamTask.error") : res.error);
-                return;
-              }
-              await loadTasks(selected);
-            })
-          }
-        />
-      </div>
-    );
-  }
+        }}
+        onAssign={(task, body) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.assignTask(selected, task.id, body);
+            if (!res.ok) {
+              setError(res.error);
+              return;
+            }
+            await loadTasks(selected);
+          })
+        }
+        onAutoDispatch={(task, enabled) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.autoDispatchTask(selected, task.id, enabled);
+            if (!res.ok) setError(res.error);
+            else await loadTasks(selected);
+          })
+        }
+        onUpdateFields={(task, body) =>
+          void run(async () => {
+            if (!selected) return;
+            const res = await window.team.updateTask(selected, task.id, body, task.version);
+            if (!res.ok) {
+              setError(res.conflict ? t("teamTask.error") : res.error);
+              return;
+            }
+            await loadTasks(selected);
+          })
+        }
+      />
+    ) : null;
 
   const seats = seatsView(detail?.seats ?? null);
   const canInvite = canManageMembers(myRole);
   const members = detail?.members ?? [];
 
   return (
-    <div className={styles.page} data-part="team-page">
+    <div className={`${styles.page}${sub === "board" ? ` ${styles.pageBoard}` : ""}`} data-part="team-page">
       <div className={styles.pageHead} data-part="team-head">
         <div className={styles.pageHeadText}>
           <h1 className={styles.title} data-part="team-title">
@@ -937,7 +926,13 @@ export function TeamPage({
       {loggedIn && planNotice ? <PlanNotice access={planNotice} plansUrl={plansUrl} /> : null}
       {offline ? <div className={styles.banner}>{t("teamTask.offline")}</div> : null}
       {note ? <div className={styles.note}>{note}</div> : null}
-      {error ? <div className={styles.error}>{error}</div> : null}
+      {sub === "board" ? (
+        errorDisplay?.kind === "raw" ? (
+          <div className={styles.error}>{errorDisplay.error}</div>
+        ) : null
+      ) : error ? (
+        <div className={styles.error}>{error}</div>
+      ) : null}
 
       {formElement}
 
@@ -953,7 +948,9 @@ export function TeamPage({
         />
       ) : null}
 
-      <div data-part="team-content">
+      <div data-part="team-content" className={sub === "board" ? styles.contentBoard : undefined}>
+          {boardElement}
+
           {sub === "overview" || sub === "audit" || sub === "members" ? (
             <TeamAdminView
               stats={stats}
@@ -1636,11 +1633,9 @@ function TeamBoard({
   selectedTaskId,
   detail,
   comment,
-  teamName,
   sprintName,
   openCount,
   sprintDone,
-  onBack,
   onNewTask,
   onFilter,
   onSelect,
@@ -1681,11 +1676,9 @@ function TeamBoard({
   selectedTaskId: string | null;
   detail: TeamTaskDetailInfo | null;
   comment: string;
-  teamName: string;
   sprintName: string;
   openCount: number;
   sprintDone: number;
-  onBack: () => void;
   onNewTask: () => void;
   onFilter: (f: { assigneeId: string; project: string; unassigned: boolean; search: string; mine: boolean }) => void;
   onSelect: (task: TeamTaskInfo) => void;
@@ -1722,15 +1715,8 @@ function TeamBoard({
   }, [selectedTaskId, isAdmin]);
 
   return (
-    <div className={styles.board}>
+    <div className={styles.board} data-part="team-board">
       <div className={styles.boardBar}>
-        <button type="button" className={styles.backLink} onClick={onBack} data-part="board-back">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            <path d="M11 7H3M6.5 3.5L3 7l3.5 3.5" />
-          </svg>
-          {teamName}
-        </button>
-        <h1 className={styles.boardTitle}>{t("teamAdmin.boardTitle")}</h1>
         <span className={styles.boardMeta}>
           {sprintName ? `${sprintName} · ` : ""}
           {t("teamTask.board.openCount", { n: String(openCount) })}

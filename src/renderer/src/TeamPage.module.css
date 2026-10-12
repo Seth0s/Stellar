@@ -246,28 +246,6 @@
   background: var(--v2-inset);
 }
 
-.backLink {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--v2-s3);
-  border: 0;
-  background: transparent;
-  color: var(--v2-text-3);
-  font: inherit;
-  font-size: var(--v2-f13);
-  cursor: pointer;
-}
-
-.backLink:hover {
-  color: var(--v2-bright);
-}
-
-.boardTitle {
-  margin: 0;
-  font-size: var(--v2-f22);
-  font-weight: 600;
-}
-
 .boardMeta {
   font-size: var(--v2-f12);
   color: var(--v2-text-5);
@@ -430,7 +408,7 @@
 
 .col {
   flex: 1 1 0;
-  min-width: 190px;
+  min-width: 170px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -660,22 +638,23 @@
   overflow: auto;
 }
 
-/* ---- full-bleed board (tela 11/12) ---- */
+/* ---- board nested in the team page (tela 11/12) ---- */
 
-.boardScreen {
-  position: fixed;
-  top: var(--titlebar-h);
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
+/* The page fills the content area so the board takes whatever height the head leaves. */
+.pageBoard {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.contentBoard {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  border-radius: var(--v2-r14);
+  border: 1px solid var(--v2-line-soft);
   overflow: hidden;
-  background-color: var(--v2-bg);
-  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--v2-bright) 4%, transparent) 1px, transparent 0);
-  background-size: 22px 22px;
-  color: var(--v2-text);
 }
 
 .board {
@@ -705,7 +684,7 @@
 }
 
 .boardAside {
-  width: 360px;
+  width: 320px;
   flex: none;
   min-height: 0;
   display: flex;
