@@ -17,7 +17,7 @@ import { MediaCard, type MediaView } from "./MediaCard";
 import { TaskCard } from "./TaskCard";
 import { BoardQuickTask } from "./BoardQuickTask";
 import { BoardCommandPalette } from "./BoardCommandPalette";
-import { BoardCanvasMenu } from "./BoardCanvasMenu";
+import { BoardCanvasMenu, type BoardCanvasMenuAction } from "./BoardCanvasMenu";
 import { TeamTaskForm } from "./TeamTaskForm";
 import {
   countUnassignedTeamTasks,
@@ -53,8 +53,9 @@ import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { Rail } from "./Rail";
+import type { RailBoardInfo } from "./RailBoardPanel";
 import { Compass } from "./Compass";
-import { Topbar } from "./Topbar";
+import { Topbar, OPEN_SESSIONS_EVENT } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
 import { AppShell } from "./AppShell";
@@ -787,7 +788,6 @@ export function App() {
   const [newEffort, setNewEffort] = useState("");
   const [newSystemPrompt, setNewSystemPrompt] = useState("");
   const [newCwd, setNewCwd] = useState("");
-  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem("ac.railCollapsed") === "1");
   const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
   // Pedido ao vivo (2026-08-27): o clique num link visto no terminal
   // deixou de abrir o navegador interno direto — agora pede confirmação
@@ -2002,7 +2002,7 @@ export function App() {
   }, [activeBoardId]);
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
-  const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected } =
+  const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard } =
     useCardSelection(cardsRef, setCards, activeBoardIdRef, nextId, clientToWorld, toRow);
   // Pre-release audit P1 — same stable-handler reasoning as the block
   // near cardsRef/orderRef above; these two specifically can only be
@@ -3463,9 +3463,9 @@ export function App() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  function selectRadialAction(action: RadialAction, providerId?: string) {
-    const at = radialMenu?.world;
-    setRadialMenu(null);
+  /** Shared by the radial ring and the right-click menu: what a pick does,
+   * with spawns landing at `at` (the press / click position in world space). */
+  function runBoardAction(action: RadialAction, at: Point | undefined, providerId?: string) {
     if (action === "tool-pointer") return setTool("pointer");
     if (action === "tool-pen") return setTool("pen");
     if (action === "tool-connector") return setTool("connector");
@@ -3477,6 +3477,25 @@ export function App() {
     if (!at) return;
     if (action === "terminal") addTerminalCard(at, providerId);
     else addCardOfKind(action, at);
+  }
+
+  function selectRadialAction(action: RadialAction, providerId?: string) {
+    const at = radialMenu?.world;
+    setRadialMenu(null);
+    runBoardAction(action, at, providerId);
+  }
+
+  function selectCanvasMenuAction(action: BoardCanvasMenuAction) {
+    const menu = canvasMenu;
+    if (action === "radial") {
+      if (menu) setRadialMenu({ screen: menu.screen, world: menu.world });
+      return;
+    }
+    if (action === "palette") {
+      setBoardCmdOpen(true);
+      return;
+    }
+    runBoardAction(action, menu?.world);
   }
 
   const ensureTeamCtx = useCallback(async () => {
@@ -3669,6 +3688,30 @@ export function App() {
     }
   }
 
+  // Hoisted above the early return so Settings opens from the Home as well as
+  // from a board (it used to mount only in the board branch).
+  const settingsModal = settingsPage ? (
+    <SettingsModal
+      page={settingsPage}
+      onPageChange={setSettingsPage}
+      onClose={closeSettings}
+      board={boards.find((b) => b.id === activeBoardId) ?? null}
+      shortcutOverrides={shortcutOverrides}
+      onRebind={rebindShortcut}
+      onRestoreDefault={restoreShortcutDefault}
+      onRestoreAll={restoreAllShortcutDefaults}
+      locale={locale}
+      onLocaleOverrideChange={changeLocaleOverride}
+      onToggleAutonomous={setBoardAutonomous}
+      onSetConcurrencyCap={setBoardConcurrencyCap}
+      onApplyPreset={applyBoardPreset}
+      onSetDefaults={setBoardDefaults}
+      onSetOrchestrator={(boardId, cardId) => {
+        void window.store.boards.setOrchestratorCard(boardId, cardId);
+      }}
+    />
+  ) : null;
+
   // The home shell (cold start, first run, sessions, profiles, work home,
   // teams) takes over whenever no board is loaded. The titlebar stays mounted
   // for the window controls.
@@ -3692,6 +3735,7 @@ export function App() {
           onStopBoard={stopBoard}
           onOpenSettings={() => setSettingsPage("account")}
         />
+        {settingsModal}
       </div>
     );
   }
@@ -3699,9 +3743,6 @@ export function App() {
   const dotSize = GRID_SPACING * world.zoom;
   const backgroundStyle = backgroundCss(bgStyle, dotSize, world.panX, world.panY);
 
-  const selectedCards = cards.filter((c) => selectedIds.has(c.id));
-  const canGroup = tool === "select" && selectedCards.length >= 2;
-  // Ungroup stays on the keyboard-shortcut path; the docked rail only offers Group.
 
   // Live override for the active board only (see liveStatus's comment) —
   // every other board keeps the structural proxy fetched over IPC.
@@ -3766,8 +3807,22 @@ export function App() {
       })
     : [];
 
+  // Board / session facts for the rail now that the top bar is gone: the
+  // Board panel and the autonomous dot read these.
+  const activeBoard = boards.find((b) => b.id === activeBoardId);
+  const railBoardInfo: RailBoardInfo = {
+    boardId: activeBoardId ?? "",
+    rootName: rootDisplayName(workspaceRoot),
+    project: activeBoard?.project || t("session.ungrouped"),
+    boardName: activeBoard?.name ?? t("topbar.sessionFallback"),
+    autonomous: Boolean(activeBoard?.autonomous),
+    orchestratorCardId: activeBoard?.orchestrator_card_id ?? null,
+    orchestratorPresent:
+      !activeBoard?.orchestrator_card_id || cards.some((c) => c.id === activeBoard.orchestrator_card_id),
+  };
+
   return (
-    <div className="viewport" data-rail-collapsed={railCollapsed ? "1" : "0"}>
+    <div className="viewport">
       <Titlebar />
       <Rail
         tool={tool}
@@ -3777,8 +3832,6 @@ export function App() {
         setStrokeColor={setNewStrokeColor}
         strokeWidth={newStrokeWidth}
         setStrokeWidth={setNewStrokeWidth}
-        canGroup={canGroup}
-        onGroup={groupSelected}
         providers={providerOptions}
         newProvider={newProvider}
         setNewProvider={(p) => {
@@ -3820,12 +3873,16 @@ export function App() {
                 : c.kind === "task"
                   ? { statusText: t("rail.v3.status.queue"), statusTone: "note" as const }
                   : { statusText: CARD_LABEL[c.kind] ?? c.kind, statusTone: "note" as const };
-          return { id: c.id, kind: c.kind, label, ...status };
+          return { id: c.id, kind: c.kind, label, isAgent: c.kind === "terminal" && c.provider !== "bash", ...status };
         })}
         onJumpToCard={jumpToCard}
         onOpenSettings={() => setSettingsPage("account")}
         onOpenShortcuts={() => setSettingsPage("shortcuts")}
-        onDockWidthChange={(w) => setRailCollapsed(w <= 56)}
+        onGoHome={goHome}
+        onOpenPalette={() => setBoardCmdOpen(true)}
+        paletteOpen={boardCmdOpen}
+        board={railBoardInfo}
+        onOpenSessions={() => window.dispatchEvent(new Event(OPEN_SESSIONS_EVENT))}
         summarizeProviderLabel={
           availableAgentProviders.find((a) => a.id === newProvider)?.label ?? newProvider
         }
@@ -4543,43 +4600,18 @@ export function App() {
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
         onOpenRemote={() => setSettingsPage("devices")}
-        onGoHome={goHome}
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
         onSuggestInstall={stableSuggestInstall}
-        orchestratorCardPresent={(() => {
-          const orchId = boards.find((b) => b.id === activeBoardId)?.orchestrator_card_id;
-          return !orchId || cards.some((c) => c.id === orchId);
-        })()}
         boardMountProgress={boardMountProgress}
       />
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
       </div>
       <UpdateBanner />
       <ToastHost />
-      {settingsPage && (
-        <SettingsModal
-          page={settingsPage}
-          onPageChange={setSettingsPage}
-          onClose={closeSettings}
-          board={boards.find((b) => b.id === activeBoardId) ?? null}
-          shortcutOverrides={shortcutOverrides}
-          onRebind={rebindShortcut}
-          onRestoreDefault={restoreShortcutDefault}
-          onRestoreAll={restoreAllShortcutDefaults}
-          locale={locale}
-          onLocaleOverrideChange={changeLocaleOverride}
-          onToggleAutonomous={setBoardAutonomous}
-          onSetConcurrencyCap={setBoardConcurrencyCap}
-          onApplyPreset={applyBoardPreset}
-          onSetDefaults={setBoardDefaults}
-          onSetOrchestrator={(boardId, cardId) => {
-            void window.store.boards.setOrchestratorCard(boardId, cardId);
-          }}
-        />
-      )}
+      {settingsModal}
       {radialMenu && (
         <RadialMenu
           x={radialMenu.screen.x}
@@ -4595,7 +4627,7 @@ export function App() {
           x={canvasMenu.screen.x}
           y={canvasMenu.screen.y}
           onClose={() => setCanvasMenu(null)}
-          onNewTaskHere={() => openQuickTask({ destination: "board" })}
+          onSelect={selectCanvasMenuAction}
         />
       ) : null}
       {boardCmdOpen ? (

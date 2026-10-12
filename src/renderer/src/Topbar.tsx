@@ -10,14 +10,17 @@ import { t } from "../../shared/i18n";
 import { GlobalComposer } from "./GlobalComposer";
 import { BoardMountProgress } from "./BoardMountProgress";
 import type { BoardMountProgress as BoardMountProgressState } from "./useBoardMountQueue";
-// O papel de um vínculo task↔card fala a MESMA língua do chip da Fila
-// (`describeCardRole`, TaskCard.tsx) — exportado de lá em vez de reescrito
-// aqui: uma segunda tabela de papel é justamente o defeito que esta sessão
-// passou o dia consertando. O id curto de task também é o do quadro (`slice`
-// de 8, `shortTaskId`), não uma segunda convenção.
-import { describeCardRole } from "./TaskCard";
-import { shortTaskId } from "./task-board-model";
-import type { BoardAgentRoleRow } from "../../preload/index";
+import {
+  RailGlyphFullscreen,
+  RailGlyphFullscreenExit,
+  RailGlyphGrid,
+  RailGlyphQr,
+  RailGlyphZoomIn,
+  RailGlyphZoomOut,
+} from "./RailGlyphs";
+
+/** Dispatched by the rail's Board panel to open the session switcher. */
+export const OPEN_SESSIONS_EVENT = "stellar:open-sessions";
 
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
@@ -37,13 +40,11 @@ export function Topbar({
   bgStyleLabel,
   onCycleBgStyle,
   onOpenRemote,
-  onGoHome,
   onSwitchBoard,
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
   onSuggestInstall,
-  orchestratorCardPresent = true,
   boardMountProgress,
 }: {
   boards: Board[];
@@ -69,8 +70,6 @@ export function Topbar({
   bgStyleLabel: string;
   onCycleBgStyle: () => void;
   onOpenRemote: () => void;
-  /** DESIGN-BACKLOG.md item 8 — back to the session grid. */
-  onGoHome: () => void;
   onSwitchBoard: (id: string) => void;
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
@@ -80,14 +79,6 @@ export function Topbar({
    * `openInstallTerminal`), só que disparada daqui em vez de um botão que
    * só aparecia depois de um spawn já ter falhado. */
   onSuggestInstall: (providerId: string, command: string) => void;
-  /**
-   * Whether `activeBoard.orchestrator_card_id` still resolves to a card on
-   * this board. Closing a terminal clears the mark in the store — so a
-   * missing id means an orphan (manual DB edit, race, or a bug), not the
-   * normal close path. We show it honestly and do NOT auto-clear: silent
-   * cleanup would hide the inconsistency the human needs to see.
-   */
-  orchestratorCardPresent?: boolean;
   /** Real card-mount progress while a board is opening (docs/PERF.md §17). */
   boardMountProgress?: BoardMountProgressState | null;
 }) {
@@ -102,32 +93,16 @@ export function Topbar({
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const agentsBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
-  const activeCounts = boardCounts[activeBoardId];
   const [fullscreen, setFullscreen] = useState(false);
   const { missing: missingAgents } = useAgentAvailability();
 
-  // O dropdown de AGENTES (task 49de95ce) — o que substitui o "N ativos".
-  // `null` = ninguém leu ainda (estado honesto, e distinto de "lista vazia").
-  const [agentsListOpen, setAgentsListOpen] = useState(false);
-  const [agentsList, setAgentsList] = useState<BoardAgentRoleRow[] | null>(null);
-  const agentsListBtnRef = useRef<HTMLButtonElement>(null);
-
-  // A lista é pedida no GESTO de abrir, nunca em push nem em poll: os papéis
-  // andam com o quadro, e quem os projeta é o main (`store:board-agent-roles`).
-  // Trocar de board ou reabrir re-lê, e o estado volta a `null` enquanto a
-  // resposta não chega — mostrar a lista do board ANTERIOR por um frame seria
-  // dizer o que não se sabe.
+  // The Board panel on the rail asks for the session switcher this way, so the
+  // popover stays anchored to the breadcrumb that owns it.
   useEffect(() => {
-    if (!agentsListOpen) return;
-    let cancelled = false;
-    setAgentsList(null);
-    void window.store.boardAgentRoles(activeBoardId).then((rows) => {
-      if (!cancelled) setAgentsList(rows);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [agentsListOpen, activeBoardId]);
+    const openSessions = () => setOpen(true);
+    window.addEventListener(OPEN_SESSIONS_EVENT, openSessions);
+    return () => window.removeEventListener(OPEN_SESSIONS_EVENT, openSessions);
+  }, []);
 
   // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
   // header for it) already worked, but had NO visible trigger at all
@@ -150,149 +125,25 @@ export function Topbar({
 
   return (
     <>
-      {/* Own top-level `position: absolute`, NOT a `.topbar` child — the
-          topbar's flex row starts at `left: 72px` (clearing the rail), so a
-          button living inside it can never land on the rail's own
-          centerline (`left: 12px`, 48px wide). This stacks directly above
-          the rail instead, same left/width, reading as one floating column
-          instead of two disconnected pieces (bug reported live). */}
-      <button className="topbar-home" title={t("topbar.home")} aria-label={t("topbar.homeAria")} onClick={onGoHome}>
-        <Icon name="home" size={17} />
+      {/* The breadcrumb is a top-level box so it can sit above the draggable
+          title strip (layout.css `.topbar-title`). Home, the autonomous /
+          orchestrator marks and the agents list moved to the rail. */}
+      <button
+        ref={titleBtnRef}
+        className="topbar-title"
+        aria-label={t("topbar.sessionCurrent", { name: activeBoard?.name ?? t("topbar.sessionFallback") })}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {rootName}
+        <span className="topbar-crumb-sep">›</span>
+        {activeBoard?.project || t("session.ungrouped")}
+        <span className="topbar-crumb-sep">›</span>
+        <strong>{activeBoard?.name ?? t("topbar.sessionFallback")}</strong>
+        <Icon name="chevronDown" size={11} />
       </button>
-      <div className="topbar">
-        <button
-          ref={titleBtnRef}
-          className="topbar-title"
-          aria-label={t("topbar.sessionCurrent", { name: activeBoard?.name ?? t("topbar.sessionFallback") })}
-          onClick={() => setOpen((o) => !o)}
-        >
-          📁 {rootName}
-          <Icon name="chevronDown" size={11} />
-          <span className="topbar-crumb-sep">›</span>
-          {activeBoard?.project || t("session.ungrouped")}
-          <span className="topbar-crumb-sep">›</span>
-          <strong>{activeBoard?.name ?? t("topbar.sessionFallback")}</strong>
-          {activeBoard?.autonomous && (
-            <span className="topbar-autonomous-badge" title={t("topbar.autonomousTitle")}>
-              {t("topbar.autonomous")}
-            </span>
-          )}
-          {activeBoard?.orchestrator_card_id && (
-            <span
-              className={`topbar-orchestrator-badge${orchestratorCardPresent ? "" : " topbar-orchestrator-badge-missing"}`}
-              data-role="topbar-orchestrator-badge"
-              data-missing={orchestratorCardPresent ? undefined : "true"}
-              title={
-                orchestratorCardPresent
-                  ? t("topbar.orchestratorTitle", { id: activeBoard.orchestrator_card_id })
-                  : t("topbar.orchestratorMissingTitle", { id: activeBoard.orchestrator_card_id })
-              }
-            >
-              {orchestratorCardPresent ? t("topbar.orchestrator") : t("topbar.orchestratorMissing")}
-            </span>
-          )}
-          {/* Estado VAZIO da marca (task a79a708e) — o TERCEIRO caso, que não
-              existia: board sem orquestrador marcado. Não confundir com o
-              `-missing` acima (a marca existe e aponta para um card que
-              sumiu): aqui NÃO há marca, e é o estado medido em 3 de 3 boards —
-              o que empurra todo relatório para a linhagem e o "último que
-              falou". Neutro de propósito (não `--warn`): ausência não é erro.
-              Não é controle — o app não deixa um agente escrever a marca, e
-              daqui não haveria qual card escolher; o que faz é dizer o que
-              falta (§3 do docs/ORCHESTRATION.md). */}
-          {activeBoard && !activeBoard.orchestrator_card_id && (
-            <span
-              className="topbar-orchestrator-badge topbar-orchestrator-badge-none"
-              data-role="topbar-orchestrator-empty"
-              title={t("topbar.orchestratorNoneTitle")}
-            >
-              {t("topbar.orchestratorNone")}
-            </span>
-          )}
-        </button>
-        {/* O CONTADOR como controle próprio (task 49de95ce). Ele morava DENTRO
-          do `topbar-title` — que é um `<button>` — e botão dentro de botão é
-          HTML inválido (quebra em leitor de tela antes de quebrar à vista);
-          além disso, o clique abria o seletor de sessões, não os papéis.
-          Irmão do título, com popover próprio. O TEXTO continua o fato de
-          sempre (cards de terminal com provider != bash — o que o SQL conta);
-          o que saiu foi o "· N ativos", que era o MESMO número com uma palavra
-          afirmando atividade que nada mediu. */}
-        {(activeCounts || boardMountProgress) && (
-        <div className="topbar-leading">
-        {activeCounts && (
-          <button
-            ref={agentsListBtnRef}
-            type="button"
-            className="topbar-counts"
-            data-role="topbar-agents"
-            aria-expanded={agentsListOpen}
-            title={t("topbar.agentsTitle")}
-            onClick={() => setAgentsListOpen((o) => !o)}
-          >
-            {activeCounts.agents > 0
-              ? t("home.agentsCount", { agents: activeCounts.agents })
-              : t("home.agentsZero")}
-          </button>
-        )}
-        {boardMountProgress ? <BoardMountProgress progress={boardMountProgress} /> : null}
-        </div>
-        )}
-        {/* O dropdown: NOME e PAPÉIS, porque papel não é atributo do card — é
-          POR TASK. Medido no board do dono: 6 dos 11 cards eram implementer
-          numa task e reviewer em outra ao mesmo tempo, e um card carregava 5
-          tasks em participação. Por isso "card → lista de (task, papel)", com
-          scroll, e não "nome → papel" (que faria esses 6 aparecerem duas
-          vezes). Card sem task aberta aparece SEM papel — não existe "ocioso"
-          aqui. */}
-        <Popover
-          anchorRef={agentsListBtnRef}
-          open={agentsListOpen}
-          onClose={() => setAgentsListOpen(false)}
-          dataRole="topbar-agents-list"
-        >
-          <div className="board-list-heading">{t("topbar.agentsHeading")}</div>
-          {agentsList === null ? (
-            <div className="topbar-agents-note">{t("topbar.agentsLoading")}</div>
-          ) : agentsList.length === 0 ? (
-            <div className="topbar-agents-note">{t("topbar.agentsNone")}</div>
-          ) : (
-            <div className="board-list topbar-agents-list">
-              {agentsList.map((row) => (
-                <div
-                  className="topbar-agent-row"
-                  key={row.cardId}
-                  data-role="topbar-agent-row"
-                  data-card-id={row.cardId}
-                >
-                  <span className="topbar-agent-name">
-                    <code>{row.cardId}</code>
-                    {row.label && <span className="topbar-agent-label">{row.label}</span>}
-                  </span>
-                  <span className="topbar-agent-roles">
-                    {row.roles.length === 0 ? (
-                      <span className="topbar-agent-none">{t("topbar.agentsNoRole")}</span>
-                    ) : (
-                      row.roles.map((link) => (
-                        <span
-                          className="topbar-agent-role"
-                          key={link.taskId}
-                          data-role="topbar-agent-role"
-                          title={t("topbar.agentsRoleTask", {
-                            role: describeCardRole(link.role),
-                            task: link.taskId,
-                          })}
-                        >
-                          {describeCardRole(link.role)} <code>{shortTaskId(link.taskId)}</code>
-                        </span>
-                      ))
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Popover>
+      {/* Always mounted: it is the row that carries the board-open progress chip
+          and the marker other surfaces use for "a board is open". */}
+      <div className="topbar">{boardMountProgress ? <BoardMountProgress progress={boardMountProgress} /> : null}</div>
       {/* Just the switcher now (DESIGN-BACKLOG.md item 11) — pick a session,
           jump to its pencil to edit, or "+ nova sessão" for the dedicated
           create modal. Editing/renaming/deleting a session both moved out
@@ -429,7 +280,7 @@ export function Topbar({
           </div>
         </Popover>
         <button onClick={onZoomOut} title={t("topbar.zoomOut")} aria-label={t("topbar.zoomOut")}>
-          <Icon name="zoomOut" size={16} />
+          <RailGlyphZoomOut />
         </button>
         <button
           ref={zoomBtnRef}
@@ -485,30 +336,30 @@ export function Topbar({
           </div>
         </Popover>
         <button onClick={onZoomIn} title={t("topbar.zoomIn")} aria-label={t("topbar.zoomIn")}>
-          <Icon name="zoomIn" size={16} />
+          <RailGlyphZoomIn />
         </button>
+        <span className="zoom-pill-sep" aria-hidden="true" />
         <button
           onClick={() => void window.winControls.toggleFullscreen()}
           title={fullscreen ? t("topbar.fullscreenExit") : t("topbar.fullscreenEnter")}
           aria-label={fullscreen ? t("topbar.fullscreenExit") : t("topbar.fullscreen")}
         >
-          <Icon name={fullscreen ? "fullscreenExit" : "fullscreenEnter"} size={16} />
+          {fullscreen ? <RailGlyphFullscreenExit /> : <RailGlyphFullscreen />}
         </button>
         <button
           onClick={onCycleBgStyle}
           title={t("topbar.bgTitle", { style: bgStyleLabel })}
           aria-label={t("topbar.bgAria", { style: bgStyleLabel })}
         >
-          <Icon name="bgStyle" size={16} />
+          <RailGlyphGrid />
         </button>
         <button
           onClick={onOpenRemote}
           title={t("topbar.remote")}
           aria-label={t("topbar.remote")}
         >
-          <Icon name="remoteControl" size={16} />
+          <RailGlyphQr />
         </button>
-      </div>
       </div>
       <GlobalComposer boardId={activeBoardId} />
     </>

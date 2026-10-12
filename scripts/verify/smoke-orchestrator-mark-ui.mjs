@@ -108,10 +108,14 @@ try {
   );
   check("card shows orchestrator badge after mark", badge, true);
 
+  // The orchestrator mark lives in the rail's Board panel now (the top bar is gone).
+  await page.evalJs(`window.__stellarRail?.setStep("board")`);
+  await new Promise((r) => setTimeout(r, 300));
   const topbar = JSON.parse(
     await page.evalJs(`JSON.stringify(!!document.querySelector('[data-role="topbar-orchestrator-badge"]'))`),
   );
-  check("topbar shows orchestrator badge after mark", topbar, true);
+  check("Board panel shows the orchestrator badge after mark", topbar, true);
+  await page.evalJs(`window.__stellarRail?.setStep("closed")`);
 
   // Clear via the same menu surface. Use DOM .click() — CDP mouse
   // pressed/released can open then immediately close the Popover

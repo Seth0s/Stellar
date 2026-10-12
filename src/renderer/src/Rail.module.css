@@ -1,45 +1,48 @@
-/* Docked rail — measures from Rail.dc.html via --rail-* tokens. */
+/* Overlay rail — measures from RailPassos.dc.html via --rail-* tokens.
+   The dock floats above the board (the board viewport spans the whole window);
+   the strip is always the same colour as the title strip, with no separator. */
 
 .dock {
   position: absolute;
   top: var(--titlebar-h);
   left: 0;
   bottom: 0;
-  width: var(--rail-dock-width);
   display: flex;
-  background: var(--rail-shell);
   color: var(--rail-text);
   font-family: var(--font-ui);
   z-index: var(--layer-chrome);
-  overflow: hidden;
+  pointer-events: none;
+}
+
+.dock > * {
   pointer-events: auto;
 }
 
 .strip {
+  position: relative;
   width: var(--rail-width-strip);
   flex: none;
-  border-right: 1px solid var(--rail-line);
+  box-sizing: border-box;
   background: var(--rail-strip-bg);
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--rail-pad-strip-y) 0;
+  padding: var(--rail-pad-strip-t) 0 var(--rail-pad-strip-b);
   gap: var(--rail-gap-strip);
+  transition: transform var(--duration-2) ease;
 }
 
-.logo {
-  width: var(--rail-logo-size);
-  height: var(--rail-logo-size);
-  border-radius: var(--rail-logo-radius);
-  background: var(--rail-logo-bg);
-  display: grid;
-  place-items: center;
-  margin-bottom: var(--space-4);
-  flex: none;
+/* Hidden and not revealed: off-screen and out of the tab order. The
+   visibility flip waits for the slide so the exit animates. */
+.stripHidden {
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--duration-2) ease, visibility 0s linear var(--duration-2);
 }
 
-.logo svg {
-  display: block;
+/* Hidden but revealed by the edge: floats over the board like the panel does. */
+.stripRevealed {
+  box-shadow: var(--rail-strip-shadow);
 }
 
 .navBtn {
@@ -57,7 +60,8 @@
   padding: 0;
 }
 
-.navBtn:hover {
+.navBtn:hover,
+.navBtn:focus-visible {
   background: var(--rail-item-hover);
   color: var(--rail-text);
 }
@@ -66,6 +70,52 @@
   background: var(--rail-item-on);
   color: var(--rail-text);
   box-shadow: inset 0 0 0 1px var(--rail-chip-on-border);
+}
+
+/* Autonomous board: the only trace left of the old title-bar chip. */
+.navDot {
+  position: absolute;
+  top: 5px; /* sd:allow: prototype board-button dot offset (RailPassos.dc.html) */
+  right: 5px; /* sd:allow: prototype board-button dot offset (RailPassos.dc.html) */
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-circle);
+  background: var(--rail-warn);
+  box-shadow: 0 0 0 2px var(--rail-strip-bg);
+}
+
+/* Name + key, to the right of the strip. Hidden while a panel is open so it
+   never lands on top of the panel header. */
+.navTip {
+  position: absolute;
+  left: calc(100% + 14px); /* sd:allow: prototype tooltip offset from the button (RailPassos.dc.html) */
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  gap: var(--space-4);
+  height: 30px; /* sd:allow: prototype tooltip height, 28 + 2 border (RailPassos.dc.html) */
+  padding: 0 var(--space-5);
+  box-sizing: border-box;
+  border-radius: var(--rail-nav-radius);
+  background: var(--rail-btn-bg);
+  border: 1px solid var(--rail-field-border);
+  box-shadow: var(--rail-tip-shadow);
+  font-size: var(--rail-text-12);
+  font-weight: 400;
+  color: var(--rail-text);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.navBtn:hover .navTip,
+.navBtn:focus-visible .navTip {
+  display: flex;
+}
+
+.dock[data-panel-open="1"] .navTip {
+  display: none;
 }
 
 .stripDivider {
@@ -82,18 +132,43 @@
 }
 
 .helpGlyph {
-  font-size: var(--rail-text-15);
+  font-size: var(--rail-text-14);
   font-weight: 600;
   line-height: 1;
 }
 
+/* Left-edge band of a hidden rail: mouse dwell or a touch drag brings it back. */
+.edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--rail-edge-zone);
+  touch-action: none;
+}
+
+.edgeHint {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: var(--rail-edge-hint-w);
+  height: var(--rail-edge-hint-h);
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0; /* sd:allow: prototype edge hint radius (RailPassos.dc.html) */
+  background: var(--rail-chip-on-border);
+  pointer-events: none;
+}
+
 .panel {
+  position: relative;
   width: var(--rail-width-panel);
   flex: none;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   background: var(--rail-panel-bg);
   border-right: 1px solid var(--rail-line);
+  box-shadow: var(--rail-panel-shadow);
   min-width: 0;
 }
 
@@ -101,7 +176,7 @@
   padding: var(--rail-pad-header-t) var(--rail-pad-header-x) var(--rail-pad-header-b);
   display: flex;
   flex-direction: column;
-  gap: var(--rail-gap-strip);
+  gap: var(--rail-gap-tight);
   border-bottom: 1px solid var(--rail-line);
   flex: none;
 }
@@ -114,13 +189,13 @@
 
 .panelTitle {
   margin: 0;
-  font-size: var(--rail-text-16);
+  font-size: var(--rail-text-14);
   font-weight: 600;
   color: var(--rail-text);
 }
 
 .panelHint {
-  font-size: var(--rail-text-12);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-muted);
 }
 
@@ -131,8 +206,8 @@
 .stepRow {
   display: flex;
   align-items: center;
-  gap: var(--rail-gap-strip);
-  font-size: var(--rail-text-12);
+  gap: var(--rail-gap-tight);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-muted);
 }
 
@@ -149,7 +224,7 @@
 }
 
 .stepLabel {
-  margin-left: var(--rail-gap-strip);
+  margin-left: var(--rail-gap-tight);
 }
 
 .panelBody {
@@ -170,14 +245,14 @@
 
 .sectionHead {
   margin: 0;
-  padding: 0 var(--space-6) var(--rail-gap-strip);
-  font-size: var(--rail-text-11-5);
+  padding: 0 var(--space-6) var(--rail-gap-tight);
+  font-size: var(--rail-text-11);
   letter-spacing: var(--rail-track);
   text-transform: uppercase;
   color: var(--rail-muted);
 }
 
-/* Cards find: proto `.sh` has no pad-x — aligns with the search field (body pad only). */
+/* Cards find: the heading aligns with the search field (body pad only). */
 .sectionHeadFlush {
   padding-left: 0;
   padding-right: 0;
@@ -188,13 +263,13 @@
   align-items: center;
   gap: var(--rail-gap-item);
   min-height: var(--rail-item-height);
-  padding: 0 var(--space-6);
+  padding: 0 var(--space-5);
   border-radius: var(--rail-item-radius);
   border: 0;
   background: transparent;
   color: var(--rail-text);
   font: inherit;
-  font-size: var(--rail-text-14);
+  font-size: var(--rail-text-13);
   text-align: left;
   cursor: pointer;
   width: 100%;
@@ -203,10 +278,6 @@
 
 .item:hover {
   background: var(--rail-item-hover);
-}
-
-.itemOn {
-  background: var(--rail-item-on);
 }
 
 .itemGrow {
@@ -223,7 +294,7 @@
 }
 
 .itemSub {
-  font-size: var(--rail-text-12);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-muted);
 }
 
@@ -233,7 +304,7 @@
 
 .kbdRow {
   display: flex;
-  gap: 3px; /* sd:allow: prototype kbd cluster gap (Rail.dc.html) */
+  gap: var(--space-2);
   flex: none;
 }
 
@@ -242,33 +313,23 @@
   place-items: center;
   min-width: var(--rail-kbd-size);
   height: var(--rail-kbd-size);
-  padding: 0 5px; /* sd:allow: prototype kbd padding (Rail.dc.html) */
+  padding: 0 var(--space-2);
   box-sizing: border-box;
   border-radius: var(--rail-kbd-radius);
   border: 1px solid var(--rail-kbd-border);
   border-bottom-width: 2px;
   background: var(--rail-kbd-bg);
   font-family: var(--font-mono);
-  font-size: var(--rail-text-11);
+  font-size: var(--rail-text-10-5);
   font-weight: 500;
   color: var(--rail-kbd-fg);
-}
-
-.tip {
-  margin-top: auto;
-  padding: var(--space-5) var(--space-6);
-  border-radius: var(--rail-tip-radius);
-  background: var(--rail-kbd-bg);
-  font-size: var(--rail-text-12-5);
-  color: var(--rail-soft);
-  line-height: 1.5;
 }
 
 .tile {
   display: flex;
   flex-direction: column;
-  gap: var(--rail-gap-strip);
-  padding: var(--space-6);
+  gap: 5px; /* sd:allow: prototype tile inner gap (RailPassos.dc.html) */
+  padding: var(--space-5);
   border-radius: var(--rail-tile-radius);
   border: 1px solid var(--rail-tile-border);
   background: var(--rail-panel-bg);
@@ -293,23 +354,31 @@
 .tileHeroTitle {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
-  font-size: var(--rail-text-15);
+  gap: var(--space-4);
+  font-size: var(--rail-text-13-5);
   font-weight: 600;
 }
 
+.tileHeroGlyph {
+  display: inline-flex;
+  color: var(--rail-link);
+}
+
+.tileHeroMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--rail-text-11-5);
+  color: var(--rail-soft);
+}
+
 .tileTitle {
-  font-size: var(--rail-text-14);
+  font-size: var(--rail-text-13);
   font-weight: 600;
 }
 
 .tileDesc {
-  font-size: var(--rail-text-12);
-  color: var(--rail-soft);
-}
-
-.tileDescHero {
-  font-size: var(--rail-text-12-5);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-soft);
 }
 
@@ -343,7 +412,7 @@
 
 .providerName {
   flex: 1;
-  font-size: var(--rail-text-14-5);
+  font-size: var(--rail-text-13);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -351,7 +420,7 @@
 }
 
 .providerQuota {
-  font-size: var(--rail-text-12);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-quota-ok);
   flex: none;
   max-width: 42%;
@@ -370,7 +439,7 @@
   background: transparent;
   color: var(--rail-link);
   font: inherit;
-  font-size: var(--rail-text-13);
+  font-size: var(--rail-text-12);
   cursor: pointer;
   padding: 0;
   text-align: left;
@@ -380,8 +449,8 @@
 .fieldLabel {
   display: flex;
   flex-direction: column;
-  gap: var(--rail-gap-strip);
-  font-size: var(--rail-text-13);
+  gap: var(--rail-gap-tight);
+  font-size: var(--rail-text-12);
   color: var(--rail-kbd-fg);
 }
 
@@ -391,25 +460,25 @@
 
 .field {
   min-height: var(--rail-field-height);
-  padding: 0 var(--space-6);
+  padding: 0 var(--space-5);
   border-radius: var(--rail-field-radius);
   border: 1px solid var(--rail-field-border);
   background: var(--rail-field-bg);
   color: var(--rail-text);
   font: inherit;
-  font-size: var(--rail-text-14);
+  font-size: var(--rail-text-13);
   box-sizing: border-box;
   width: 100%;
 }
 
 .fieldMono {
   font-family: var(--font-mono);
-  font-size: var(--rail-text-12-5);
+  font-size: var(--rail-text-12);
 }
 
 .fieldArea {
-  min-height: 80px; /* sd:allow: prototype textarea min-height (Rail.dc.html) */
-  padding: var(--space-5) var(--space-6);
+  min-height: 72px; /* sd:allow: scaled textarea min-height (prototype 80 at the old density) */
+  padding: var(--space-4) var(--space-5);
   resize: vertical;
 }
 
@@ -422,8 +491,8 @@
 .sessionList {
   display: flex;
   flex-direction: column;
-  gap: var(--rail-gap-strip);
-  font-size: var(--rail-text-13-5);
+  gap: var(--rail-gap-tight);
+  font-size: var(--rail-text-13);
 }
 
 .sessionOption {
@@ -441,18 +510,18 @@
 
 .btn {
   min-height: var(--rail-field-height);
-  padding: 0 14px; /* sd:allow: prototype button pad-x (Rail.dc.html) */
+  padding: 0 var(--space-6);
   border-radius: var(--rail-field-radius);
   border: 1px solid var(--rail-field-border);
   background: var(--rail-btn-bg);
   color: var(--rail-text);
   font: inherit;
-  font-size: var(--rail-text-13-5);
+  font-size: var(--rail-text-13);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--rail-gap-strip);
+  gap: var(--rail-gap-tight);
 }
 
 .btnPrimary {
@@ -474,7 +543,7 @@
 }
 
 .footnote {
-  font-size: var(--rail-text-12-5);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-muted);
   padding: 0;
   margin: 0;
@@ -507,7 +576,7 @@
 }
 
 .penWidthBtn {
-  width: 44px; /* sd:allow: prototype pen width button (Rail.dc.html) */
+  width: 40px; /* sd:allow: scaled pen width button (prototype 44 at the old density) */
   padding: 0;
 }
 
@@ -560,16 +629,16 @@
 }
 
 .aiTileTitle {
-  font-size: var(--rail-text-14-5);
+  font-size: var(--rail-text-13);
   font-weight: 600;
 }
 
 .aiTileDesc {
-  font-size: var(--rail-text-12-5);
+  font-size: var(--rail-text-11-5);
   color: var(--rail-soft);
 }
 
 .aiTileMeta {
-  font-size: var(--rail-text-12);
+  font-size: var(--rail-text-11);
   color: var(--rail-muted);
 }

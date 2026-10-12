@@ -89,25 +89,18 @@ try {
   const terminalCardCount = await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`);
   check("new terminal card was created (seeded + newly created = 2)", terminalCardCount, 2);
 
-  const toggleBtn = await centerOf(page, ".rail-toggle");
-  check("toggle button is present", !!toggleBtn, true);
-
-  await page.click(toggleBtn.x, toggleBtn.y);
+  // The rail has no "open" control any more — only a hide button; the left edge brings it back.
+  check("no open/collapse toggle remains", await page.evalJs(`!document.querySelector(".rail-toggle")`), true);
+  const hideBtn = await centerOf(page, '[data-role="rail-hide"]');
+  check("hide button is present", !!hideBtn, true);
+  await page.click(hideBtn.x, hideBtn.y);
   await delay(400);
-
-  const isCollapsed = await page.evalJs(`document.querySelector('[data-role="rail-dock"]')?.getAttribute("data-rail-collapsed") === "1"`);
-  check("rail dock collapsed", isCollapsed, true);
-
-  const toggleTitleCollapsed = await page.evalJs(`document.querySelector(".rail-toggle")?.getAttribute("title")`);
-  check("toggle title updated to Abrir a barra", toggleTitleCollapsed, "Abrir a barra");
-
-  const toggleBtnCollapsed = await centerOf(page, ".rail-toggle");
-  check("toggle button collapsed is present", !!toggleBtnCollapsed, true);
-  await page.click(toggleBtnCollapsed.x, toggleBtnCollapsed.y);
-  await delay(400);
-
-  const isExpanded = await page.evalJs(`document.querySelector('[data-role="rail-dock"]')?.getAttribute("data-rail-collapsed") !== "1"`);
-  check("rail dock expanded back", isExpanded, true);
+  const hidden = await page.evalJs(`document.querySelector('[data-role="rail-dock"]')?.getAttribute("data-rail-hidden") === "1"`);
+  check("rail hidden", hidden, true);
+  await page.evalJs(`window.__stellarRail?.setStep("closed")`);
+  await delay(300);
+  const shown = await page.evalJs(`document.querySelector('[data-role="rail-dock"]')?.getAttribute("data-rail-hidden") === "0"`);
+  check("seed API shows it again for the rest of the suite", shown, true);
 
   finish();
 } finally {

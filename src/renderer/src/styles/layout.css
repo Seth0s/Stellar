@@ -84,8 +84,8 @@ body {
   gap: 8px;
   padding: 0 8px 0 12px;
   box-sizing: border-box;
-  background: var(--v2-titlebar);
-  border-bottom: 1px solid var(--border);
+  /* Same colour as the rail strip and no separator: one surface. */
+  background: var(--rail-strip-bg);
   /* A moldura da JANELA: acima de tudo, inclusive do modal. Sem moldura do
      sistema, arrastar/minimizar/fechar não têm plano B (ver tokens.css). */
   z-index: var(--layer-window-frame);
@@ -110,16 +110,6 @@ body {
   padding-left: 78px;
 }
 
-.titlebar-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.02em;
-}
-
 .titlebar-controls {
   display: flex;
   height: 100%;
@@ -127,11 +117,11 @@ body {
 }
 
 .titlebar-controls button {
-  width: 44px;
+  width: 34px;
   height: 100%;
   background: transparent;
   border: none;
-  color: var(--muted);
+  color: var(--rail-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -148,24 +138,16 @@ body {
   color: var(--on-accent);
 }
 
-/* ---------------------------------------------------------------- rail (docked — visuals in Rail.module.css) */
+/* ------------------------------------------------ rail (overlay — visuals in Rail.module.css) */
 
 .board-viewport {
   position: absolute;
   top: 0;
-  left: var(--rail-dock-width);
+  left: 0;
   right: 0;
   bottom: 0;
   overflow: hidden;
   background: var(--ink);
-}
-
-.viewport[data-rail-collapsed="1"] {
-  --rail-dock-width: var(--rail-width-strip);
-}
-
-.viewport:not([data-rail-collapsed="1"]) {
-  --rail-dock-width: var(--rail-width-open);
 }
 
 .popover-header-with-back {
@@ -197,122 +179,70 @@ body {
 
 /* --------------------------------------------------------------- topbar */
 
+/* The floating top bar is gone: Home lives on the rail, the board state in the
+   rail's Board panel, the path in the title strip and the view controls in the
+   bottom-right pill. What is left here is the row that carries the board-open
+   progress chip, kept clear of the rail strip. */
 .topbar {
   position: absolute;
   top: calc(var(--titlebar-h) + 12px);
-  /* Offsets are relative to `.board-viewport` (docked rail is outside it). */
-  left: 72px;
+  left: calc(var(--rail-width-strip) + 12px);
   right: 12px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   z-index: var(--layer-chrome);
   pointer-events: none;
 }
 
-.topbar-title,
-.topbar-counts,
 .board-mount-progress,
 .zoom-pill,
 .modal-root {
   pointer-events: auto;
 }
 
+/* The board path as quiet text inside the title strip. Its own top-level box
+   (not inside `.topbar`) so it can sit above the draggable strip; `no-drag`
+   keeps it clickable. Left edge clears the rail column (44 px + 12), or the
+   native traffic lights on macOS (78 px). */
 .topbar-title {
-  display: flex;
+  position: absolute;
+  top: 0;
+  left: calc(var(--rail-width-strip) + 12px);
+  height: var(--titlebar-h);
+  z-index: var(--layer-window-frame);
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text);
-  box-shadow: var(--shadow-card);
+  gap: 6px;
+  max-width: calc(100% - 240px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rail-soft);
+  font: inherit;
+  font-size: var(--rail-text-12);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 60%;
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
-/* DESIGN-BACKLOG.md item 8 — back to the session grid. Own top-level
-   `position: absolute`, NOT inside `.topbar` (see Topbar.tsx's comment) —
-   same `left`/width as `.rail` so it stacks directly above it as one
-   floating column, instead of landing wherever `.topbar`'s flex row
-   happens to start (bug reported live: they didn't line up at all). */
-.topbar-home {
-  position: absolute;
-  top: calc(var(--titlebar-h) + 12px);
-  left: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text);
-  box-shadow: var(--shadow-card);
-  cursor: pointer;
-  transition: background-color 0.12s ease;
-  z-index: var(--layer-chrome);
+[data-platform="darwin"] .topbar-title {
+  left: 78px;
 }
 
-.topbar-home:hover {
-  background: var(--surface);
+.topbar-title strong {
+  font-weight: 600;
+  color: var(--rail-text);
 }
 
 .topbar-title:hover {
-  background: var(--surface);
+  color: var(--rail-text);
 }
 
 .topbar-crumb-sep {
-  color: var(--muted);
-}
-
-/* DESIGN-BACKLOG.md item 59 — must never be ambiguous, glancing at the
-   screen, whether a board is running unattended. Same --warn pill shape
-   as .chat-diff-new (cards.css). */
-.topbar-autonomous-badge {
-  margin-left: 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--warn);
-  border: 1px solid var(--warn);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-.topbar-orchestrator-badge {
-  margin-left: 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-/* Orphan mark — id in boards.orchestrator_card_id but no live card.
-   Warn token, not accent: the board claims an orchestrator it cannot
-   route to. Do not hide this; silent clear would erase the evidence. */
-.topbar-orchestrator-badge-missing {
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
-/* Estado VAZIO da marca (task a79a708e) — board SEM orquestrador marcado.
-   Distinto do `-missing` acima: lá a marca EXISTE e aponta para um card
-   sumido (por isso `--warn`); aqui NÃO há marca, e ausência não é erro —
-   `--muted`, neutro. Só a cor muda; forma e ritmo vêm do badge base. */
-.topbar-orchestrator-badge-none {
-  color: var(--muted);
-  border-color: var(--muted);
+  color: var(--rail-dot-idle);
 }
 
 /* DESIGN-BACKLOG.md item 60, peça 1 — floating panel, only rendered while
@@ -383,47 +313,8 @@ body {
   font-size: 11px;
 }
 
-/* CONTADOR DE AGENTES (task 49de95ce) — era um `<span>` DENTRO do
-   `.topbar-title` (um `<button>`: botão dentro de botão é HTML inválido) e
-   virou o controle que abre o dropdown de nomes+papéis. Agora é uma pílula
-   irmã do título, com a MESMA superfície dele, e é por isso que ganhou
-   `pointer-events: auto` acima. `margin-right: auto` no lugar de um wrapper:
-   o `.topbar` é `space-between`, e sem o auto o segundo filho ficaria CENTRADO
-   na barra em vez de colado no título. Valores migrados para tokens no mesmo
-   gesto (gap/margin/padding/fonte eram px crus). */
-/* Pushes the zoom pill to the right: holds the agents count and (while a
-   board is opening) the real mount-progress chip. */
-.topbar-leading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-left: var(--space-3);
-  margin-right: auto;
-  min-width: 0;
-}
-
-.topbar-counts {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--panel);
-  box-shadow: var(--shadow-card);
-  color: var(--muted);
-  font-size: var(--text-4);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.topbar-counts:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--text) 30%, var(--border));
-}
-
 /* Real board-open progress (docs/PERF.md §17) — N of M cards ready, not a
-   decorative spinner. Sits beside the agents count; fades via opacity. */
+   decorative spinner. Fades via opacity. */
 .board-mount-progress {
   position: relative;
   display: flex;
@@ -813,33 +704,48 @@ select.resume-input {
 }
 
 .zoom-pill {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  position: fixed;
+  right: 14px; /* sd:allow: prototype view pill inset (RailPassos.dc.html) */
+  bottom: 14px; /* sd:allow: prototype view pill inset (RailPassos.dc.html) */
+  z-index: var(--layer-chrome);
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  box-shadow: var(--shadow-card);
+  gap: var(--space-1);
+  height: 36px; /* sd:allow: prototype view pill height (RailPassos.dc.html) */
+  padding: 0 5px; /* sd:allow: prototype view pill padding (RailPassos.dc.html) */
+  box-sizing: border-box;
+  border-radius: var(--radius-pill);
+  background: var(--rail-panel-bg);
+  border: 1px solid var(--rail-line);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); /* sd:allow: prototype view pill shadow (RailPassos.dc.html) */
   flex: none;
 }
 
 .zoom-pill button:not(.zoom-readout) {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
+  width: 28px; /* sd:allow: prototype view pill button (RailPassos.dc.html) */
+  height: 28px; /* sd:allow: prototype view pill button (RailPassos.dc.html) */
+  padding: 0;
+  border-radius: var(--radius-circle);
   background: transparent;
   border: none;
-  color: var(--text);
+  color: var(--rail-soft);
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.12s ease;
+  display: grid;
+  place-items: center;
+  flex: none;
 }
 
 .zoom-pill button:hover {
-  background: var(--surface);
+  background: var(--rail-item-hover);
+  color: var(--rail-text);
+}
+
+.zoom-pill-sep {
+  width: 1px;
+  height: 16px; /* sd:allow: prototype view pill divider (RailPassos.dc.html) */
+  background: var(--rail-line);
+  margin: 0 var(--space-2);
+  flex: none;
 }
 
 /* Aviso de CLI de agente não instalada (achado ao vivo, 2026-09-03) —
@@ -888,20 +794,23 @@ select.resume-input {
    from the generic `.zoom-pill button` circular-icon-button styling
    above (a percentage label doesn't fit a 26px circle). */
 .zoom-readout {
-  font-size: 12px;
-  color: var(--muted);
-  min-width: 38px;
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-12);
+  font-weight: 500;
+  color: var(--rail-kbd-fg);
+  min-width: 42px; /* sd:allow: prototype zoom readout (RailPassos.dc.html) */
+  height: 28px; /* sd:allow: prototype view pill button (RailPassos.dc.html) */
   text-align: center;
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px 2px;
-  border-radius: 6px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
 }
 
 .zoom-readout:hover {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--rail-item-hover);
+  color: var(--rail-text);
 }
 
 .zoom-popover {

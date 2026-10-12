@@ -155,7 +155,7 @@ class Component extends DCLogic {
   renderVals() {
     const step = this.state.step ?? this.props.step ?? 'tools';
     const go = (s) => () => this.setState({ step: s });
-    const titles = { tools: ['Barra lateral', 'aberta'], pen: ['Caneta', 'P'], add: ['Novo card', 'escolha o tipo'], terminal1: ['Novo agente', ''], terminal2: ['Novo agente', ''], cards: ['Achar card', 'Ctrl F'], ai: ['Ações de IA', ''] };
+    const titles = { tools: ['Barra lateral', ''], pen: ['Caneta', 'P'], add: ['Novo card', 'escolha o tipo'], terminal1: ['Novo agente', ''], terminal2: ['Novo agente', ''], cards: ['Achar card', 'Ctrl F'], ai: ['Ações de IA', ''] };
     const t = titles[step] || ['', ''];
     const cls = (on) => (on ? 'rb rbOn' : 'rb');
     return {

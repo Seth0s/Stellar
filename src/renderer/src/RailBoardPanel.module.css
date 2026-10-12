@@ -1,0 +1,136 @@
+/* Board panel — measures from RailPassos.dc.html (#no-topbar, right window). */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rail-gap-body);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px; /* sd:allow: prototype board-row gap (RailPassos.dc.html) */
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-5);
+  background: var(--rail-kbd-bg);
+}
+
+.label {
+  font-size: var(--rail-text-11);
+  color: var(--rail-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--rail-track);
+}
+
+.path {
+  font-size: var(--rail-text-12);
+  color: var(--rail-text);
+  white-space: nowrap;
+}
+
+.sep {
+  color: var(--rail-dot-idle);
+}
+
+.strong {
+  font-weight: 600;
+}
+
+.value {
+  font-size: var(--rail-text-13);
+  color: var(--rail-text);
+}
+
+.soft {
+  color: var(--rail-soft);
+}
+
+.warn {
+  color: var(--rail-warn);
+}
+
+.link {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--rail-link);
+  font: inherit;
+  font-size: var(--rail-text-12);
+  padding: 0;
+  cursor: pointer;
+}
+
+.modeLine {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--rail-text-13);
+}
+
+.modeLine .soft {
+  font-size: var(--rail-text-12);
+}
+
+.chip {
+  font-size: var(--rail-text-10);
+  text-transform: uppercase;
+  letter-spacing: 0.04em; /* sd:allow: prototype chip tracking (RailPassos.dc.html) */
+  color: var(--rail-warn);
+  border: 1px solid var(--rail-warn);
+  border-radius: var(--radius-2);
+  padding: 1px 5px; /* sd:allow: prototype chip padding (RailPassos.dc.html) */
+}
+
+.agents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--rail-text-12-5);
+  color: var(--rail-kbd-fg);
+}
+
+.dot {
+  width: 7px; /* sd:allow: prototype agent dot (RailPassos.dc.html) */
+  height: 7px; /* sd:allow: prototype agent dot (RailPassos.dc.html) */
+  border-radius: var(--radius-circle);
+  flex: none;
+}
+
+.dotLive {
+  background: var(--rail-live);
+}
+
+.dotWait {
+  background: var(--rail-warn);
+}
+
+.dotIdle {
+  background: var(--rail-dot-idle);
+}
+
+.agentName {
+  flex: 1;
+  min-width: 0;
+}
+
+.agentStatus {
+  color: var(--rail-muted);
+  font-size: var(--rail-text-11-5);
+}
+
+.agentRoles {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-left: 15px; /* sd:allow: aligns roles under the name, past the 7px dot + gap */
+  font-size: var(--rail-text-11);
+  color: var(--rail-muted);
+}

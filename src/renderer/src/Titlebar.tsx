@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
-import { StellarMark } from "./StellarMark";
 import { useUpdateStatus } from "./useUpdateStatus";
 
 // Header nativo do Mac (2026-09-08) — `main/index.ts`'s `titleBarStyle:
@@ -50,24 +49,21 @@ export function Titlebar() {
     };
   }, []);
 
-  // Every other floating element (Rail, Topbar's home button/breadcrumb)
+  // Every other floating element (Rail, the breadcrumb)
   // positions itself off `--titlebar-h` in CSS — collapsing it to 0 here
   // is what lets them slide up and actually use the freed space instead
   // of leaving a blank gap where the titlebar used to be.
   useEffect(() => {
-    document.documentElement.style.setProperty("--titlebar-h", fullscreen ? "0px" : "34px");
+    // 28 px strip (window drag + controls); 34 px on macOS, where the native
+    // traffic lights sit at a fixed position set by the main process.
+    document.documentElement.style.setProperty("--titlebar-h", fullscreen ? "0px" : isMac ? "34px" : "28px");
   }, [fullscreen]);
 
   if (fullscreen) return null;
 
   return (
     <div className="titlebar">
-      <span className="titlebar-drag">
-        <span className="titlebar-title">
-          <StellarMark size={16} />
-          Stellar
-        </span>
-      </span>
+      <span className="titlebar-drag" />
       <div className="titlebar-controls">
         <button
           className={`titlebar-update-check${updateChecking ? " is-checking" : ""}${updateCheckError ? " has-error" : ""}`}

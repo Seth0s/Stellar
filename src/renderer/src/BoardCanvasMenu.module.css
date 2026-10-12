@@ -1,36 +1,97 @@
-/* Right-click canvas menu — "Nova task aqui" (BoardQuickTask.dc.html shortcut). */
+/* Right-click canvas menu — RailPassos.dc.html #context-menu. */
 
 .menu {
   position: fixed;
   z-index: var(--layer-modal);
-  min-width: 220px; /* sd:allow: readable context menu */
-  padding: var(--v2-s2);
-  border-radius: var(--v2-r10);
-  background: var(--v2-menu);
-  border: var(--v2-hair) solid var(--v2-line-strong);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); /* sd:allow: BoardQuickTask.dc.html menu shadow */
-  font-family: "Space Grotesk", system-ui, sans-serif;
-  color: var(--v2-text);
+  width: 268px; /* sd:allow: prototype context menu width (RailPassos.dc.html) */
+  box-sizing: border-box;
+  padding: var(--space-3);
+  border-radius: 12px; /* sd:allow: prototype context menu radius (RailPassos.dc.html) */
+  background: var(--rail-menu-bg);
+  border: 1px solid var(--rail-menu-line);
+  box-shadow: var(--rail-menu-shadow);
+  font-family: var(--font-ui);
+  color: var(--rail-kbd-fg);
+  display: flex;
+  flex-direction: column;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.sep {
+  height: 1px;
+  background: var(--rail-line);
+  margin: 5px var(--space-2); /* sd:allow: prototype menu separator margin (RailPassos.dc.html) */
+}
+
+.section {
+  padding: var(--space-3) var(--space-5) 3px; /* sd:allow: prototype section label padding (RailPassos.dc.html) */
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-10-5);
+  font-weight: 500;
+  letter-spacing: 0.08em; /* sd:allow: prototype section tracking (RailPassos.dc.html) */
+  text-transform: uppercase;
+  color: var(--rail-menu-section);
 }
 
 .item {
   display: flex;
   align-items: center;
-  gap: var(--v2-s4);
-  width: 100%;
-  padding: var(--v2-s4) var(--v2-s5);
+  gap: var(--space-5);
+  height: 28px; /* sd:allow: prototype menu row height (RailPassos.dc.html) */
+  padding: 0 var(--space-5);
   border: 0;
-  border-radius: var(--v2-r7);
+  border-radius: var(--rail-item-radius);
   background: transparent;
-  color: var(--v2-text-2b);
+  color: var(--rail-kbd-fg);
   font: inherit;
-  font-size: var(--v2-f13);
+  font-size: var(--rail-text-13);
   text-align: left;
   cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .item:hover,
+.item:focus-visible,
 .itemActive {
-  background: #1a1f2c; /* sd:allow: BoardQuickTask.dc.html cmd hover */
-  color: var(--v2-bright);
+  background: var(--rail-menu-active);
+  color: #fff; /* sd:allow: prototype menu row hover text (RailPassos.dc.html) */
+  outline: none;
+}
+
+.glyph {
+  display: inline-flex;
+  width: 16px; /* sd:allow: prototype menu glyph slot (RailPassos.dc.html) */
+  color: var(--rail-soft);
+}
+
+.itemActive .glyph,
+.item:hover .glyph,
+.item:focus-visible .glyph {
+  color: var(--rail-link);
+}
+
+.label {
+  flex: 1;
+}
+
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--rail-kbd-size);
+  height: var(--rail-kbd-size);
+  padding: 0 var(--space-2);
+  box-sizing: border-box;
+  border-radius: var(--rail-kbd-radius);
+  border: 1px solid var(--rail-kbd-border);
+  border-bottom-width: 2px;
+  background: var(--rail-kbd-bg);
+  font-family: var(--font-mono);
+  font-size: var(--rail-text-10-5);
+  font-weight: 500;
+  color: var(--rail-kbd-fg);
 }

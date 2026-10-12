@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildProviderGroups } from "./provider-groups";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { useProviderClassification } from "./useProviderClassification";
@@ -10,12 +10,13 @@ import { WIDTH_PRESETS } from "./pen-presets";
 import { providerAccentVar } from "./provider-icon-map";
 import {
   RailGlyphAi,
-  RailGlyphCollapse,
+  RailGlyphBoard,
   RailGlyphConnector,
   RailGlyphExport,
   RailGlyphFind,
-  RailGlyphGroup,
-  RailGlyphLogo,
+  RailGlyphHide,
+  RailGlyphHome,
+  RailGlyphPalette,
   RailGlyphPen,
   RailGlyphPlus,
   RailGlyphPointer,
@@ -23,9 +24,20 @@ import {
   RailGlyphSettings,
   RailGlyphTerminal,
 } from "./RailGlyphs";
+import { RailBoardPanel, type RailBoardInfo } from "./RailBoardPanel";
+import {
+  HIDE_DELAY_MS,
+  REVEAL_DELAY_MS,
+  isEdgeSwipe,
+  isInRevealZone,
+  readRailHidden,
+  shouldAutoHide,
+  writeRailHidden,
+} from "./rail-visibility-decision";
 import styles from "./Rail.module.css";
 
-export type RailStep = "tools" | "collapsed" | "pen" | "add" | "terminal1" | "terminal2" | "cards" | "ai";
+/** `closed` = only the strip; every other step is a panel floating over the board. */
+export type RailStep = "closed" | "pen" | "add" | "terminal1" | "terminal2" | "cards" | "ai" | "board";
 
 export type RailCard = {
   id: string;
@@ -33,9 +45,13 @@ export type RailCard = {
   label: string | null;
   statusText?: string | null;
   statusTone?: "live" | "wait" | "idle" | "note";
+  /** An agent card (terminal whose provider is not bash) — listed in the Board panel. */
+  isAgent?: boolean;
 };
 
-const RAIL_COLLAPSED_KEY = "ac.railCollapsed";
+const IS_MAC = typeof window !== "undefined" && window.system?.platform === "darwin";
+/** Modifier as the prototype prints it: ⌘ on macOS, Ctrl elsewhere. */
+const MOD = IS_MAC ? "⌘" : "Ctrl";
 
 const ADD_GRID: { kind: "browser" | "files" | "changes" | "sticky" | "chat" | "media"; titleKey: MessageKey; descKey: MessageKey }[] = [
   { kind: "browser", titleKey: "rail.v3.kind.browser", descKey: "rail.v3.kind.browserDesc" },
@@ -80,14 +96,41 @@ const PROTO_TERMINAL1_ROWS: MockProviderRow[] = [
   { id: "bash", label: "Terminal (bash)", disabled: false, quota: null },
 ];
 
+/** Prototype Board panel facts (RailPassos.dc.html #no-topbar). */
+const PROTO_BOARD: RailBoardInfo = {
+  boardId: "proto-board",
+  rootName: "Workspace",
+  project: "Demo project",
+  boardName: "Sprint board",
+  autonomous: true,
+  orchestratorCardId: null,
+  orchestratorPresent: true,
+};
+const PROTO_BOARD_CARDS: RailCard[] = [
+  { id: "mock-a", kind: "terminal", label: "Agent A", statusText: "trabalhando", statusTone: "live", isAgent: true },
+  { id: "mock-b", kind: "terminal", label: "Agent B", statusText: "espera você", statusTone: "wait", isAgent: true },
+  { id: "mock-c", kind: "terminal", label: "Agent C", statusText: "parado", statusTone: "idle", isAgent: true },
+];
+
+function clearTimer(ref: { current: number | null }) {
+  if (ref.current !== null) {
+    window.clearTimeout(ref.current);
+    ref.current = null;
+  }
+}
+
 function Kbd({ children, className }: { children: React.ReactNode; className?: string }) {
   return <span className={`${styles.kbd}${className ? ` ${className}` : ""}`}>{children}</span>;
 }
 
-function LogoMark() {
+/** Name + key shown to the right of a strip button on hover/focus. */
+function NavTip({ label, keys }: { label: string; keys?: string[] }) {
   return (
-    <span className={styles.logo} aria-hidden="true">
-      <RailGlyphLogo />
+    <span className={styles.navTip} role="tooltip">
+      {label}
+      {keys?.map((k) => (
+        <Kbd key={k}>{k}</Kbd>
+      ))}
     </span>
   );
 }
@@ -113,8 +156,6 @@ export function Rail({
   setStrokeColor,
   strokeWidth,
   setStrokeWidth,
-  canGroup,
-  onGroup,
   providers,
   newProvider,
   setNewProvider,
@@ -141,7 +182,11 @@ export function Rail({
   onJumpToCard,
   onOpenSettings,
   onOpenShortcuts,
-  onDockWidthChange,
+  onGoHome,
+  onOpenPalette,
+  paletteOpen,
+  board,
+  onOpenSessions,
   summarizeProviderLabel,
 }: {
   tool: Tool;
@@ -151,8 +196,6 @@ export function Rail({
   setStrokeColor: (c: string) => void;
   strokeWidth: number;
   setStrokeWidth: (w: number) => void;
-  canGroup: boolean;
-  onGroup: () => void;
   providers: string[];
   newProvider: string;
   setNewProvider: (p: string) => void;
@@ -179,7 +222,16 @@ export function Rail({
   onJumpToCard: (id: string) => void;
   onOpenSettings: () => void;
   onOpenShortcuts: () => void;
-  onDockWidthChange?: (widthPx: number) => void;
+  /** Back to the session grid (the old floating Home button). */
+  onGoHome: () => void;
+  /** Opens the Ctrl K command palette. */
+  onOpenPalette: () => void;
+  /** Lights the palette button while the palette is open. */
+  paletteOpen: boolean;
+  /** Board / session facts shown by the Board panel and the strip dot. */
+  board: RailBoardInfo;
+  /** Opens the session switcher (breadcrumb popover). */
+  onOpenSessions: () => void;
   summarizeProviderLabel?: string;
 }) {
   const availableProviders = useAvailableAgentProviders();
@@ -191,8 +243,16 @@ export function Rail({
     skippedIds: providerClassification.skippedIds,
   });
 
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
-  const [step, setStep] = useState<RailStep>(() => (localStorage.getItem(RAIL_COLLAPSED_KEY) === "1" ? "collapsed" : "tools"));
+  // `hidden` is the persisted preference; `revealed` is the transient edge
+  // reveal of a hidden rail. There is deliberately no "open" button.
+  const [hidden, setHidden] = useState(() => readRailHidden(window.localStorage));
+  const [revealed, setRevealed] = useState(false);
+  const [pointerInside, setPointerInside] = useState(false);
+  const [step, setStep] = useState<RailStep>("closed");
+  const dockRef = useRef<HTMLDivElement>(null);
+  const revealTimer = useRef<number | null>(null);
+  const hideTimer = useRef<number | null>(null);
+  const swipeStartX = useRef<number | null>(null);
   const [findQuery, setFindQuery] = useState("");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pickedProviderLabel, setPickedProviderLabel] = useState("Claude Code");
@@ -201,6 +261,8 @@ export function Rail({
   /** Proto label says "Nesta sessão · 9" while listing 6 rows — keep that surface count when seeded. */
   const [mockSessionCount, setMockSessionCount] = useState<number | null>(null);
   const [mockTerminal1Rows, setMockTerminal1Rows] = useState<MockProviderRow[] | null>(null);
+  /** Board panel fed with the prototype's facts (verify seed only). */
+  const [mockBoard, setMockBoard] = useState<RailBoardInfo | null>(null);
 
   const showAgentFields = newProvider !== "bash";
   const effortValues = availableProviders.find((p) => p.id === newProvider)?.effortValues ?? [];
@@ -218,17 +280,87 @@ export function Rail({
       } as Record<string, string>
     )[v] ?? v;
 
-  useEffect(() => {
-    localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? "1" : "0");
-  }, [collapsed]);
+  const panelOpen = step !== "closed";
+  const stripVisible = !hidden || revealed;
 
   useEffect(() => {
-    onDockWidthChange?.(collapsed ? 56 : 440);
-  }, [collapsed, onDockWidthChange]);
+    writeRailHidden(window.localStorage, hidden);
+  }, [hidden]);
 
+  // Choosing the pen (button or P) opens its options; drawing then starts with
+  // a press on the board, which dismisses the panel like any outside press.
   useEffect(() => {
-    if (tool === "pen" && !collapsed) setStep("pen");
-  }, [tool, collapsed]);
+    if (tool === "pen") setStep("pen");
+  }, [tool]);
+
+  const closePanel = useCallback(() => setStep("closed"), []);
+
+  // A press (mouse, pen or touch) or Esc outside the rail dismisses the panel.
+  // The press is not consumed, so it still reaches the board (draw, pan, …).
+  useEffect(() => {
+    if (!panelOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const target = e.target;
+      if (target instanceof Node && dockRef.current?.contains(target)) return;
+      closePanel();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePanel();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [panelOpen, closePanel]);
+
+  // A revealed rail leaves 600 ms after nothing holds it any more.
+  useEffect(() => {
+    clearTimer(hideTimer);
+    if (shouldAutoHide({ hidden, revealed, panelOpen, pointerInside })) {
+      hideTimer.current = window.setTimeout(() => setRevealed(false), HIDE_DELAY_MS);
+    }
+    return () => clearTimer(hideTimer);
+  }, [hidden, revealed, panelOpen, pointerInside]);
+
+  useEffect(() => () => clearTimer(revealTimer), []);
+
+  const hideRail = useCallback(() => {
+    clearTimer(revealTimer);
+    setStep("closed");
+    setRevealed(false);
+    setPointerInside(false);
+    setHidden(true);
+  }, []);
+
+  function onEdgePointerMove(e: React.PointerEvent) {
+    if (e.pointerType === "touch") return;
+    if (!isInRevealZone(e.pointerType, e.clientX)) {
+      clearTimer(revealTimer);
+      return;
+    }
+    if (revealTimer.current === null) {
+      revealTimer.current = window.setTimeout(() => {
+        revealTimer.current = null;
+        setRevealed(true);
+      }, REVEAL_DELAY_MS);
+    }
+  }
+
+  function onEdgePointerDown(e: React.PointerEvent) {
+    if (e.pointerType !== "touch") return;
+    swipeStartX.current = e.clientX;
+  }
+
+  function onEdgeTouchMove(e: React.PointerEvent) {
+    const start = swipeStartX.current;
+    if (e.pointerType !== "touch" || start === null) return;
+    if (isEdgeSwipe(start, e.clientX)) {
+      swipeStartX.current = null;
+      setRevealed(true);
+    }
+  }
 
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -266,24 +398,35 @@ export function Rail({
           setMockSessionCount(null);
         }
         if (next !== "terminal1") setMockTerminal1Rows(null);
-        if (next === "collapsed") {
-          setCollapsed(true);
-          setStep("collapsed");
-          return;
-        }
-        setCollapsed(false);
+        setHidden(false);
         setStep(next);
         if (next === "pen") setTool("pen");
-        if (next === "tools") setTool("pointer");
+        if (next === "closed") setTool("pointer");
       },
-      getStep: () => (collapsed ? "collapsed" : step),
+      getStep: () => step,
+      /** Hide the rail the way the hide button does (preference persists). */
+      hide: () => hideRail(),
+      /** Hidden + edge-revealed, as after a pointer dwell on the left edge. */
+      reveal: () => {
+        setStep("closed");
+        setHidden(true);
+        setRevealed(true);
+      },
+      isHidden: () => hidden,
+      /** Drop the prototype board seed. */
+      unseedBoard: () => setMockBoard(null),
+      /** Board panel with the prototype's mock facts (RailPassos.dc.html). */
+      seedBoard: () => {
+        setMockBoard(PROTO_BOARD);
+        setHidden(false);
+        setStep("board");
+      },
       /** Seed find-card list to match Rail.dc.html mock (6 rows + tones). */
       seedCardsFind: () => {
         setMockFindCards(PROTO_FIND_CARDS);
         setMockSessionCount(9);
         setFindQuery("");
         setMockTerminal1Rows(null);
-        setCollapsed(false);
         setStep("cards");
       },
       /** Seed terminal1 provider rows to match Rail.dc.html mock. */
@@ -291,7 +434,6 @@ export function Rail({
         setMockTerminal1Rows(PROTO_TERMINAL1_ROWS);
         setMockFindCards(null);
         setMockSessionCount(null);
-        setCollapsed(false);
         setStep("terminal1");
       },
       /** Seed the new-agent form so screenshots match the prototype mock. */
@@ -337,7 +479,6 @@ export function Rail({
         setMockFindCards(null);
         setMockSessionCount(null);
         setMockTerminal1Rows(null);
-        setCollapsed(false);
         setStep("terminal2");
       },
       measureDock: () => {
@@ -386,8 +527,9 @@ export function Rail({
     };
   }, [
     availableProviders,
-    collapsed,
+    hidden,
     step,
+    hideRail,
     setTool,
     setNewProvider,
     setNewCwd,
@@ -399,38 +541,29 @@ export function Rail({
   ]);
 
   function go(next: RailStep) {
-    if (next === "collapsed") {
-      setCollapsed(true);
-      setStep("collapsed");
-      return;
-    }
-    setCollapsed(false);
     setStep(next);
   }
 
-  function toggleCollapse() {
-    if (collapsed) {
-      setCollapsed(false);
-      setStep(step === "collapsed" ? "tools" : step);
-    } else {
-      setCollapsed(true);
-      setStep("collapsed");
-    }
+  /** Strip button that owns a panel: a second press closes it. */
+  function togglePanel(next: Exclude<RailStep, "closed">, group?: RailStep[]) {
+    const owned = group ?? [next];
+    setStep(owned.includes(step) ? "closed" : next);
   }
 
-  const titles: Record<Exclude<RailStep, "collapsed">, [string, string]> = {
-    tools: [t("rail.v3.title.tools"), t("rail.v3.hint.open")],
+  const titles: Record<Exclude<RailStep, "closed">, [string, string]> = {
     pen: [t("rail.v3.title.pen"), "P"],
     add: [t("rail.v3.title.add"), t("rail.v3.hint.add")],
     terminal1: [t("rail.v3.title.agent"), ""],
     terminal2: [t("rail.v3.title.agent"), ""],
-    cards: [t("rail.v3.title.find"), "Ctrl F"],
+    cards: [t("rail.v3.title.find"), `${MOD} F`],
     ai: [t("rail.v3.title.ai"), ""],
+    board: [t("rail.v3.title.board"), (mockBoard ?? board).project],
   };
 
-  const activeStep: Exclude<RailStep, "collapsed"> = step === "collapsed" ? "tools" : step;
-  const [panelTitle, panelHint] = titles[activeStep];
+  const activeStep = step === "closed" ? null : step;
+  const [panelTitle, panelHint] = activeStep ? titles[activeStep] : ["", ""];
   const isTerm = activeStep === "terminal1" || activeStep === "terminal2";
+
 
   const providerRows = useMemo(() => {
     if (mockTerminal1Rows) return mockTerminal1Rows;
@@ -460,8 +593,7 @@ export function Rail({
 
   function selectTool(next: Tool) {
     setTool(next);
-    if (next === "pen") go("pen");
-    else go("tools");
+    setStep(next === "pen" ? "pen" : "closed");
   }
 
   function sessionMode(): "new" | "continue" | "resume" {
@@ -483,118 +615,163 @@ export function Rail({
     }
   }
 
-  const open = !collapsed;
-  // Proto (Rail.dc.html): pointer lit only on tools/collapsed. When the panel is
-  // open on add/term/cards/ai, only that step button lights — not pointer too.
-  // Collapsed strip still reflects the real tool (V / pen / connector / …).
-  const pointerOn = collapsed ? tool === "pointer" : step === "tools";
-  const penOn = collapsed ? tool === "pen" : step === "pen";
+  // Which strip button is lit. With a panel open only the panel's own button
+  // lights; with the strip alone the real tool (V / P / C / S / export) does.
+  const pointerOn = step === "closed" && tool === "pointer";
+  const penOn = tool === "pen";
+  const addOn = step === "add" || step === "terminal1" || step === "terminal2";
+  const navClass = (on: boolean) => `rail-btn ${styles.navBtn}${on ? ` ${styles.navBtnOn}` : ""}`;
+
+  const boardInfo = mockBoard ?? board;
 
   return (
     <div
       className={styles.dock}
+      ref={dockRef}
       data-role="rail-dock"
-      data-rail-step={collapsed ? "collapsed" : step}
-      data-rail-collapsed={collapsed ? "1" : "0"}
-      style={{ width: collapsed ? "var(--rail-width-strip)" : "var(--rail-width-open)" }}
+      data-rail-step={step}
+      data-rail-hidden={hidden ? "1" : "0"}
+      data-rail-revealed={revealed ? "1" : "0"}
+      data-panel-open={panelOpen ? "1" : "0"}
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
+      onPointerEnter={() => setPointerInside(true)}
+      onPointerLeave={() => setPointerInside(false)}
     >
-      <nav className={`${styles.strip} rail`} aria-label={t("rail.toolbar")}>
-        <LogoMark />
+      {!stripVisible && (
+        <div
+          className={styles.edge}
+          data-role="rail-edge"
+          onPointerMove={onEdgePointerMove}
+          onPointerLeave={() => clearTimer(revealTimer)}
+          onPointerDown={onEdgePointerDown}
+          onPointerUp={() => {
+            swipeStartX.current = null;
+          }}
+          onPointerCancel={() => {
+            swipeStartX.current = null;
+          }}
+          onPointerMoveCapture={onEdgeTouchMove}
+        >
+          <span className={styles.edgeHint} data-role="rail-edge-hint" />
+        </div>
+      )}
+      <nav
+        className={`${styles.strip} rail${stripVisible ? "" : ` ${styles.stripHidden}`}${hidden && revealed ? ` ${styles.stripRevealed}` : ""}`}
+        aria-label={t("rail.toolbar")}
+        aria-hidden={stripVisible ? undefined : true}
+      >
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${pointerOn ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.pointer")}
-          aria-label={t("rail.v3.aria.pointer")}
-          onClick={() => selectTool("pointer")}
+          className={`rail-btn topbar-home ${styles.navBtn}`}
+          data-role="rail-home"
+          aria-label={t("rail.v3.aria.home")}
+          onClick={onGoHome}
         >
+          <RailGlyphHome />
+          <NavTip label={t("rail.v3.tip.home")} />
+        </button>
+        <span className={styles.stripDivider} aria-hidden="true" />
+        <button type="button" className={navClass(pointerOn)} aria-label={t("rail.v3.aria.pointer")} onClick={() => selectTool("pointer")}>
           <RailGlyphPointer />
+          <NavTip label={t("rail.v3.tool.pointer")} keys={["V"]} />
         </button>
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${penOn ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.pen")}
+          className={navClass(penOn)}
           aria-label={t("rail.v3.aria.pen")}
           onClick={() => selectTool(tool === "pen" ? "pointer" : "pen")}
         >
           <RailGlyphPen />
+          <NavTip label={t("rail.v3.tool.pen")} keys={["P"]} />
         </button>
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${tool === "connector" ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.connector")}
+          className={navClass(tool === "connector")}
           aria-label={t("rail.v3.aria.connector")}
           onClick={() => selectTool(tool === "connector" ? "pointer" : "connector")}
         >
           <RailGlyphConnector />
+          <NavTip label={t("rail.v3.tool.connector")} keys={["C"]} />
         </button>
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${tool === "select" ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.select")}
+          className={navClass(tool === "select")}
           aria-label={t("rail.v3.aria.select")}
           onClick={() => selectTool(tool === "select" ? "pointer" : "select")}
         >
           <RailGlyphSelect />
+          <NavTip label={t("rail.v3.tool.select")} keys={["S"]} />
         </button>
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${tool === "export" ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.export")}
+          className={navClass(tool === "export")}
           aria-label={t("rail.v3.aria.export")}
           onClick={() => selectTool(tool === "export" ? "pointer" : "export")}
         >
           <RailGlyphExport />
+          <NavTip label={t("rail.v3.tool.export")} />
         </button>
         <span className={styles.stripDivider} aria-hidden="true" />
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${step === "add" || step === "terminal1" || step === "terminal2" ? ` ${styles.navBtnOn}` : ""}`}
+          className={navClass(addOn)}
           data-role="rail-add-card"
-          title={t("rail.addCard")}
           aria-label={t("rail.v3.aria.add")}
-          onClick={() => go(step === "add" || step === "terminal1" || step === "terminal2" ? "tools" : "add")}
+          onClick={() => togglePanel("add", ["add", "terminal1", "terminal2"])}
         >
           <RailGlyphPlus />
+          <NavTip label={t("rail.v3.board.add")} keys={[MOD, "⇧", "N"]} />
         </button>
-        <button
-          type="button"
-          className={`rail-btn ${styles.navBtn}${step === "cards" ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.findCard")}
-          aria-label={t("rail.v3.aria.find")}
-          onClick={() => go(step === "cards" ? "tools" : "cards")}
-        >
+        <button type="button" className={navClass(step === "cards")} aria-label={t("rail.v3.aria.find")} onClick={() => togglePanel("cards")}>
           <RailGlyphFind />
+          <NavTip label={t("rail.v3.board.find")} keys={[MOD, "F"]} />
         </button>
         <button
           type="button"
-          className={`rail-btn ${styles.navBtn}${step === "ai" ? ` ${styles.navBtnOn}` : ""}`}
-          title={t("rail.aiActions")}
-          aria-label={t("rail.v3.aria.ai")}
-          onClick={() => go(step === "ai" ? "tools" : "ai")}
+          className={navClass(paletteOpen)}
+          data-role="rail-palette"
+          aria-label={t("rail.v3.aria.palette")}
+          onClick={() => {
+            setStep("closed");
+            onOpenPalette();
+          }}
         >
+          <RailGlyphPalette />
+          <NavTip label={t("rail.v3.tip.paletteName")} keys={[MOD, "K"]} />
+        </button>
+        <button type="button" className={navClass(step === "ai")} aria-label={t("rail.v3.aria.ai")} onClick={() => togglePanel("ai")}>
           <RailGlyphAi />
+          <NavTip label={t("rail.v3.board.ai")} />
         </button>
         <span className={styles.stripSpacer} />
-        <button type="button" className={`rail-btn ${styles.navBtn}`} title={t("shortcuts.title")} aria-label={t("rail.v3.aria.shortcuts")} onClick={onOpenShortcuts}>
-          <span className={styles.helpGlyph}>?</span>
-        </button>
-        <button type="button" className={`rail-btn ${styles.navBtn}`} title={t("rail.settings")} aria-label={t("rail.settingsAria")} onClick={onOpenSettings}>
-          <RailGlyphSettings />
-        </button>
         <button
           type="button"
-          className={`rail-btn rail-toggle ${styles.navBtn}`}
-          title={collapsed ? t("rail.show") : t("rail.hide")}
-          aria-label={collapsed ? t("rail.v3.aria.expand") : t("rail.v3.aria.collapse")}
-          onClick={toggleCollapse}
+          className={navClass(step === "board")}
+          data-role="rail-board"
+          data-autonomous={board.autonomous ? "1" : undefined}
+          aria-label={t("rail.v3.aria.board")}
+          onClick={() => togglePanel("board")}
         >
-          <RailGlyphCollapse />
+          <RailGlyphBoard />
+          {boardInfo.autonomous && <span className={styles.navDot} data-role="rail-board-dot" />}
+          <NavTip label={t("rail.v3.tip.board")} />
+        </button>
+        <button type="button" className={navClass(false)} aria-label={t("rail.v3.aria.shortcuts")} onClick={onOpenShortcuts}>
+          <span className={styles.helpGlyph}>?</span>
+          <NavTip label={t("shortcuts.title")} keys={["?"]} />
+        </button>
+        <button type="button" className={navClass(false)} data-role="rail-settings" aria-label={t("rail.settingsAria")} onClick={onOpenSettings}>
+          <RailGlyphSettings />
+          <NavTip label={t("rail.settings")} />
+        </button>
+        <button type="button" className={`rail-btn rail-hide ${styles.navBtn}`} data-role="rail-hide" aria-label={t("rail.v3.aria.hide")} onClick={hideRail}>
+          <RailGlyphHide />
+          <NavTip label={t("rail.v3.tip.hide")} />
         </button>
       </nav>
 
-      {open && (
+      {activeStep && stripVisible && (
         <section className={styles.panel} aria-label={panelTitle} data-role="rail-panel">
           <header className={styles.panelHeader}>
             <div className={styles.panelTitleRow}>
@@ -613,72 +790,16 @@ export function Rail({
           </header>
 
           <div className={styles.panelBody}>
-            {activeStep === "tools" && (
-              <>
-                <div className={styles.section}>
-                  <span className={styles.sectionHead}>{t("rail.v3.section.tools")}</span>
-                  <button type="button" className={`${styles.item}${tool === "pointer" ? ` ${styles.itemOn}` : ""}`} onClick={() => selectTool("pointer")}>
-                    <RailGlyphPointer />
-                    <span className={styles.itemGrow}>{t("rail.v3.tool.pointer")}</span>
-                    <Kbd>V</Kbd>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => selectTool("pen")}>
-                    <RailGlyphPen />
-                    <span className={styles.itemGrow}>{t("rail.v3.tool.pen")}</span>
-                    <Kbd>P</Kbd>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => selectTool("connector")}>
-                    <RailGlyphConnector />
-                    <span className={styles.itemGrow}>{t("rail.v3.tool.connector")}</span>
-                    <Kbd>C</Kbd>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => selectTool("select")}>
-                    <RailGlyphSelect />
-                    <span className={styles.itemGrow}>{t("rail.v3.tool.select")}</span>
-                    <Kbd>S</Kbd>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => selectTool("export")}>
-                    <RailGlyphExport />
-                    <span className={styles.itemGrow}>{t("rail.v3.tool.export")}</span>
-                  </button>
-                </div>
-                <div className={styles.section}>
-                  <span className={styles.sectionHead}>{t("rail.v3.section.board")}</span>
-                  <button type="button" className={styles.item} onClick={() => go("add")}>
-                    <RailGlyphPlus />
-                    <span className={styles.itemGrow}>{t("rail.v3.board.add")}</span>
-                    <span className={styles.kbdRow}>
-                      <Kbd>Ctrl</Kbd>
-                      <Kbd>⇧</Kbd>
-                      <Kbd>N</Kbd>
-                    </span>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => go("cards")}>
-                    <RailGlyphFind />
-                    <span className={styles.itemGrow}>{t("rail.v3.board.find")}</span>
-                    <span className={styles.kbdRow}>
-                      <Kbd>Ctrl</Kbd>
-                      <Kbd>F</Kbd>
-                    </span>
-                  </button>
-                  <button type="button" className={styles.item} onClick={() => go("ai")}>
-                    <RailGlyphAi />
-                    <span className={styles.itemGrow}>{t("rail.v3.board.ai")}</span>
-                  </button>
-                  <button type="button" className={styles.item} disabled={!canGroup} onClick={onGroup}>
-                    <RailGlyphGroup />
-                    <span className={styles.itemGrow}>{t("rail.v3.board.group")}</span>
-                    <span className={styles.kbdRow}>
-                      <Kbd>Ctrl</Kbd>
-                      <Kbd>G</Kbd>
-                    </span>
-                  </button>
-                </div>
-                <div className={styles.tip}>
-                  {t("rail.v3.tip.shortcuts")} <Kbd>?</Kbd> · {t("rail.v3.tip.palette")}{" "}
-                  <Kbd>Ctrl</Kbd> <Kbd>K</Kbd>
-                </div>
-              </>
+            {activeStep === "board" && (
+              <RailBoardPanel
+                board={boardInfo}
+                cards={mockBoard ? PROTO_BOARD_CARDS : cards}
+                loadAgentRoles={mockBoard ? false : true}
+                onOpenSessions={() => {
+                  setStep("closed");
+                  onOpenSessions();
+                }}
+              />
             )}
 
             {activeStep === "pen" && (
@@ -715,7 +836,7 @@ export function Rail({
                   ))}
                 </div>
                 <span className={styles.footnote}>
-                  {t("rail.v3.pen.tip")} <Kbd>Esc</Kbd> {t("rail.v3.pen.tipEsc")} <Kbd>Ctrl</Kbd> <Kbd>Z</Kbd>{" "}
+                  {t("rail.v3.pen.tip")} <Kbd>Esc</Kbd> {t("rail.v3.pen.tipEsc")} <Kbd>{MOD}</Kbd> <Kbd>Z</Kbd>{" "}
                   {t("rail.v3.pen.tipUndo")}
                 </span>
               </>
@@ -725,28 +846,29 @@ export function Rail({
               <>
                 <button type="button" className={`${styles.tile} ${styles.tileHero}`} data-kind="terminal" onClick={() => go("terminal1")}>
                   <span className={styles.tileHeroTitle}>
-                    <RailGlyphTerminal />
-                    {t("rail.v3.kind.terminal")}
-                    <span className={styles.itemGrow} />
-                    <span className={styles.kbdRow}>
-                      <Kbd>Ctrl</Kbd>
-                      <Kbd>⇧</Kbd>
-                      <Kbd>N</Kbd>
+                    <span className={styles.tileHeroGlyph}>
+                      <RailGlyphTerminal />
                     </span>
+                    {t("rail.v3.kind.terminal")}
                   </span>
-                  <span className={styles.tileDescHero}>{t("rail.v3.kind.terminalDesc")}</span>
+                  <span className={styles.tileHeroMeta}>
+                    <span className={styles.itemGrow}>{t("rail.v3.kind.terminalDesc")}</span>
+                    <Kbd>{MOD}</Kbd>
+                    <Kbd>⇧</Kbd>
+                    <Kbd>N</Kbd>
+                  </span>
                 </button>
                 <div className={styles.tileGrid}>
                   {ADD_GRID.map((item) => (
                     <button
                       key={item.kind}
                       type="button"
-                      className={`${styles.tile} popover-row`}
+                      className={styles.tile}
                       data-kind={item.kind}
                       onClick={() => {
                         if (item.kind === "media") onCreateMedia();
                         else onCreate(item.kind);
-                        go("tools");
+                        setStep("closed");
                       }}
                     >
                       <span className={styles.tileTitle}>{t(item.titleKey)}</span>
@@ -875,7 +997,7 @@ export function Rail({
                     className={`${styles.btn} ${styles.btnPrimary}`}
                     onClick={() => {
                       onCreateTerminal();
-                      go("tools");
+                      setStep("closed");
                     }}
                   >
                     {t("rail.v3.openCard")} <Kbd className={styles.btnKbd}>⏎</Kbd>
@@ -947,7 +1069,7 @@ export function Rail({
                   disabled={summarizeDisabled || aiBusy}
                   onClick={() => {
                     onSummarize();
-                    go("tools");
+                    setStep("closed");
                   }}
                 >
                   <span className={styles.aiTileTitle}>{aiBusy ? t("rail.summarizing") : t("rail.v3.ai.summarize")}</span>
@@ -963,7 +1085,7 @@ export function Rail({
                   className={styles.tile}
                   onClick={() => {
                     onReorganize();
-                    go("tools");
+                    setStep("closed");
                   }}
                 >
                   <span className={styles.aiTileTitle}>{t("rail.v3.ai.organize")}</span>
