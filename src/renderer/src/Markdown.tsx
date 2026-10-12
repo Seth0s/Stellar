@@ -45,3 +45,75 @@ export function Markdown({
   if (html === null) return <>{loadingFallback ?? content}</>;
   return <div className={`md-content${className ? ` ${className}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
+/** One block of the reading view with the live diff on top of it. */
+export type MarkdownDiffBlock = {
+  kind: "ctx" | "add" | "del";
+  text: string;
+  /** Strip color for the block (authorship, only where known). */
+  color?: string | null;
+};
+
+/**
+ * Reading view of a markdown file with its changes marked per block: new
+ * blocks tinted green, removed ones as red ghosts (folded to one row, open
+ * on click). Every block is parsed in one pass.
+ */
+export function MarkdownDiff({
+  blocks,
+  className,
+  loadingFallback,
+  foldedLabel,
+}: {
+  blocks: readonly MarkdownDiffBlock[];
+  className?: string;
+  loadingFallback?: React.ReactNode;
+  /** Label of a folded removed block, e.g. "1 parágrafo removido". */
+  foldedLabel: (count: number) => string;
+}) {
+  const [html, setHtml] = useState<string[] | null>(null);
+  const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
+  const key = blocks.map((b) => b.text).join("\u0000");
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([import("marked"), import("dompurify")]).then(([{ marked }, { default: DOMPurify }]) => {
+      if (cancelled) return;
+      setHtml(blocks.map((b) => DOMPurify.sanitize(marked.parse(b.text, { async: false }))));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Parsed again only when the block texts change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  if (html === null || html.length !== blocks.length) return <>{loadingFallback ?? null}</>;
+  return (
+    <div className={`md-content md-diff${className ? ` ${className}` : ""}`}>
+      {blocks.map((b, i) => {
+        const style = b.color ? ({ "--md-diff-strip": b.color } as React.CSSProperties) : undefined;
+        if (b.kind === "del" && !open.has(i)) {
+          return (
+            <button
+              key={i}
+              type="button"
+              className="md-diff-block md-diff-del md-diff-fold"
+              style={style}
+              onClick={() => setOpen((prev) => new Set(prev).add(i))}
+            >
+              ▸ {foldedLabel(1)}
+            </button>
+          );
+        }
+        return (
+          <div
+            key={i}
+            className={`md-diff-block${b.kind === "add" ? " md-diff-add" : b.kind === "del" ? " md-diff-del" : ""}`}
+            style={style}
+            data-md-diff={b.kind}
+            dangerouslySetInnerHTML={{ __html: html[i]! }}
+          />
+        );
+      })}
+    </div>
+  );
+}

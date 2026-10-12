@@ -253,6 +253,8 @@
 }
 
 .crumbs {
+  white-space: nowrap;
+  overflow: hidden;
   height: 26px; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
   flex: none;
   display: flex;
@@ -290,19 +292,6 @@
 
 .editorPane :global(.code-editor) {
   height: 100%;
-}
-
-.diffPane {
-  width: 46%; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
-  flex: none;
-  border-left: 1px solid var(--card-divider);
-  background: #0c0e13; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
-  padding: var(--space-4) var(--space-6);
-  font-size: var(--text-3);
-  color: var(--card-context);
-  overflow: auto;
-  white-space: pre-wrap;
-  font-family: var(--font-mono);
 }
 
 .minimap {
@@ -446,14 +435,6 @@
   white-space: nowrap;
 }
 
-.diffPre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #c9cede; /* sd:allow: Codigo.dc.html approved measure (Codigo-SPEC.md) */
-  font-size: var(--text-4);
-  line-height: 1.45;
-}
 
 .warnOverlay {
   position: absolute;
@@ -506,6 +487,12 @@
   font-family: var(--font-mono);
   font-size: var(--text-3);
   color: var(--card-context);
+}
+
+/* `.card-foot-row` (cards.css) sets the gap too and wins on order; the
+   approved status bar gap is 16px. */
+.footExtras:global(.card-foot-row) {
+  gap: var(--space-7);
 }
 
 .footDirty {
@@ -592,4 +579,118 @@
   overflow: visible;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+/* Live diff (CodigoDiffVivo.dc.html): summary on the path row, hint pill,
+   undo toast, and the block-level marks of the markdown reading view. */
+
+.btnS {
+  min-height: 20px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  padding: 0 var(--space-4);
+  border-radius: 6px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  font-size: var(--text-3);
+}
+
+.liveChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  font-size: var(--text-3);
+  color: #c9cede; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  white-space: nowrap;
+}
+
+.liveChip[data-tone="idle"] {
+  color: var(--card-context);
+}
+
+.liveChip[data-tone="warn"] {
+  color: #f0b25c; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+}
+
+.liveDot {
+  width: 7px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  height: 7px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  border-radius: 50%; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  display: inline-block;
+  flex: none;
+}
+
+.liveAdd {
+  color: #3fb68b; /* sd:allow: Codigo-SPEC.md git groups + */
+  font-weight: 600;
+}
+
+.liveDel {
+  color: #e0846f; /* sd:allow: Codigo-SPEC.md git groups − */
+  font-weight: 600;
+}
+
+.livePill {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: var(--space-6);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 5px 12px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  border-radius: 999px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  background: #1a2040; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  border: 1px solid #343c55; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  color: #c3cbff; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  font-size: var(--text-4);
+  box-shadow: 0 6px 18px #000a; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  white-space: nowrap;
+}
+
+.liveToast {
+  position: absolute;
+  left: 14px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  bottom: var(--space-6);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 7px 10px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  border-radius: 9px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  background: #12151d; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  border: 1px solid #343c55; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  box-shadow: 0 8px 24px #000a; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  font-size: var(--text-4);
+}
+
+.editorPane :global(.md-diff-block) {
+  position: relative;
+  border-radius: 4px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  padding: 1px 8px; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  margin: 0 0 var(--space-4);
+}
+
+.editorPane :global(.md-diff-block > :last-child) {
+  margin-bottom: 0;
+}
+
+.editorPane :global(.md-diff-add) {
+  background: rgba(63, 182, 139, 0.12); /* sd:allow: CodigoDiffVivo.dc.html added-row tint */
+  box-shadow: inset 3px 0 0 var(--md-diff-strip, #3fb68b); /* sd:allow: Codigo-SPEC.md git groups + */
+}
+
+.editorPane :global(.md-diff-del) {
+  background: rgba(224, 132, 111, 0.12); /* sd:allow: CodigoDiffVivo.dc.html removed-row tint */
+  box-shadow: inset 3px 0 0 var(--md-diff-strip, #e0846f); /* sd:allow: Codigo-SPEC.md git groups − */
+  opacity: 0.8;
+}
+
+.editorPane :global(.md-diff-fold) {
+  display: block;
+  width: 100%;
+  border: 0;
+  color: #c9a39d; /* sd:allow: CodigoDiffVivo.dc.html approved measure */
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-3);
+  text-align: left;
+  cursor: pointer;
 }

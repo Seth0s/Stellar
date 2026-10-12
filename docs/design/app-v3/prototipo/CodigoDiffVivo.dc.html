@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Card de código — diff ao vivo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+/* Complemento de Codigo.dc.html (tela 13). Mesmo cromo; só muda o que o diff ao vivo precisa.
+   Estados por âncora: #sem-mudancas #editando #dois-agentes #remocao-grande #remocao-aberta
+   #fora-da-tela #leitura-sem-mudancas #leitura-md #aceito #buffer-sujo #arquivo-grande */
+html{scrollbar-width:none}
+body{margin:0;background:#05060a;font-family:'Space Grotesk',system-ui,sans-serif;color:#e8eaf0}
+.mono{font-family:'JetBrains Mono',monospace}
+#board{width:1440px;height:900px;position:relative;background-color:#0b0d12;background-image:radial-gradient(#1b2030 1px,transparent 1px);background-size:22px 22px}
+.ab{width:40px;height:40px;border:0;border-radius:9px;background:transparent;color:#8d94a6;display:grid;place-items:center;position:relative}
+.abOn{color:#e8eaf0;background:#1d2333}
+.tr{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;font-size:12.5px;color:#c9cede;white-space:nowrap}
+.sel{background:#1a2040}
+.tab{height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12.5px;color:#a3aabb;border-right:1px solid #1d2230;white-space:nowrap}
+.tabOn{background:#0b0d12;color:#e8eaf0;box-shadow:inset 0 2px 0 #7d8cff}
+.btn{min-height:28px;padding:0 10px;border-radius:7px;border:1px solid #2a2f3d;background:#161a24;color:#e8eaf0;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:#3a4258}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btnS{min-height:20px;padding:0 8px;border-radius:6px;font-size:11px}
+.pt{height:30px;padding:0 10px;border:0;background:transparent;color:#8d94a6;font:inherit;font-size:12px;border-bottom:2px solid transparent}
+.ptOn{color:#e8eaf0;border-bottom-color:#7d8cff}
+/* linhas de código */
+.ln{display:flex;height:21px;align-items:center;white-space:pre}
+.num{width:44px;text-align:right;padding-right:6px;color:#4f5670;flex:none}
+.sg{width:14px;flex:none;text-align:center;color:#4f5670;font-size:12px}
+.gut{width:4px;height:21px;flex:none;margin-right:10px}
+.k{color:#c792ea}.s{color:#c3e88d}.f{color:#82aaff}.c{color:#636b85}.t{color:#ffcb6b}.n{color:#f78c6c}
+/* diff ao vivo: o fundo diz O QUE mudou; a tira do gutter diz QUEM mudou */
+.add{background:#112319}
+.add .sg{color:#3fb68b}
+.del{background:#261516}
+.del .sg{color:#e0846f}
+.del .num{color:#7a4a45}
+.del .tx{opacity:.62}
+.w-add{background:#1d4a31;border-radius:3px}
+.w-del{background:#5a2a27;border-radius:3px}
+.fresh{animation:fresh 2.4s ease-out 1}
+@keyframes fresh{0%{box-shadow:inset 0 0 0 999px #3fb68b40}100%{box-shadow:inset 0 0 0 999px #3fb68b00}}
+.fold{display:flex;height:21px;align-items:center;background:#1c1314;color:#c9a39d;font-size:11.5px;border-top:1px dashed #3a2426;border-bottom:1px dashed #3a2426}
+.fold .num{color:#7a4a45}
+.cur{background:#1a1712}
+/* resumo na linha do caminho */
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#c9cede;white-space:nowrap}
+.chip i{width:7px;height:7px;border-radius:50%;display:inline-block}
+.pl{color:#3fb68b}.mi{color:#e0846f}
+.tip{position:absolute;padding:8px 10px;border-radius:9px;background:#12151d;border:1px solid #343c55;box-shadow:0 8px 24px #000a;display:flex;flex-direction:column;gap:4px;font-size:12px;max-width:320px;z-index:5}
+.pill{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;padding:5px 12px;border-radius:999px;background:#1a2040;border:1px solid #343c55;color:#c3cbff;font-size:12px;display:inline-flex;gap:8px;align-items:center;box-shadow:0 6px 18px #000a;z-index:5}
+.toast{position:absolute;left:14px;bottom:12px;padding:7px 10px;border-radius:9px;background:#12151d;border:1px solid #343c55;box-shadow:0 8px 24px #000a;display:flex;gap:10px;align-items:center;font-size:12px;z-index:5}
+.banner{flex:none;padding:6px 14px;border-bottom:1px solid #1d2230;background:#2a2410;color:#e8eaf0;font-size:12px;display:flex;gap:10px;align-items:center}
+/* leitura markdown */
+.md{flex:1;min-width:0;overflow:hidden;padding:12px 22px;font-size:13px;line-height:1.55;color:#c9cede}
+.md h2{font-size:17px;margin:14px 0 6px;color:#e8eaf0}
+.md h3{font-size:14.5px;margin:12px 0 4px;color:#e8eaf0}
+.md p{margin:0 0 8px}
+.md ol{margin:0 0 8px;padding-left:22px}
+.blk{position:relative;border-radius:4px;padding:1px 8px}
+.blk.badd{background:#112319;box-shadow:inset 3px 0 0 var(--ag)}
+.blk.bdel{background:#261516;box-shadow:inset 3px 0 0 var(--ag);color:#b9a09c}
+.blk .sgm{position:absolute;left:-14px;top:0;font:12px 'JetBrains Mono',monospace}
+.tag{font-size:10.5px;color:#8d94a6;margin-left:8px}
+/* folha de decisões (fora do card) */
+#sheet{width:1440px;box-sizing:border-box;padding:28px 40px 60px;background:#0b0d12;border-top:1px solid #1d2230}
+#sheet h2{font-size:16px;margin:0 0 12px}
+#sheet table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:26px}
+#sheet td,#sheet th{border:1px solid #1d2230;padding:8px 10px;vertical-align:top;text-align:left}
+#sheet th{color:#8d94a6;font-weight:500;background:#0d1016;width:190px}
+#sheet code{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#c3cbff}
+#nav{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:22px}
+#nav a{color:#c9cede;text-decoration:none;border:1px solid #2a2f3d;border-radius:7px;padding:4px 10px;font-size:12px;background:#161a24}
+#nav a.on{border-color:#7d8cff;color:#fff;background:#1a2040}
+</style>
+</head>
+<body>
+<div id="board"></div>
+<div id="sheet"></div>
+<script>
+const A = { name: 'IMPL · Agente A', short: 'IMPL', color: '#f0883e', task: 'task #a1b2c3 · fila de tentativas' };
+const B = { name: 'REVISOR · Agente B', short: 'REVISOR', color: '#5b8cff', task: 'task #d4e5f6 · backoff do retry' };
+const AG = { A, B };
+
+/* ---------- conteúdo do arquivo (dados genéricos) ---------- */
+const sp = (cls, t) => `<span class="${cls}">${t}</span>`;
+const L = {
+  c1: sp('c', '// Drain the queue in order; stop at the first failure.'),
+  fn1: `${sp('k', 'export async function')} ${sp('f', 'drain')}(queue: ${sp('t', 'Queue')}, run: ${sp('t', 'Runner')}) {`,
+  forOld: `  ${sp('k', 'for')} (${sp('k', 'const')} job ${sp('k', 'of')} queue.<span class="w-del">items</span>) {`,
+  forNew: `  ${sp('k', 'for')} (${sp('k', 'const')} job ${sp('k', 'of')} queue.<span class="w-add">pending()</span>) {`,
+  res: `    ${sp('k', 'const')} result = ${sp('k', 'await')} ${sp('f', 'run')}(job);`,
+  if1: `    ${sp('k', 'if')} (!result.ok) {`,
+  mf: `      queue.${sp('f', 'markFailed')}(job.id, result.error);`,
+  br: `      ${sp('k', 'break')};`,
+  cl: `    }`,
+  md: `    queue.${sp('f', 'markDone')}(job.id);`,
+  e2: `  }`,
+  e1: `}`,
+  blank: '',
+  fn2: `${sp('k', 'export function')} ${sp('f', 'retryDelay')}(attempt: ${sp('t', 'number')}) {`,
+  ret: `  ${sp('k', 'return')} Math.${sp('f', 'min')}(${sp('n', '30_000')}, ${sp('n', '500')} * ${sp('n', '2')} ** attempt);`,
+  cap: `  ${sp('c', '// capped exponential backoff')}`,
+  tail1: `${sp('k', 'export const')} MAX_ATTEMPTS = ${sp('n', '5')};`,
+  tail2: `${sp('k', 'export const')} QUEUE_NAME = ${sp('s', '"default"')};`,
+  tail3: `${sp('k', 'export type')} ${sp('t', 'Runner')} = (job: ${sp('t', 'Job')}) =&gt; ${sp('t', 'Promise')}&lt;${sp('t', 'Result')}&gt;;`,
+};
+const oldLoop = [
+  `  ${sp('k', 'let')} delay = ${sp('n', '500')};`,
+  `  ${sp('k', 'for')} (${sp('k', 'let')} i = ${sp('n', '0')}; i &lt; attempt; i++) {`,
+  `    delay = delay * ${sp('n', '2')};`,
+  `    ${sp('k', 'if')} (delay &gt; ${sp('n', '30_000')}) {`,
+  `      delay = ${sp('n', '30_000')};`,
+  `    }`,
+  `  }`,
+  `  ${sp('c', '// jitter, then clamp again')}`,
+  `  ${sp('k', 'return')} delay + Math.${sp('f', 'floor')}(Math.${sp('f', 'random')}() * ${sp('n', '250')});`,
+];
+const ctx = (h, o = {}) => ({ k: 'ctx', h, ...o });
+const add = (h, ag, o = {}) => ({ k: 'add', h, ag, ...o });
+const del = (h, ag) => ({ k: 'del', h, ag });
+
+function rowsFor(state) {
+  const head = [ctx(L.c1), ctx(L.fn1)];
+  const loopCtx = [ctx(L.res)];
+  const mid = [ctx(L.md), ctx(L.e2), ctx(L.e1), ctx(L.blank), ctx(L.fn2)];
+  const tail = [ctx(L.e1), ctx(L.blank), ctx(L.tail1), ctx(L.tail2), ctx(L.tail3)];
+  if (state === 'sem-mudancas') {
+    return [...head, ctx(L.forOld.replace(/<span class="w-del">items<\/span>/, 'items')), ...loopCtx, ctx(L.md), ctx(L.e2), ctx(L.e1), ctx(L.blank), ctx(L.fn2), ctx(L.cap), ctx(L.ret.replace('Math.', 'Math.')), ...tail];
+  }
+  const fresh = state === 'editando';
+  const loopA = [
+    del(L.forOld, 'A'), add(L.forNew, 'A', { fresh, wordAdd: true }), ...loopCtx,
+    add(L.if1, 'A', { fresh }), add(L.mf, 'A', { fresh }), add(L.br, 'A', { fresh }), add(L.cl, 'A', { fresh }),
+  ];
+  const base = [...head, ...loopA, ...mid];
+  if (state === 'editando' || state === 'fora-da-tela' || state === 'aceito' || state === 'buffer-sujo') {
+    return [...base, ctx(L.cap), ctx(L.ret), ...tail];
+  }
+  if (state === 'dois-agentes') {
+    return [...base, ctx(L.cap), del(oldLoop[7], 'B'), del(oldLoop[8], 'B'), add(L.ret, 'B', { fresh: true }), ...tail];
+  }
+  if (state === 'remocao-grande') {
+    return [...base, ctx(L.cap), { k: 'fold', count: 9, ag: 'B', open: false }, add(L.ret, 'B'), ...tail];
+  }
+  if (state === 'remocao-aberta') {
+    return [...base, ctx(L.cap), { k: 'fold', count: 9, ag: 'B', open: true }, ...oldLoop.map((h) => del(h, 'B')), add(L.ret, 'B'), ...tail];
+  }
+  return [...base, ctx(L.cap), ctx(L.ret), ...tail];
+}
+
+function renderRows(rows, startLine = 38) {
+  let n = startLine, o = startLine;
+  return rows.map((r) => {
+    const g = (ag) => `<span class="gut" style="background:${ag ? AG[ag].color : 'transparent'}"></span>`;
+    if (r.k === 'fold') {
+      const first = o;
+      const html = `<div class="ln fold mono"><span class="num">${first}–${first + r.count - 1}</span><span class="sg">−</span>${g(r.ag)}<span>${r.open ? '▾' : '▸'} ${r.count} linhas removidas${r.open ? ' (recolher)' : ' (mostrar)'}</span></div>`;
+      if (!r.open) o += r.count;
+      return html;
+    }
+    if (r.k === 'del') {
+      const html = `<div class="ln del"><span class="num">${o}</span><span class="sg">−</span>${g(r.ag)}<span class="tx">${r.h}</span></div>`;
+      o++;
+      return html;
+    }
+    if (r.k === 'add') {
+      const html = `<div class="ln add${r.fresh ? ' fresh' : ''}"><span class="num">${n}</span><span class="sg">+</span>${g(r.ag)}<span>${r.h}</span></div>`;
+      n++;
+      return html;
+    }
+    const html = `<div class="ln${r.cur ? ' cur' : ''}"><span class="num">${n}</span><span class="sg"></span>${g(null)}<span>${r.h}</span></div>`;
+    n++; o++;
+    return html;
+  }).join('');
+}
+
+/* ---------- cromo ---------- */
+const svg = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${d}</svg>`;
+const rail = `
+  <nav aria-label="Painéis" style="width:48px;flex:none;border-right:1px solid #1d2230;background:#0c0f15;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0">
+    <button class="ab abOn" aria-label="Arquivos">${svg('<path d="M3 2.5h7l3.5 3.5v9.5H3z"/><path d="M10 2.5V6h3.5"/>')}</button>
+    <button class="ab" aria-label="Buscar">${svg('<circle cx="8" cy="8" r="5"/><path d="M12 12l4 4"/>')}</button>
+    <button class="ab" aria-label="Git">${svg('<circle cx="5" cy="4" r="1.8"/><circle cx="5" cy="14" r="1.8"/><circle cx="13" cy="7" r="1.8"/><path d="M5 6v6M13 9c0 3-8 2-8 3"/>')}</button>
+    <button class="ab" aria-label="Agentes">${svg('<rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="M5.5 7.5l2 1.5-2 1.5M9.5 10.5h3"/>')}</button>
+    <button class="ab" aria-label="Problemas">${svg('<path d="M9 2.5l7 12.5H2z"/><path d="M9 7v3.5M9 12.5h.01"/>')}</button>
+  </nav>`;
+const dot = (c) => `<span style="width:7px;height:7px;border-radius:50%;background:${c};flex:none"></span>`;
+const folder = (c) => `<svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true"><path d="M1.5 2.5h4l1.5 1.5h7.5v8h-13z" fill="${c}33" stroke="${c}" stroke-width="1.2"/></svg>`;
+const badge = (bg, fg, t) => `<span style="width:16px;height:16px;border-radius:4px;background:${bg};color:${fg};display:grid;place-items:center;font:600 7.5px 'JetBrains Mono',monospace;flex:none">${t}</span>`;
+function side(md) {
+  const files = md
+    ? [['docs', 0, 1], ['guide.md', 1, 0, 'md', 'A']]
+    : [['src', 0, 1], ['worker', 1, 1], ['queue-worker.ts', 2, 0, 'ts', 'A'], ['retry.ts', 2, 0, 'ts', 'B'], ['types.ts', 2, 0, 'ts']];
+  const rows = files.map(([name, depth, isDir, kind, ag]) => {
+    const colors = ['#e8b04b', '#6fa8ff', '#b48cff', '#4fc3a1'];
+    const ic = isDir ? folder(colors[depth % 4]) : kind === 'md' ? badge('#2a2f3d', '#c9cede', 'M↓') : badge('#3178c6', '#fff', 'TS');
+    const sel = (md && name === 'guide.md') || (!md && name === 'queue-worker.ts');
+    return `<div class="tr mono${sel ? ' sel' : ''}" style="padding-left:${10 + depth * 14}px">${isDir ? '▾' : ''} ${ic}<span>${name}</span>${ag ? dot(AG[ag].color) : ''}</div>`;
+  }).join('');
+  return `<aside style="width:270px;flex:none;border-right:1px solid #1d2230;display:flex;flex-direction:column;background:#0d1016">
+    <div style="height:36px;flex:none;display:flex;align-items:center;padding:0 12px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:#8d94a6">Arquivos</div>
+    ${rows}
+    <div style="margin-top:auto;border-top:1px solid #1d2230;padding:10px 12px;font-size:11px;color:#8d94a6">Pastas: a cor muda a cada nível · Arquivos: ícone da linguagem</div>
+  </aside>`;
+}
+
+/* ---------- resumo na linha do caminho ---------- */
+function summary(state, mdMode) {
+  if (state === 'sem-mudancas' || state === 'leitura-sem-mudancas') {
+    return `<span class="chip" style="color:#8d94a6" title="O card marca aqui o que os agentes mudarem neste arquivo, em tempo real"><i style="background:#3fb68b"></i>ao vivo · sem mudanças desde 12:40</span>`;
+  }
+  if (state === 'arquivo-grande') {
+    return `<span class="chip" style="color:#f0b25c">diff ao vivo desligado neste arquivo grande</span>`;
+  }
+  if (state === 'aceito') {
+    return `<span class="chip" style="color:#8d94a6"><i style="background:#3fb68b"></i>ao vivo · base: 12:52 (aceito)</span>`;
+  }
+  const two = state === 'dois-agentes' || state === 'remocao-grande' || state === 'remocao-aberta' || state === 'leitura-md';
+  const a = `<span class="chip"><i style="background:${A.color}"></i>${A.short} <b class="pl">+5</b> <b class="mi">−1</b></span>`;
+  const b = `<span class="chip"><i style="background:${B.color}"></i>${B.short} <b class="pl">+1</b> <b class="mi">−${state === 'dois-agentes' ? 2 : 9}</b></span>`;
+  const nav = `<button class="btn btnS" aria-label="Mudança anterior" title="Mudança anterior · Alt+↑">↑</button><button class="btn btnS" aria-label="Próxima mudança" title="Próxima mudança · Alt+↓">↓</button>`;
+  return `${a}${two ? b : ''}<span class="chip" style="color:#8d94a6">desde que abriu · 12:40</span>${nav}<button class="btn btnS">Aceitar tudo</button>`;
+}
+
+/* ---------- editor (código) ---------- */
+function editor(state) {
+  let extra = '';
+  const rows = rowsFor(state);
+  const grande = state === 'arquivo-grande';
+  const body = `<div class="mono" style="flex:1;min-width:0;padding:8px 0;font-size:12.5px;color:#c9cede;overflow:hidden;position:relative">${renderRows(grande ? rowsFor('sem-mudancas') : rows)}</div>`;
+  if (state === 'dois-agentes') {
+    extra += `<div class="tip" style="left:700px;top:262px"><span style="display:flex;align-items:center;gap:6px">${dot(B.color)}<strong>${B.name}</strong> mudou 55 há 6 s</span><span style="color:#a3aabb">${B.task}</span><span class="mono" style="color:#8d94a6;font-size:11.5px"><span class="pl">+1</span> <span class="mi">−2</span> · base: ao abrir</span><span style="display:flex;gap:6px;margin-top:4px"><button class="btn btnS">Aceitar este trecho</button><button class="btn btnS">Abrir o card</button></span></div>`;
+  }
+  if (state === 'fora-da-tela') {
+    extra += `<div class="pill">↓ 2 mudanças abaixo · ${dot(B.color)} ${B.short} editando<button class="btn btnS" style="margin-left:4px">Ir</button></div>`;
+  }
+  if (state === 'aceito') {
+    extra += `<div class="toast">Marcas limpas: a base agora é este arquivo.<button class="btn btnS">Desfazer</button></div>`;
+  }
+  const mini = (() => {
+    const bars = Array.from({ length: 30 }, (_, i) => ({ w: [70, 50, 80, 60, 40, 75, 55][i % 7], c: '#3a4258' }));
+    if (state !== 'sem-mudancas' && state !== 'aceito' && !grande) {
+      [4, 5, 6, 7, 8].forEach((i) => (bars[i].c = A.color));
+      if (state !== 'editando') [20, 21].forEach((i) => (bars[i].c = B.color));
+    }
+    return bars.map((b) => `<span style="height:3px;width:${b.w}%;background:${b.c}"></span>`).join('');
+  })();
+  const banner = state === 'buffer-sujo'
+    ? `<div class="banner" role="status">O arquivo mudou no disco enquanto você editava. Suas edições ficaram no editor; as marcas do agente aparecem depois de recarregar.<button class="btn btnS">Recarregar do disco</button><button class="btn btnS">Manter o meu</button></div>`
+    : grande
+      ? `<div class="banner" role="status">Arquivo grande (12 400 linhas): aberto em modo simples. O diff ao vivo fica desligado; a visão de Git mostra o diff completo.</div>`
+      : '';
+  return { banner, html: `<div style="flex:1;min-height:0;display:flex;position:relative">${body}${extra}<div aria-hidden="true" style="width:70px;flex:none;border-left:1px solid #161a24;padding:8px 6px;display:flex;flex-direction:column;gap:2px;opacity:.55">${mini}</div></div>` };
+}
+
+/* ---------- editor (leitura markdown) ---------- */
+function reader(state) {
+  const diff = state === 'leitura-md';
+  const colA = `style="--ag:${A.color}"`, colB = `style="--ag:${B.color}"`;
+  const blkAdd = (inner, c, who) => `<div class="blk badd" ${c}><span class="sgm pl">+</span>${inner}</div>`;
+  const content = `<div class="md">
+    <h2>Retry e fila de tarefas</h2>
+    <p>Cada tarefa entra na fila e roda em ordem. O worker para na primeira falha e marca a tarefa para tentar de novo.</p>
+    ${diff ? `<div class="blk bdel" ${colB}><span class="sgm mi">−</span><p style="margin:0">O atraso entre tentativas é fixo, de 500 ms.</p></div>
+    <div class="blk badd" ${colB}><span class="sgm pl">+</span><p style="margin:0">O atraso entre tentativas cresce de forma exponencial, <span class="w-add">com teto de 30 s</span>.</p></div>` : `<p>O atraso entre tentativas é fixo, de 500 ms.</p>`}
+    <h3>Passos</h3>
+    <ol>
+      <li>Leia a tarefa da fila.</li>
+      ${diff ? `<li class="blk badd" ${colA}><span class="sgm pl" style="left:-38px">+</span>Se falhar, marque a tarefa como falha e pare.</li>` : ''}
+      <li>Marque a tarefa como concluída.</li>
+    </ol>
+    ${diff ? `<div class="blk bdel" ${colA}><span class="sgm mi">−</span><span class="mono" style="font-size:12px">▸ 1 parágrafo removido (mostrar)</span></div>` : ''}
+    <h3>Limites</h3>
+    ${diff ? `<div class="blk badd" ${colA}><span class="sgm pl">+</span><p style="margin:0">São no máximo 5 tentativas por tarefa.</p></div>` : ''}
+    <p>Veja o código em <code class="mono">queue-worker.ts</code>.</p>
+  </div>`;
+  const bars = Array.from({ length: 30 }, (_, i) => ({ w: [70, 50, 80, 60, 40, 75, 55][i % 7], c: '#3a4258' }));
+  if (diff) { [6, 7].forEach((i) => (bars[i].c = B.color)); [12, 14].forEach((i) => (bars[i].c = A.color)); }
+  const mini = bars.map((b) => `<span style="height:3px;width:${b.w}%;background:${b.c}"></span>`).join('');
+  return { banner: '', html: `<div style="flex:1;min-height:0;display:flex;position:relative">${content}<div aria-hidden="true" style="width:70px;flex:none;border-left:1px solid #161a24;padding:8px 6px;display:flex;flex-direction:column;gap:2px;opacity:.55">${mini}</div></div>` };
+}
+
+/* ---------- card ---------- */
+function card(state) {
+  const md = state === 'leitura-md' || state === 'leitura-sem-mudancas';
+  const ed = md ? reader(state) : editor(state);
+  const file = md ? 'guide.md' : 'queue-worker.ts';
+  const tabBadge = md ? badge('#2a2f3d', '#c9cede', 'M↓') : badge('#3178c6', '#fff', 'TS');
+  const tabs = md
+    ? `<span class="tab tabOn">${tabBadge.replace('width:16px;height:16px', 'width:14px;height:14px')}<span>guide.md</span>${state === 'leitura-md' ? dot(A.color) : ''}</span>`
+    : `<span class="tab tabOn">${tabBadge.replace('width:16px;height:16px', 'width:14px;height:14px')}<span>queue-worker.ts</span>${!['sem-mudancas', 'aceito', 'arquivo-grande'].includes(state) ? dot(A.color) : ''}${state === 'buffer-sujo' ? dot('#e8eaf0') : ''}</span><span class="tab">${badge('#3178c6', '#fff', 'TS').replace('width:16px;height:16px', 'width:14px;height:14px')}<span>retry.ts</span></span>`;
+  const crumbs = md
+    ? `docs › <span style="color:#c9cede">guide.md</span>`
+    : `src › worker › queue-worker.ts › <span style="color:#c9cede">${state === 'sem-mudancas' ? 'drain' : 'retryDelay'}</span>`;
+  const agentsPill = state === 'sem-mudancas' || state === 'aceito' || state === 'arquivo-grande' || state === 'leitura-sem-mudancas'
+    ? ''
+    : `<span style="font-size:11.5px;padding:2px 8px;border-radius:999px;background:#1a2040;color:#c3cbff;display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:#7d8cff"></span>${['dois-agentes', 'remocao-grande', 'remocao-aberta', 'leitura-md'].includes(state) ? '2 agentes mexendo aqui' : '1 agente mexendo aqui'}</span>`;
+  return `
+  <section aria-label="Card de código" style="position:absolute;left:30px;top:24px;width:1380px;height:852px;border-radius:12px;background:#0f1218;border:1px solid #4a5690;box-shadow:0 0 0 1px #4a5690,0 14px 40px #000a;display:flex;flex-direction:column;overflow:hidden">
+    <header style="height:42px;flex:none;display:flex;align-items:center;gap:10px;padding:0 8px 0 12px;border-bottom:1px solid #1d2230;background:#12151d">
+      <span style="width:24px;height:24px;border-radius:7px;background:#1d2216;display:grid;place-items:center"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#b9d68a" stroke-width="1.6"><path d="M5 3L1.5 7 5 11M9 3l3.5 4L9 11"/></svg></span>
+      <span style="font-size:13.5px;font-weight:600">Projeto</span><span class="mono" style="font-size:12px;color:#8d94a6">~/Projetos/exemplo</span>
+      <span style="flex:1"></span>
+      <label style="display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #2a2f3d;border-radius:7px;width:300px;box-sizing:border-box;background:#0c0f15;color:#8d94a6;font-size:12.5px">Ir para arquivo…  Ctrl P</label>
+      <span style="flex:1"></span>${agentsPill}
+    </header>
+    <div style="flex:1;min-height:0;display:flex">
+      ${rail}${side(md)}
+      <main style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0b0d12">
+        <div role="tablist" style="height:36px;flex:none;display:flex;background:#0d1016;border-bottom:1px solid #1d2230;overflow:hidden">${tabs}<span style="flex:1"></span>
+          <span style="display:flex;align-items:center;gap:6px;padding:0 8px">${md ? '<button type="button" class="btn">código</button>' : ''}<button type="button" class="btn" disabled>Dividir</button></span>
+        </div>
+        <div class="mono" style="height:26px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;font-size:11.5px;color:#8d94a6;border-bottom:1px solid #161a24;white-space:nowrap"><span>${crumbs}</span><span style="flex:1"></span>${summary(state, md)}</div>
+        ${ed.banner}
+        ${ed.html}
+        <div style="height:150px;flex:none;border-top:1px solid #1d2230;display:flex;flex-direction:column;background:#0d1016">
+          <div role="tablist" style="display:flex;gap:2px;padding:0 8px;border-bottom:1px solid #1d2230"><button class="pt ptOn">Problemas</button><button class="pt">Saída</button><button class="pt">Linha do tempo do arquivo</button><span style="flex:1"></span><button class="pt">Mandar a seleção para um agente</button></div>
+          <div class="mono" style="padding:8px 14px;font-size:12px;color:#8d94a6">do tsc, ao salvar</div>
+        </div>
+      </main>
+    </div>
+    <footer class="mono" style="height:26px;flex:none;display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d2230;background:#0c0f15;font-size:11.5px;color:#8d94a6"><span>main</span><span style="color:#f0b25c">2 alterados</span><span style="flex:1"></span><span>Ln 52, Col 12</span><span>Espaços: 2</span><span>UTF-8</span><span>${md ? 'Markdown' : 'TypeScript'}</span><span style="color:${state === 'buffer-sujo' ? '#f0b25c' : '#8fdcc0'}">${state === 'buffer-sujo' ? 'alterado' : 'salvo'}</span></footer>
+  </section>`;
+}
+
+/* ---------- folha de decisões ---------- */
+const STATES = [
+  ['sem-mudancas', 'Sem mudanças'], ['editando', 'Agente editando'], ['dois-agentes', 'Dois agentes + tooltip'],
+  ['remocao-grande', 'Remoção grande (recolhida)'], ['remocao-aberta', 'Remoção grande (aberta)'], ['fora-da-tela', 'Mudança fora da tela'],
+  ['aceito', 'Depois de aceitar'], ['buffer-sujo', 'Você editando + agente grava'], ['arquivo-grande', 'Arquivo grande'],
+  ['leitura-sem-mudancas', 'Leitura .md (sem mudanças)'], ['leitura-md', 'Leitura .md com mudanças'],
+];
+function sheet(state) {
+  const nav = `<div id="nav">${STATES.map(([id, l]) => `<a href="#${id}" class="${id === state ? 'on' : ''}">${l}</a>`).join('')}</div>`;
+  return `${nav}
+  <h2>Decisões do diff ao vivo</h2>
+  <table>
+    <tr><th>Base do diff</th><td>O arquivo <b>como estava quando você abriu a aba</b> (ou no último “Aceitar”). Não é o último commit: aqui os agentes trabalham sem commitar, então o HEAD acumularia tudo o que já foi feito antes e o que está acontecendo agora sumiria no meio. O diff contra o HEAD continua na visão de Git (“Ver diff de tudo”). O botão <code>Diff com HEAD</code> sai. A base aparece escrita na linha do caminho: “desde que abriu · 12:40”.</td></tr>
+    <tr><th>Como aparece</th><td>No próprio editor, sem painel lateral. <b>Fundo</b> diz o que mudou: verde nas linhas novas, vermelho nas removidas. Sinal <code>+</code> / <code>−</code> numa coluna de 14 px entre o número e a tira. Linhas removidas ficam como <b>fantasma</b> entre as linhas atuais: número antigo apagado, texto esmaecido, não editável, sem ocupar número de linha novo. Linha trocada = fantasma vermelho + linha verde, com a palavra que mudou destacada. Remoção de 4 linhas ou mais vem <b>recolhida</b> numa linha (“9 linhas removidas”) que abre ao clicar. O minimapa pinta as linhas mudadas com a cor do agente.</td></tr>
+    <tr><th>Ao vivo</th><td>Cada gravação no disco pelo agente atualiza as marcas; as linhas novas pulsam em verde por 2,4 s. O card <b>nunca rola sozinho</b>: se a mudança está fora da tela aparece o aviso “↓ 2 mudanças abaixo” com botão Ir. Alt+↑ e Alt+↓ pulam entre mudanças.</td></tr>
+    <tr><th>Quem editou</th><td>A <b>tira de 4 px do gutter</b> mantém a cor do card do agente (atribuição já existente: trechos de diff capturados por task ∩ cor do card). O fundo (verde/vermelho) e a cor da tira são canais separados. Passar o mouse mostra o tooltip existente: “REVISOR · Agente B mudou 55 há 6 s”, task, <code>+1 −2</code>, e os botões “Aceitar este trecho” e “Abrir o card”. Linha mudada sem evidência de autoria fica com a tira apagada: nada de autor inventado. O resumo da linha do caminho soma por agente (“IMPL +5 −1”).</td></tr>
+    <tr><th>Aceitar / limpar</th><td>“Aceitar tudo” (linha do caminho) ou “Aceitar este trecho” (tooltip): a base passa a ser o arquivo de agora e as marcas somem. Aparece um aviso “Marcas limpas… Desfazer” por 8 s. Sem aceitar, as marcas ficam enquanto a aba estiver aberta; fechar a aba descarta a base e reabrir tira novo retrato. Não existe auto-limpeza por tempo.</td></tr>
+    <tr><th>Leitura de .md</th><td>O mesmo diff, por <b>bloco</b> do texto renderizado: bloco novo com fundo verde e barra na cor do agente; bloco trocado = parágrafo antigo em vermelho esmaecido acima do novo, com o trecho que mudou destacado; bloco removido recolhido em “1 parágrafo removido (mostrar)”. O botão “código” (alternar leitura/código) fica na barra das abas, ao lado de “Dividir”. Resumo, aceitar e minimapa iguais ao código.</td></tr>
+    <tr><th>Você editando</th><td>Se o buffer tem edição sua e o agente grava o mesmo arquivo, vale a regra de hoje: nada é sobrescrito, aparece o aviso e as marcas do agente entram depois de “Recarregar do disco”. Suas próprias edições não são marcadas como de agente.</td></tr>
+    <tr><th>Limites</th><td>Arquivo em modo simples (grande) não faz diff ao vivo; a linha do caminho avisa. Imagem e PDF não têm diff.</td></tr>
+  </table>`;
+}
+
+function render() {
+  const state = (location.hash || '#editando').slice(1);
+  const ok = STATES.some(([id]) => id === state) ? state : 'editando';
+  document.getElementById('board').innerHTML = card(ok);
+  document.getElementById('sheet').innerHTML = sheet(ok);
+  document.body.dataset.state = ok;
+}
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>

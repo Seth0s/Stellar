@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideAgentLineMarks } from "../../src/renderer/src/code-line-attribution-decision";
+import { decideAgentLineMarks, decideFileOwner } from "../../src/renderer/src/code-line-attribution-decision";
 
 describe("decideAgentLineMarks", () => {
   it("expands hunks and lets the later at win on overlap", () => {
@@ -46,5 +46,27 @@ describe("decideAgentLineMarks", () => {
         },
       ]).size,
     ).toBe(0);
+  });
+});
+
+describe("decideFileOwner", () => {
+  const a = { cardId: "a", label: "IMPL", at: 1 };
+  const b = { cardId: "b", label: "REVISOR", at: 2 };
+
+  it("a single declared owner wins over territory", () => {
+    expect(decideFileOwner([a], [b])).toEqual(a);
+  });
+
+  it("two declared owners are not evidence of either", () => {
+    expect(decideFileOwner([a, b], [])).toBeNull();
+  });
+
+  it("without a declaration, one running agent in the territory is the owner", () => {
+    expect(decideFileOwner(null, [b])).toEqual(b);
+  });
+
+  it("without a declaration, two agents in the territory stay unattributed", () => {
+    expect(decideFileOwner(null, [a, b])).toBeNull();
+    expect(decideFileOwner(null, [])).toBeNull();
   });
 });

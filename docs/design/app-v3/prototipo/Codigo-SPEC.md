@@ -46,14 +46,14 @@ Prototype hex → Stellar tokens (when equivalent). New chrome colors become tok
 | Agents panel | cards IMPL/REVISOR + territory note | 13px title; 12px body; mono 11.5px territory | border `#232838`; note `#8d94a6` | card radius 10; pad 10; gap 6/8 | note: `Arquivo no território de um agente rodando abre com um aviso antes de você editar.` |
 | Problems side | `✕ …` `#f2a093` · `! …` `#f0b25c`; footer `do tsc, ao salvar` | mono / UI 12px | — | — | from tsc/linter on save |
 | Editor tabs | filename + lang badge + agent/dirty dots | 12.5px; tabOn `#e8eaf0` | bar `#0d1016`; border `#1d2230`; tab border-right `#1d2230`; tabOn bg `#0b0d12` + inset `0 2px 0 #7d8cff` | height 36; pad `0 12px`; gap 8 | click selects; badge 14×14 radius 3 |
-| Tab actions | `Diff com HEAD` / `Fechar diff`; `Dividir` | `.btn` | — | right cluster pad `0 8px` gap 6 | toggles side-by-side HEAD |
+| Tab actions | `Dividir`; for `.md` also the reading/code toggle (`código` / `preview`) before it | `.btn` | — | right cluster pad `0 8px` gap 6 | `Diff com HEAD` is gone: the diff is live and inline (see `CodigoDiffVivo.dc.html`) |
 | Breadcrumbs | `src › renderer › src › useTerminal.ts ›` + symbol `replayInto` | 11.5px `#8d94a6`; symbol `#c9cede` | border-bottom `#161a24` | height 26; pad `0 14px`; gap 6 | — |
 | Code lines | syntax `.k` `#c792ea` `.s` `#c3e88d` `.f` `#82aaff` `.c` `#636b85` `.t` `#ffcb6b` `.n` `#f78c6c` body `#c9cede` | JetBrains Mono 12.5px | editor bg `#0b0d12` | line height 21; num width 44 right pad 12 `#4f5670` | gutter strip 4×21 + margin-right 10 |
 | Agent gutter | colored `#f0883e` (agent) / `#e5534b` (error) | — | — | gut column | tooltip on hover |
 | Current line tint | bg `#1a1712` | — | — | — | — |
 | Error line tint | bg `#2a1414`; wavy underline `#e5534b` | — | — | — | diagnostics |
 | Gutter tooltip | `IMPL · Claude mudou 742–745 há 40 s`; `task #c5b6ae · …`; `Ver diff` / `Abrir o card` | 12px; strong name | bg `#12151d`; border `#343c55`; shadow `0 8px 24px #000a` | max-width 300; pad `8px 10px`; radius 9; gap 4 | buttons `.btn` |
-| Diff pane | title `antes (HEAD)` | UI 11.5px `#8d94a6` | bg `#0c0e13`; border-left `#1d2230` | width 46% | removed lines red gut |
+| Diff pane | superseded: removed lines are ghost rows inline, no side pane | — | — | — | `CodigoDiffVivo.dc.html` |
 | Minimap | abstract bars | — | bars `#3a4258` / agent `#f0883e` / error `#e5534b` | width 70; opacity .55; border-left `#161a24` | decorative overview |
 | Bottom panel | tabs `Problemas 2` · `Saída` · `Linha do tempo do arquivo` · `Mandar a seleção para um agente` | `.pt` 12px `#8d94a6`; `.ptOn` `#e8eaf0` + bottom `#7d8cff` | bg `#0d1016`; borders `#1d2230` | height 150; tab height 30; pad `0 8px` / body `8px 14px` | — |
 | Status bar | `main` · `6 alterados` · `✕ 1  ! 1` · `Ln 744, Col 38` · `Espaços: 2` · `UTF-8` · `TypeScript` · `~2,1k tokens` · `salvo` | mono 11.5px `#8d94a6`; dirty `#f0b25c`; errors `#f2a093`; saved `#8fdcc0` | bg `#0c0f15`; border-top `#1d2230` | height 26; pad `0 12px`; gap 16 | CardFrame footer slot or inner bar |
@@ -77,7 +77,7 @@ Prototype hex → Stellar tokens (when equivalent). New chrome colors become tok
 | State | Behavior |
 |---|---|
 | `side` | Rail sets panel; only one `sc-if` visible |
-| `diff` | Toggles HEAD side-by-side; label `Diff com HEAD` ↔ `Fechar diff` |
+| live diff | No state to toggle: the open file is always measured against its baseline (opened, or last accept) — `CodigoDiffVivo.dc.html` |
 | Ctrl+P | Focus go-to / open file palette |
 | Territory conflict | Before human edit of a file in a running agent's territory → warning dialog |
 | Save | Refresh problems from tsc/project linter |

@@ -1,9 +1,9 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { decideFilesFooter } from "./card-footer-decision";
 import { Icon, type IconName } from "./icons";
-import { Markdown } from "./Markdown";
+import { Markdown, MarkdownDiff, type MarkdownDiffBlock } from "./Markdown";
 import type { Rect } from "./board-model";
 import type { ContentMatch, DirEntry, GitAttribution, GitStatus, TaskBoardItem } from "../../preload/index";
 import { decideOpenFileOnDiskChange, type DiskConflictFlag } from "../../shared/file-reload-decision";
@@ -15,8 +15,16 @@ import {
 } from "./code-file-icon-decision";
 import { folderColorAtDepth, folderFillAtDepth } from "./code-folder-color-decision";
 import { decideTerritoryEditWarn, pathInTerritory } from "./code-territory-warn-decision";
-import { decideAgentLineMarks, type AgentLineHunk } from "./code-line-attribution-decision";
-import { decideDiffHunkRangesForFile } from "./code-diff-hunk-lines-decision";
+import { decideAgentLineMarks, decideFileOwner, type AgentLineHunk } from "./code-line-attribution-decision";
+import {
+  decideBaselineAfterAccept,
+  decideFreshHunks,
+  decideHunkJump,
+  decideLiveDiff,
+  decideMarkdownBlockDiff,
+  type LiveDiff,
+} from "./code-live-diff-decision";
+import { decideLanguageName } from "./code-language-name-decision";
 import { decideFuzzyFileHits } from "./code-fuzzy-match-decision";
 import { decideBreadcrumbSymbol } from "./code-breadcrumb-symbol-decision";
 import { decideCodeProblems, type CodeProblem } from "./code-diagnostics-decision";
@@ -225,11 +233,20 @@ type OpenTab = {
   diskConflict: DiskConflictFlag | null;
   /**
    * Bumps when a clean tab takes new bytes from disk. CodeEditor reads
-   * `value` once at mount (it owns the document after that), so a live
-   * disk reload has to remount — FilesCard keys the editor on this,
-   * without touching CodeEditor.tsx.
+   * `value` once at mount (it owns the document after that), so the editor
+   * gets this as `syncEpoch` and applies the new text in place — the scroll
+   * position and the cursor stay where they are.
    */
   contentEpoch: number;
+  /**
+   * The text the live diff measures against: the file as it was when the
+   * tab opened, or when the last "accept" happened. `null` while loading.
+   */
+  baseline: string | null;
+  /** Epoch-ms the baseline was taken. */
+  baselineAt: number;
+  /** The baseline came from an "accept", not from opening the tab. */
+  baselineAccepted: boolean;
   /** DESIGN-BACKLOG.md item 51 — set only when this tab was opened from
    * a content-search match; consumed once by `CodeEditor`'s own mount
    * effect (never re-read after, same "read once" contract as its
@@ -549,8 +566,18 @@ function FilesCardInner({
   const [attribution, setAttribution] = useState<GitAttribution | null>(null);
   const [sidePanel, setSidePanel] = useState<SidePanel>("files");
   const [bottomTab, setBottomTab] = useState<BottomTab>("problems");
-  const [diffOn, setDiffOn] = useState(false);
-  const [headText, setHeadText] = useState<string | null>(null);
+  /** Hunks a live write just produced; they pulse once, then clear. */
+  const [liveFresh, setLiveFresh] = useState<ReadonlySet<string>>(new Set());
+  /** Until when a just-made live change may raise the "changes below" hint. */
+  const [liveHintUntil, setLiveHintUntil] = useState(0);
+  const [liveUndo, setLiveUndo] = useState<null | {
+    path: string;
+    baseline: string;
+    baselineAt: number;
+    accepted: boolean;
+  }>(null);
+  const [viewportLines, setViewportLines] = useState<{ top: number; bottom: number } | null>(null);
+  const [jumpRequest, setJumpRequest] = useState<{ line: number; nonce: number } | null>(null);
   const [goToOpen, setGoToOpen] = useState(false);
   const [goToQuery, setGoToQuery] = useState("");
   const [goToHits, setGoToHits] = useState<Array<{ path: string; name: string; score: number }>>([]);
@@ -560,7 +587,6 @@ function FilesCardInner({
   const [problems, setProblems] = useState<CodeProblem[]>([]);
   /** Empty hint vs "no checker in this project" after an on-save diagnose. */
   const [problemsHint, setProblemsHint] = useState<"idle" | "no-checker" | "failed">("idle");
-  const [agentHunks, setAgentHunks] = useState<AgentLineHunk[]>([]);
   const [outputLog, setOutputLog] = useState<string>("");
 
   const rosterColors = useMemo(
@@ -630,12 +656,243 @@ function FilesCardInner({
     return out;
   }, [attribution, territoryAgents, rosterColors, gitStatus, kids, cardProviders]);
 
-  const agentLineMarks = useMemo(() => decideAgentLineMarks(agentHunks), [agentHunks]);
-
   const editorPerf = useMemo(
     () => (content == null ? null : decideEditorPerfMode(content)),
     [content],
   );
+
+  // Live diff: the open file against its baseline (what it was when the tab
+  // opened, or at the last accept). The card reads this on every content
+  // change, so an agent's write to the file shows up without any button.
+  const baselineText = activeTab?.baseline ?? null;
+  const isTextFile = activePath != null && !tooLarge && mediaKind(activePath) !== "image";
+  const liveReady = isTextFile && content !== null && baselineText !== null;
+  const liveDiff = useMemo<LiveDiff | null>(
+    () =>
+      liveReady && content !== null && baselineText !== null && editorPerf?.mode !== "plain"
+        ? decideLiveDiff(baselineText, content)
+        : null,
+    [liveReady, content, baselineText, editorPerf?.mode],
+  );
+  const liveOff = liveReady && liveDiff === null;
+  const mdDiff = useMemo(
+    () =>
+      liveReady &&
+      content !== null &&
+      baselineText !== null &&
+      activePath != null &&
+      mediaKind(activePath) === "markdown" &&
+      view === "preview"
+        ? decideMarkdownBlockDiff(baselineText, content)
+        : null,
+    [liveReady, content, baselineText, activePath, view],
+  );
+
+  // Authorship only where the app has evidence: the file's declared owner,
+  // or the one running agent whose territory holds it. Two candidates is not
+  // evidence of either, so the marks stay neutral.
+  const fileOwner = useMemo(() => {
+    if (!activePath) return null;
+    const declared = (attribution?.files ?? []).find((f) => f.path === activePath && f.state === "declared");
+    const territoryHits = territoryAgents.filter(
+      (a) => a.running && a.territory.some((p) => pathInTerritory(activePath, p)),
+    );
+    const owner = decideFileOwner(
+      declared ? declared.declared.map((d) => ({ cardId: d.cardId, label: d.label ?? null, at: d.updatedAt })) : null,
+      territoryHits.map((h) => ({ cardId: h.cardId, label: h.label ?? null, at: null })),
+    );
+    if (!owner) return null;
+    const { cardId, label, at } = owner;
+    const task = boardTasks.find((tk) => tk.cards.some((c) => c.cardId === cardId));
+    return {
+      cardId,
+      color: accentForProvider(cardProviders[cardId]),
+      label: label ?? cardId,
+      taskId: task?.id ?? null,
+      taskTitle: task?.promptPreview?.slice(0, 40) ?? null,
+      at: at ?? task?.updatedAt ?? null,
+    };
+  }, [activePath, attribution, territoryAgents, cardProviders, boardTasks]);
+
+  const agentHunks = useMemo<AgentLineHunk[]>(
+    () =>
+      fileOwner && liveDiff
+        ? liveDiff.hunks.filter((h) => h.toLine >= h.fromLine).map((h) => ({ fromLine: h.fromLine, toLine: h.toLine, ...fileOwner }))
+        : [],
+    [fileOwner, liveDiff],
+  );
+  const agentLineMarks = useMemo(() => decideAgentLineMarks(agentHunks), [agentHunks]);
+  const liveColors = useMemo(
+    () => new Map<string, string>(fileOwner && liveDiff ? liveDiff.hunks.map((h) => [h.id, fileOwner.color]) : []),
+    [fileOwner, liveDiff],
+  );
+  const liveAddedLines = useMemo(() => {
+    const out = new Set<number>();
+    for (const h of liveDiff?.hunks ?? []) for (let n = h.fromLine; n <= h.toLine; n++) out.add(n);
+    return out;
+  }, [liveDiff]);
+
+  // A disk reload that produced new hunks makes them pulse once, and raises
+  // the "changes below" hint for a while if they are off screen.
+  const prevLiveRef = useRef<{ path: string; diff: LiveDiff | null; epoch: number } | null>(null);
+  const liveTimers = useRef<{ fresh: ReturnType<typeof setTimeout> | null; hint: ReturnType<typeof setTimeout> | null }>({
+    fresh: null,
+    hint: null,
+  });
+  const liveEpoch = activeTab?.contentEpoch ?? 0;
+  useEffect(() => {
+    const prev = prevLiveRef.current;
+    const path = activePath ?? "";
+    prevLiveRef.current = { path, diff: liveDiff, epoch: liveEpoch };
+    if (!prev || prev.path !== path || prev.epoch === liveEpoch) return;
+    const fresh = decideFreshHunks(prev.diff, liveDiff);
+    if (fresh.size === 0) return;
+    setLiveFresh(fresh);
+    setLiveHintUntil(Date.now() + 8000);
+    if (liveTimers.current.fresh) clearTimeout(liveTimers.current.fresh);
+    if (liveTimers.current.hint) clearTimeout(liveTimers.current.hint);
+    liveTimers.current.fresh = setTimeout(() => setLiveFresh(new Set()), 2400);
+    liveTimers.current.hint = setTimeout(() => setLiveHintUntil(0), 8000);
+  }, [liveDiff, activePath, liveEpoch]);
+  useEffect(
+    () => () => {
+      if (liveTimers.current.fresh) clearTimeout(liveTimers.current.fresh);
+      if (liveTimers.current.hint) clearTimeout(liveTimers.current.hint);
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+    },
+    [],
+  );
+
+  const livePill = useMemo(() => {
+    if (!liveDiff || !viewportLines || liveHintUntil === 0 || view === "preview") return null;
+    const below = liveDiff.hunks.filter((h) => h.anchorLine > viewportLines.bottom);
+    if (below.length > 0) return { dir: "below" as const, count: below.length, line: below[0]!.anchorLine };
+    const above = liveDiff.hunks.filter((h) => Math.max(h.toLine, h.anchorLine) < viewportLines.top);
+    if (above.length > 0) return { dir: "above" as const, count: above.length, line: above[above.length - 1]!.anchorLine };
+    return null;
+  }, [liveDiff, viewportLines, liveHintUntil, view]);
+
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function rememberForUndo(tab: OpenTab) {
+    setLiveUndo({
+      path: tab.path,
+      baseline: tab.baseline ?? "",
+      baselineAt: tab.baselineAt,
+      accepted: tab.baselineAccepted,
+    });
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setLiveUndo(null), 8000);
+  }
+  function acceptAll() {
+    if (!activeTab || activeTab.content === null) return;
+    rememberForUndo(activeTab);
+    updateTab(activeTab.path, { baseline: activeTab.content, baselineAt: Date.now(), baselineAccepted: true });
+  }
+  function acceptHunk(hunkId: string) {
+    if (!activeTab || activeTab.content === null || activeTab.baseline === null) return;
+    const hunk = liveDiff?.hunks.find((h) => h.id === hunkId);
+    if (!hunk) return;
+    rememberForUndo(activeTab);
+    updateTab(activeTab.path, {
+      baseline: decideBaselineAfterAccept(activeTab.baseline, activeTab.content, hunk),
+      baselineAt: Date.now(),
+      baselineAccepted: true,
+    });
+  }
+  function undoAccept() {
+    if (!liveUndo) return;
+    updateTab(liveUndo.path, {
+      baseline: liveUndo.baseline,
+      baselineAt: liveUndo.baselineAt,
+      baselineAccepted: liveUndo.accepted,
+    });
+    setLiveUndo(null);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+  }
+  function jumpToHunk(dir: 1 | -1) {
+    const hunk = decideHunkJump(liveDiff, cursorPos.line, dir);
+    if (hunk) setJumpRequest((r) => ({ line: hunk.anchorLine, nonce: (r?.nonce ?? 0) + 1 }));
+  }
+  const clockOf = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const liveAccepted = activeTab?.baselineAccepted ?? false;
+  const liveLabels = useMemo(
+    () => ({
+      removedRows: (count: number, open: boolean) =>
+        t(open ? "files.liveRemovedHide" : "files.liveRemovedShow", { count: String(count) }),
+      accept: t("files.liveAcceptHunk"),
+      openCard: t("files.liveOpenCard"),
+      changedSinceOpen: t("files.liveChanged"),
+      stats: (added: number, removed: number) =>
+        t(liveAccepted ? "files.liveStatsAccepted" : "files.liveStats", {
+          added: String(added),
+          removed: String(removed),
+        }),
+    }),
+    [liveAccepted],
+  );
+
+  const liveSummary = (() => {
+    if (!activeTab || !isTextFile || activeTab.baseline === null) return null;
+    const since = clockOf(activeTab.baselineAt);
+    if (liveOff || editorPerf?.mode === "plain") {
+      return (
+        <span className={styles.liveChip} data-tone="warn">
+          {t("files.liveOff")}
+        </span>
+      );
+    }
+    const changed = mdDiff ? mdDiff.changed : (liveDiff?.hunks.length ?? 0);
+    if (changed === 0) {
+      return (
+        <span className={styles.liveChip} data-tone="idle">
+          <i className={styles.liveDot} style={{ background: "#3fb68b" }} />
+          {t(liveAccepted ? "files.liveIdleAccepted" : "files.liveIdle", { time: since })}
+        </span>
+      );
+    }
+    return (
+      <>
+        {liveDiff && (
+          <span className={styles.liveChip}>
+            {fileOwner && <i className={styles.liveDot} style={{ background: fileOwner.color }} />}
+            {fileOwner && <span>{fileOwner.label}</span>}
+            <b className={styles.liveAdd}>+{liveDiff.added}</b>
+            <b className={styles.liveDel}>−{liveDiff.removed}</b>
+          </span>
+        )}
+        <span className={styles.liveChip} data-tone="idle">
+          {t(liveAccepted ? "files.liveSinceAccept" : "files.liveSinceOpen", { time: since })}
+        </span>
+        {view === "code" && (
+          <>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnS}`}
+              aria-label={t("files.livePrev")}
+              title={t("files.livePrev")}
+              onClick={() => jumpToHunk(-1)}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnS}`}
+              aria-label={t("files.liveNext")}
+              title={t("files.liveNext")}
+              onClick={() => jumpToHunk(1)}
+            >
+              ↓
+            </button>
+          </>
+        )}
+        <button type="button" className={`${styles.btn} ${styles.btnS}`} onClick={acceptAll}>
+          {t("files.liveAcceptAll")}
+        </button>
+      </>
+    );
+  })();
+
 
   const breadcrumbSymbol = useMemo(() => {
     if (!activePath || content == null) return null;
@@ -647,8 +904,12 @@ function FilesCardInner({
 
   const minimapBars = useMemo(() => {
     if (content == null) return [];
-    return decideMinimapBars(content, 80, (lineNo) => agentLineMarks.get(lineNo)?.color);
-  }, [content, agentLineMarks]);
+    return decideMinimapBars(
+      content,
+      80,
+      (lineNo) => agentLineMarks.get(lineNo)?.color ?? (liveAddedLines.has(lineNo) ? "#3fb68b" : undefined),
+    );
+  }, [content, agentLineMarks, liveAddedLines]);
 
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -862,6 +1123,9 @@ function FilesCardInner({
         tooLarge: false,
         diskConflict: null,
         contentEpoch: 0,
+        baseline: null,
+        baselineAt: Date.now(),
+        baselineAccepted: false,
         pendingJumpLine: jumpToLine ?? null,
       },
     ]);
@@ -882,6 +1146,8 @@ function FilesCardInner({
           const perf = decideEditorPerfMode(result.content);
           updateTab(path, {
             content: result.content,
+            baseline: result.content,
+            baselineAt: Date.now(),
             view: kind === "markdown" && perf.allowMarkdownPreview ? "preview" : "code",
           });
         }
@@ -950,56 +1216,6 @@ function FilesCardInner({
       (e) => setError(String(e)),
     );
   }
-
-  // HEAD text for side-by-side diff + agent line marks from declared
-  // attribution ∩ working-tree diff hunks (no invented authorship).
-  useEffect(() => {
-    if (!activePath) {
-      setHeadText(null);
-      setAgentHunks([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const head = await window.git.showHead(root, activePath);
-        if (!cancelled) setHeadText(head);
-      } catch {
-        if (!cancelled) setHeadText(null);
-      }
-      try {
-        const patch = await window.git.diffHead(root, activePath);
-        const ranges = decideDiffHunkRangesForFile(patch, activePath);
-        const declared = (attribution?.files ?? []).find((f) => f.path === activePath && f.state === "declared");
-        const owner = declared?.declared[0];
-        const territoryHit = territoryAgents.find(
-          (a) => a.running && a.territory.some((p) => pathInTerritory(activePath, p)),
-        );
-        const cardIdForMark = owner?.cardId ?? territoryHit?.cardId;
-        if (!cardIdForMark || ranges.length === 0) {
-          if (!cancelled) setAgentHunks([]);
-          return;
-        }
-        const color = accentForProvider(cardProviders[cardIdForMark]);
-        const task = boardTasks.find((t) => t.cards.some((c) => c.cardId === cardIdForMark));
-        const hunks: AgentLineHunk[] = ranges.map((r) => ({
-          ...r,
-          cardId: cardIdForMark,
-          color,
-          label: owner?.label ?? territoryHit?.label ?? cardIdForMark,
-          taskId: task?.id ?? null,
-          taskTitle: task?.promptPreview?.slice(0, 40) ?? null,
-          at: owner?.updatedAt ?? task?.updatedAt ?? null,
-        }));
-        if (!cancelled) setAgentHunks(hunks);
-      } catch {
-        if (!cancelled) setAgentHunks([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activePath, root, attribution, territoryAgents, cardProviders, boardTasks]);
 
   useEffect(() => {
     const q = goToQuery.trim();
@@ -1313,6 +1529,7 @@ function FilesCardInner({
               ✕ {problems.filter((p) => p.severity === "error").length} ! {problems.filter((p) => p.severity === "warning").length}
             </span>
           )}
+          <span style={{ flex: 1 }} />
           {activePath && mediaKind(activePath) !== "image" && (
             <span>
               {t("files.lnCol", { line: String(cursorPos.line), col: String(cursorPos.col) })}
@@ -1320,7 +1537,11 @@ function FilesCardInner({
           )}
           {activePath && <span>{t("files.indentSpaces")}</span>}
           {activePath && <span>UTF-8</span>}
-          {activePath && <span>{ext(activePath).replace(".", "").toUpperCase() || t("files.langText")}</span>}
+          {activePath && (
+            <span>
+              {decideLanguageName(activePath) ?? (ext(activePath).replace(".", "").toUpperCase() || t("files.langText"))}
+            </span>
+          )}
           {activePath && mediaKind(activePath) !== "image" && content !== null && (
             <span>{t("files.tokensApprox", { count: formatTokenCount(estimateTokens(content)) })}</span>
           )}
@@ -1714,9 +1935,24 @@ function FilesCardInner({
                 );
               })}
               <span className={styles.tabActions}>
-                <button type="button" className={styles.btn} onClick={() => setDiffOn((v) => !v)}>
-                  {diffOn ? t("files.diffClose") : t("files.diffWithHead")}
-                </button>
+                {activePath && mediaKind(activePath) === "markdown" && (
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    disabled={view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview}
+                    title={
+                      view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview
+                        ? t("files.previewDisabledLarge")
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview) return;
+                      updateTab(activePath, { view: view === "code" ? "preview" : "code" });
+                    }}
+                  >
+                    {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
+                  </button>
+                )}
                 <button type="button" className={styles.btn} disabled title={t("files.splitSoon")}>
                   {t("files.split")}
                 </button>
@@ -1738,24 +1974,7 @@ function FilesCardInner({
                 </>
               )}
               <span style={{ flex: 1 }} />
-              {mediaKind(activePath) === "markdown" && (
-                <button
-                  type="button"
-                  className={styles.btn}
-                  disabled={view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview}
-                  title={
-                    view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview
-                      ? t("files.previewDisabledLarge")
-                      : undefined
-                  }
-                  onClick={() => {
-                    if (view === "code" && editorPerf != null && !editorPerf.allowMarkdownPreview) return;
-                    updateTab(activePath, { view: view === "code" ? "preview" : "code" });
-                  }}
-                >
-                  {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
-                </button>
-              )}
+              {liveSummary}
             </div>
           )}
           {tooLarge && <div className="files-editor-msg">{t("files.tooLarge")}</div>}
@@ -1769,6 +1988,8 @@ function FilesCardInner({
               {t("files.plainModeBanner", { lines: String(editorPerf.lineCount) })}
             </div>
           )}
+          <div className={styles.editorRow}>
+            <div className={styles.editorPane}>
           {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
             <div className="files-editor-image">
               <img src={imageDataUrl} alt={activePath} />
@@ -1782,15 +2003,26 @@ function FilesCardInner({
             content === null ? (
               <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
-              <Markdown
-                content={content}
-                className="files-editor-preview"
-                loadingFallback={<div className="files-editor-preview files-editor-msg">{t("files.loadingPreview")}</div>}
-              />
+              mdDiff && mdDiff.changed > 0 ? (
+                <MarkdownDiff
+                  blocks={mdDiff.blocks.map<MarkdownDiffBlock>((b) => ({
+                    kind: b.kind,
+                    text: b.text,
+                    color: b.kind === "ctx" ? null : (fileOwner?.color ?? null),
+                  }))}
+                  className="files-editor-preview"
+                  foldedLabel={() => t("files.liveRemovedBlock")}
+                  loadingFallback={<div className="files-editor-preview files-editor-msg">{t("files.loadingPreview")}</div>}
+                />
+              ) : (
+                <Markdown
+                  content={content}
+                  className="files-editor-preview"
+                  loadingFallback={<div className="files-editor-preview files-editor-msg">{t("files.loadingPreview")}</div>}
+                />
+              )
             )
           )}
-          <div className={styles.editorRow}>
-            <div className={styles.editorPane}>
           {activePath &&
             !tooLarge &&
             mediaKind(activePath) !== "image" &&
@@ -1800,16 +2032,26 @@ function FilesCardInner({
             ) : (
               <Suspense fallback={<div className="files-editor-msg">{t("files.loadingEditor")}</div>}>
                 <CodeEditor
-                  key={`${activePath}:${activeTab?.contentEpoch ?? 0}:${editorPerf?.mode ?? "full"}`}
+                  key={`${activePath}:${editorPerf?.mode ?? "full"}`}
                   value={content}
                   filename={activePath}
                   jumpToLine={activeTab?.pendingJumpLine}
                   plain={editorPerf?.mode === "plain"}
+                  syncEpoch={activeTab?.contentEpoch ?? 0}
                   agentLineMarks={agentLineMarks}
-                  onAgentGutterAction={(action, mark) => {
-                    if (action === "open-card") onFocusCard?.(mark.cardId);
-                    if (action === "diff") setDiffOn(true);
+                  liveDiff={liveDiff}
+                  liveFresh={liveFresh}
+                  liveColors={liveColors}
+                  liveLabels={liveLabels}
+                  onLiveAction={(action, info) => {
+                    if (action === "accept") acceptHunk(info.hunkId);
+                    else if (info.cardId) onFocusCard?.(info.cardId);
                   }}
+                  onHunkNav={jumpToHunk}
+                  jumpRequest={jumpRequest}
+                  onViewportLines={(top, bottom) =>
+                    setViewportLines((prev) => (prev && prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
+                  }
                   onChange={(next) => {
                     if (activePath) updateTab(activePath, { content: next, dirty: true });
                   }}
@@ -1818,18 +2060,6 @@ function FilesCardInner({
               </Suspense>
             ))}
             </div>
-            {diffOn && (
-              <div className={styles.diffPane} aria-label={t("files.diffHeadLabel")}>
-                <div style={{ marginBottom: 6 }}>{t("files.diffHeadLabel")}</div>
-                {activePath == null ? (
-                  t("files.diffNeedFile")
-                ) : headText == null ? (
-                  t("files.diffNoHead")
-                ) : (
-                  <pre className={styles.diffPre}>{headText}</pre>
-                )}
-              </div>
-            )}
             <div className={styles.minimap} aria-hidden="true">
               {minimapBars.map((bar) => (
                 <span
@@ -1842,6 +2072,39 @@ function FilesCardInner({
                 />
               ))}
             </div>
+            {livePill && (
+              <div className={styles.livePill} role="status">
+                {livePill.dir === "below"
+                  ? livePill.count === 1
+                    ? t("files.liveBelowOne")
+                    : t("files.liveBelowMany", { count: String(livePill.count) })
+                  : livePill.count === 1
+                    ? t("files.liveAboveOne")
+                    : t("files.liveAboveMany", { count: String(livePill.count) })}
+                {fileOwner && (
+                  <>
+                    <span> · </span>
+                    <span className={styles.liveDot} style={{ background: fileOwner.color }} />
+                    <span>{t("files.liveEditing", { who: fileOwner.label })}</span>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnS}`}
+                  onClick={() => setJumpRequest((r) => ({ line: livePill.line, nonce: (r?.nonce ?? 0) + 1 }))}
+                >
+                  {t("files.liveGo")}
+                </button>
+              </div>
+            )}
+            {liveUndo && liveUndo.path === activePath && (
+              <div className={styles.liveToast} role="status">
+                {t("files.liveCleared")}
+                <button type="button" className={`${styles.btn} ${styles.btnS}`} onClick={undoAccept}>
+                  {t("files.liveUndo")}
+                </button>
+              </div>
+            )}
           </div>
           <div className={styles.bottom}>
             <div className={styles.bottomTabs} role="tablist">
@@ -1853,14 +2116,16 @@ function FilesCardInner({
                   ["send", t("files.bottomSend")],
                 ] as const
               ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`${styles.pt}${bottomTab === id ? ` ${styles.ptOn}` : ""}`}
-                  onClick={() => setBottomTab(id)}
-                >
-                  {label}
-                </button>
+                <Fragment key={id}>
+                  {id === "send" && <span style={{ flex: 1 }} />}
+                  <button
+                    type="button"
+                    className={`${styles.pt}${bottomTab === id ? ` ${styles.ptOn}` : ""}`}
+                    onClick={() => setBottomTab(id)}
+                  >
+                    {label}
+                  </button>
+                </Fragment>
               ))}
             </div>
             <div className={styles.bottomBody}>

@@ -62,3 +62,20 @@ export function decideAgentLineMarks(hunks: readonly AgentLineHunk[]): Map<numbe
   }
   return out;
 }
+
+export type FileOwnerEvidence = { cardId: string; label: string | null; at: number | null };
+
+/**
+ * The one card a file's live changes may be credited to. A declared owner
+ * wins; without a declaration, the single running agent whose territory holds
+ * the file. Two candidates are not evidence of either, so the answer is
+ * `null` and the marks stay neutral. `declared` is `null` when the file has
+ * no declaration at all.
+ */
+export function decideFileOwner(
+  declared: readonly FileOwnerEvidence[] | null,
+  territory: readonly FileOwnerEvidence[],
+): FileOwnerEvidence | null {
+  if (declared !== null) return declared.length === 1 ? declared[0]! : null;
+  return territory.length === 1 ? territory[0]! : null;
+}

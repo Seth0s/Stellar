@@ -552,7 +552,7 @@ try {
   // card's screen rect (topbar is position:fixed — clip of .files-card still
   // includes those pixels). Restore after the shot.
   for (let i = 0; i < 4; i++) {
-    const open = await page.evalJs(`!!document.querySelector('.board-list')`);
+    const open = await page.evalJs(`!!document.querySelector('[data-role="rail-sessions"]')`);
     if (!open) break;
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
@@ -561,7 +561,7 @@ try {
   await page.evalJs(`
     (() => {
       window.__v6ChromeHidden = [];
-      for (const sel of ['.topbar', '.topbar-home', '.rail', '.board-list', '.popover']) {
+      for (const sel of ['.topbar', '.topbar-home', '.rail', '[data-role="rail-sessions"]', '.popover']) {
         for (const el of document.querySelectorAll(sel)) {
           window.__v6ChromeHidden.push([el, el.style.visibility]);
           el.style.visibility = 'hidden';
@@ -570,7 +570,7 @@ try {
     })()
   `);
   await delay(150);
-  const sessionsStill = await page.evalJs(`!!document.querySelector('.board-list') && getComputedStyle(document.querySelector('.board-list')).visibility !== 'hidden'`);
+  const sessionsStill = await page.evalJs(`!!document.querySelector('[data-role="rail-sessions"]') && getComputedStyle(document.querySelector('[data-role="rail-sessions"]')).visibility !== 'hidden'`);
   console.log("sessionsPopover", sessionsStill ? "STILL_OPEN" : "closed");
 
   const implPath = join(SHOT_DIR, "impl-1440.png");
@@ -606,7 +606,7 @@ try {
         const agentsPanel = (card?.innerText || '').includes('IMPL') || (card?.innerText || '').match(/agente/i);
         const headGoto = document.querySelector('.files-card [class*="headGoto"] input');
         const headPill = document.querySelector('.files-card [class*="headAgentsPill"]');
-        const sessionsPopover = !!document.querySelector('.board-list');
+        const sessionsPopover = !!document.querySelector('[data-role="rail-sessions"]');
         const treeNames = [...document.querySelectorAll('.files-card .files-node-name')].map((n) => n.textContent.trim());
         const autosaveUi = /auto-save/i.test(card?.innerText || '') || [...document.querySelectorAll('.files-card button, .files-card label')].some((el) => /^(Salvar|auto-save)$/i.test((el.textContent || '').trim()));
         return JSON.stringify({
