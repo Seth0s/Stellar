@@ -1,8 +1,9 @@
 /**
  * Login na conta Stellar (BACKEND_V1.md §4/§7.2) — a DECISÃO, sem I/O.
  *
- * O fluxo é o de app nativo (RFC 8252): listener loopback + PKCE S256. Este
- * módulo concentra o que dá para testar sem rede nem relógio: geração/validação
+ * O fluxo é o de app nativo (RFC 8252): listener loopback + PKCE S256 no GitHub;
+ * o login por e-mail é um device flow (pedido + polling + código digitado), sem
+ * listener. Este módulo concentra o que dá para testar sem rede nem relógio: geração/validação
  * de PKCE, validação do redirect loopback, decisão do callback (state errado
  * RECUSADO), leitura da resposta de tokens, decisão de RENOVAÇÃO antes de
  * expirar, leitura do `/me`, montagem das URLs/corpos e o envelope de erro.
@@ -12,7 +13,8 @@
  *
  * Contrato do backend (StellarCloud B2):
  *  - `GET  /v1/auth/start`  → 302 para o GitHub (provider=github).
- *  - `POST /v1/auth/email`  → 202, manda o link de uso único.
+ *  - `POST /v1/auth/email`  → 202, manda o link de uso único. Sem `redirect_uri`
+ *    é o device flow (`request_id`), consultado em `/email/poll` e `/email/code-claim`.
  *  - `POST /v1/auth/token`  → par de tokens; `grant_type` authorization_code|refresh_token.
  *  - `POST /v1/auth/logout` → 204 (idempotente).
  *  - `GET  /me`             → conta/identidades (Bearer).
@@ -148,6 +150,9 @@ export const LOGIN_ERROR = {
   loginTimeout: "login_timeout",
   apiUnavailable: "api_unavailable",
 } as const;
+
+/** Union of the machine codes a failed login can leave in `lastError`. */
+export type LoginErrorCode = (typeof LOGIN_ERROR)[keyof typeof LOGIN_ERROR];
 
 /** Codes that mean "the API could not be reached", as opposed to "it said no". */
 export function isConnectivityError(code: string | null | undefined): boolean {
@@ -344,26 +349,6 @@ export function buildStartUrl(input: {
   return url.toString();
 }
 
-export function buildEmailStartBody(input: {
-  provider: "email";
-  redirectUri: string;
-  state: string;
-  codeChallenge: string;
-  email: string;
-  userId?: string | null;
-}): Record<string, string> {
-  const body: Record<string, string> = {
-    provider: input.provider,
-    redirect_uri: input.redirectUri,
-    state: input.state,
-    code_challenge: input.codeChallenge,
-    code_challenge_method: "S256",
-    email: input.email,
-  };
-  if (input.userId) body.user_id = input.userId;
-  return body;
-}
-
 export function buildTokenExchangeBody(input: {
   code: string;
   codeVerifier: string;
@@ -392,4 +377,225 @@ export function buildRefreshBody(input: {
     install_id: input.installId,
     device_label: input.deviceLabel,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Login por e-mail em device flow (AUTH_EMAIL.md §1): pedido sem redirect_uri,
+// polling com o intervalo do servidor e código digitado como segundo caminho.
+// ---------------------------------------------------------------------------
+
+/** Wrong-code attempts the server allows before it denies the request. */
+export const CODE_CLAIM_MAX_ATTEMPTS = 3;
+const DEFAULT_POLL_INTERVAL_SEC = 3;
+const MAX_POLL_INTERVAL_SEC = 30;
+const DEFAULT_REQUEST_LIFETIME_SEC = 300;
+/** Added to the interval each time the server answers `slow_down`. */
+export const SLOW_DOWN_STEP_MS = 2_000;
+/** Ceiling of the interval after `slow_down` or a run of transient failures. */
+export const POLL_BACKOFF_CEILING_MS = 15_000;
+/** Consecutive polls that could not reach the API before the login gives up. */
+export const POLL_MAX_CONSECUTIVE_FAILURES = 5;
+const DEVICE_LABEL_MAX = 64;
+
+export type EmailDeviceStart = { requestId: string; pollIntervalMs: number; expiresInMs: number };
+
+/** Read the 202 of a device-flow request. `null` = the answer is not one (no `request_id`). */
+export function parseEmailDeviceStart(raw: unknown): EmailDeviceStart | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const rec = raw as Record<string, unknown>;
+  if (typeof rec.request_id !== "string" || rec.request_id === "") return null;
+  const interval = typeof rec.poll_interval_sec === "number" && Number.isFinite(rec.poll_interval_sec) && rec.poll_interval_sec > 0
+    ? Math.min(rec.poll_interval_sec, MAX_POLL_INTERVAL_SEC)
+    : DEFAULT_POLL_INTERVAL_SEC;
+  const lifetime = typeof rec.expires_in === "number" && Number.isFinite(rec.expires_in) && rec.expires_in > 0
+    ? rec.expires_in
+    : DEFAULT_REQUEST_LIFETIME_SEC;
+  return { requestId: rec.request_id, pollIntervalMs: interval * 1000, expiresInMs: lifetime * 1000 };
+}
+
+/** The device-flow request: NO `redirect_uri` (that is what picks the flow) and no `state`. */
+export function buildEmailDeviceStartBody(input: {
+  email: string;
+  codeChallenge: string;
+  installId: string;
+  deviceLabel: string;
+  userId?: string | null;
+}): Record<string, string> {
+  const body: Record<string, string> = {
+    email: input.email,
+    code_challenge: input.codeChallenge,
+    code_challenge_method: "S256",
+    install_id: input.installId,
+  };
+  const label = input.deviceLabel.trim().slice(0, DEVICE_LABEL_MAX);
+  if (label !== "") body.device_label = label;
+  if (input.userId) body.user_id = input.userId;
+  return body;
+}
+
+export function buildEmailPollBody(input: { requestId: string; codeVerifier: string; installId: string }): Record<string, string> {
+  return { request_id: input.requestId, code_verifier: input.codeVerifier, install_id: input.installId };
+}
+
+export function buildEmailCodeClaimBody(input: {
+  requestId: string;
+  codeVerifier: string;
+  installId: string;
+  userCode: string;
+}): Record<string, string> {
+  return { ...buildEmailPollBody(input), user_code: input.userCode };
+}
+
+/** `481925`, `481-925` or `481 925` → `481-925`; anything else → `null` (never sent). */
+export function normalizeUserCode(raw: string): string | null {
+  const digits = raw.replace(/[\s-]/g, "");
+  if (!/^\d{6}$/.test(digits)) return null;
+  return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+}
+
+/** What `POST /v1/auth/email/poll` and `/code-claim` answer once read: a pair, still pending, or an error. */
+export type DeviceTokenReply = { kind: "pending" } | { kind: "tokens"; pair: ParsedTokenPair };
+
+/** Read the 200 of poll/code-claim: `{status:"pending"}` or a TokenPair. `null` = neither. */
+export function parseDeviceTokenReply(raw: unknown): DeviceTokenReply | null {
+  if (typeof raw === "object" && raw !== null && (raw as Record<string, unknown>).status === "pending") {
+    return { kind: "pending" };
+  }
+  const pair = parseTokenPair(raw);
+  return pair ? { kind: "tokens", pair } : null;
+}
+
+export type DevicePollOutcome =
+  | { kind: "pending" }
+  | { kind: "approved"; pair: ParsedTokenPair }
+  | { kind: "slow_down" }
+  | { kind: "expired" }
+  | { kind: "denied" }
+  /** The server no longer knows this request or refuses the proof: nothing to wait for. */
+  | { kind: "rejected" }
+  /** Could not get an answer (network, 5xx, rate limit): worth trying again. */
+  | { kind: "transient"; error: CloudApiError };
+
+/** Map the answer of one poll to an outcome. */
+export function classifyPollResponse(
+  res: { ok: true; value: DeviceTokenReply } | { ok: false; error: CloudApiError },
+): DevicePollOutcome {
+  if (res.ok) return res.value.kind === "tokens" ? { kind: "approved", pair: res.value.pair } : { kind: "pending" };
+  const { error } = res;
+  if (error.code === "slow_down") return { kind: "slow_down" };
+  if (error.code === "expired_token") return { kind: "expired" };
+  if (error.code === "access_denied") return { kind: "denied" };
+  if (error.code === "invalid_grant" || error.code === "invalid_request") return { kind: "rejected" };
+  return { kind: "transient", error };
+}
+
+/** The login code for a poll/claim that got no usable answer. */
+function unreachableCode(err: CloudApiError): LoginErrorCode {
+  if (err.status === 0) return err.code === "timeout" ? LOGIN_ERROR.timeout : LOGIN_ERROR.network;
+  if (err.status === 429) return LOGIN_ERROR.rateLimited;
+  return LOGIN_ERROR.apiUnavailable;
+}
+
+export type PollState = {
+  intervalMs: number;
+  /** The interval the server asked for; backoff never goes below it. */
+  baseIntervalMs: number;
+  consecutiveFailures: number;
+};
+
+export function initialPollState(intervalMs: number): PollState {
+  return { intervalMs, baseIntervalMs: intervalMs, consecutiveFailures: 0 };
+}
+
+export type PollStep =
+  | { kind: "wait"; delayMs: number; state: PollState }
+  | { kind: "complete"; pair: ParsedTokenPair }
+  /** The login failed and the screen goes back to the form with this code. */
+  | { kind: "fail"; code: LoginErrorCode }
+  /** The request was denied after wrong codes typed here: stay on the screen, say so, stop. */
+  | { kind: "blocked" };
+
+/**
+ * The next step of the polling loop. `slow_down` raises the interval for good;
+ * transient failures back off but a good answer returns to the server's
+ * interval; a run of failures ends the login as a connectivity error.
+ * `access_denied` after codes were typed here is the 3-strikes block; without
+ * them it is the closed sign-up (the only other reason a request is denied).
+ */
+export function decidePollStep(input: { outcome: DevicePollOutcome; state: PollState; codeAttempts: number }): PollStep {
+  const { outcome, state } = input;
+  switch (outcome.kind) {
+    case "approved":
+      return { kind: "complete", pair: outcome.pair };
+    case "pending":
+      return {
+        kind: "wait",
+        delayMs: state.baseIntervalMs,
+        state: { ...state, intervalMs: state.baseIntervalMs, consecutiveFailures: 0 },
+      };
+    case "slow_down": {
+      const raised = Math.min(Math.max(state.intervalMs, state.baseIntervalMs) + SLOW_DOWN_STEP_MS, POLL_BACKOFF_CEILING_MS);
+      return {
+        kind: "wait",
+        delayMs: raised,
+        state: { intervalMs: raised, baseIntervalMs: raised, consecutiveFailures: 0 },
+      };
+    }
+    case "expired":
+      return { kind: "fail", code: LOGIN_ERROR.loginTimeout };
+    case "denied":
+      return input.codeAttempts > 0 ? { kind: "blocked" } : { kind: "fail", code: LOGIN_ERROR.signupClosed };
+    case "rejected":
+      return { kind: "fail", code: LOGIN_ERROR.emailFailed };
+    case "transient": {
+      const failures = state.consecutiveFailures + 1;
+      if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) {
+        return { kind: "fail", code: unreachableCode(outcome.error) };
+      }
+      const backedOff = Math.min(state.intervalMs * 2, Math.max(POLL_BACKOFF_CEILING_MS, state.baseIntervalMs));
+      return {
+        kind: "wait",
+        delayMs: backedOff,
+        state: { ...state, intervalMs: backedOff, consecutiveFailures: failures },
+      };
+    }
+  }
+}
+
+export type CodeClaimOutcome =
+  | { kind: "approved"; pair: ParsedTokenPair }
+  /** The code was wrong; `attemptsLeft` is what remains of the 3. */
+  | { kind: "wrong"; attemptsLeft: number }
+  /** The 3rd wrong code: the request is cancelled. */
+  | { kind: "blocked" }
+  /** Not an `NNN-NNN` code, or the request is not approved yet: no attempt was spent. */
+  | { kind: "not-spent" }
+  | { kind: "expired" }
+  /** Another path (the polling) already took the tokens, or the proof is refused. */
+  | { kind: "stale" }
+  | { kind: "unreachable"; code: LoginErrorCode };
+
+/** Map the answer of one code-claim; `attemptsBefore` is how many wrong codes this request already had. */
+export function classifyCodeClaimResponse(
+  res: { ok: true; value: DeviceTokenReply } | { ok: false; error: CloudApiError },
+  attemptsBefore: number,
+): CodeClaimOutcome {
+  if (res.ok) return res.value.kind === "tokens" ? { kind: "approved", pair: res.value.pair } : { kind: "not-spent" };
+  const { error } = res;
+  switch (error.code) {
+    case "invalid_code": {
+      const left = CODE_CLAIM_MAX_ATTEMPTS - (attemptsBefore + 1);
+      return left > 0 ? { kind: "wrong", attemptsLeft: left } : { kind: "blocked" };
+    }
+    case "access_denied":
+      return { kind: "blocked" };
+    case "authorization_pending":
+    case "invalid_request":
+      return { kind: "not-spent" };
+    case "expired_token":
+      return { kind: "expired" };
+    case "invalid_grant":
+      return { kind: "stale" };
+  }
+  return { kind: "unreachable", code: unreachableCode(error) };
 }

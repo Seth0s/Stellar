@@ -1,13 +1,16 @@
 /**
- * cloud-auth.ts — o orquestrador loopback, exercitado contra um backend FALSO
- * em processo (fala o contrato do B2) e um `openUrl` que faz o papel do
- * navegador (segue o redirect até o listener do app). Cobre: login GitHub,
- * login e-mail, STATE ERRADO recusado sem trocar token, renovação antes de
- * expirar e logout (revoga + apaga o refresh do perfil).
+ * cloud-auth.ts — o orquestrador, exercitado contra um backend FALSO em
+ * processo (fala o contrato do B2 e o device flow do AUTH_EMAIL.md) e um
+ * `openUrl` que faz o papel do navegador (segue o redirect até o listener do
+ * app). Cobre: login GitHub (loopback), login e-mail por device flow (polling,
+ * slow_down, expiração, logout no meio, código digitado certo e errado ×3),
+ * STATE ERRADO recusado sem trocar token, renovação antes de expirar e logout
+ * (revoga + apaga o refresh do perfil).
  *
  * `electron` é mockado: sem keychain, o refresh cai em cleartext (mesma postura
  * do secrets.ts), o que deixa o teste inspecionar o arquivo do perfil.
  */
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +31,25 @@ import { cloudAuthPath } from "../../src/main/cloud-tokens";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const INSTALL_ID = "22222222-2222-4222-8222-222222222222";
 
+/** One device-flow request as the fake server keeps it. */
+type DeviceRequest = {
+  body: Record<string, string>;
+  status: "pending" | "approved" | "used" | "expired" | "denied";
+  userCode: string;
+  attempts: number;
+  /** When each poll arrived, to check the pace the app keeps. */
+  pollAt: number[];
+  polls: number;
+  claims: number;
+  /** The next poll answers 429 slow_down once. */
+  slowDownOnce: boolean;
+  /** The next polls answer this error instead (network-like), counted down. */
+  failPolls: number;
+  tokens: { access: string; refresh: string };
+  /** The poll is recorded on arrival and answered this long after. */
+  pollDelayMs: number;
+};
+
 type Backend = {
   server: Server;
   baseUrl: string;
@@ -36,6 +58,8 @@ type Backend = {
     nextStateOverride: string | null;
     githubRedirect: { redirectUri: string; state: string } | null;
     emailFlow: { redirectUri: string; state: string } | null;
+    /** The device-flow request the app opened (no redirect_uri in the POST). */
+    device: DeviceRequest | null;
     startUserId: string | null;
     emailUserId: string | null;
     tokenRequests: number;
@@ -58,6 +82,7 @@ async function startBackend(): Promise<Backend> {
     nextStateOverride: null,
     githubRedirect: null,
     emailFlow: null,
+    device: null,
     startUserId: null,
     emailUserId: null,
     tokenRequests: 0,
@@ -96,9 +121,69 @@ async function startBackend(): Promise<Backend> {
         if (state.emailReply.status !== 202) {
           return json(state.emailReply.status, { error: state.emailReply.error ?? { code: "boom", message: "boom" } });
         }
-        state.emailFlow = { redirectUri: body.redirect_uri, state: body.state };
         state.emailUserId = body.user_id ?? null;
-        return json(202, { status: "sent" });
+        if (body.redirect_uri !== undefined) {
+          state.emailFlow = { redirectUri: body.redirect_uri, state: body.state };
+          return json(202, { status: "sent" });
+        }
+        state.device = {
+          body,
+          status: "pending",
+          userCode: "481925",
+          attempts: 0,
+          pollAt: [],
+          polls: 0,
+          claims: 0,
+          slowDownOnce: false,
+          failPolls: 0,
+          tokens: { access: "A1", refresh: "R1" },
+          pollDelayMs: 0,
+        };
+        return json(202, { request_id: "req-1", poll_interval_sec: 0.05, expires_in: 300 });
+      }
+      if (req.method === "POST" && (url.pathname === "/v1/auth/email/poll" || url.pathname === "/v1/auth/email/code-claim")) {
+        const dev = state.device;
+        const proofOk =
+          dev !== null &&
+          body.request_id === "req-1" &&
+          body.install_id === dev.body.install_id &&
+          typeof body.code_verifier === "string" &&
+          createHash("sha256").update(body.code_verifier).digest("base64url") === dev.body.code_challenge;
+        if (!dev || !proofOk) return json(400, { error: { code: "invalid_grant", message: "invalid grant" } });
+        const pair = () => {
+          dev.status = "used";
+          return json(200, { access_token: dev.tokens.access, refresh_token: dev.tokens.refresh, expires_in: 900, refresh_expires_in: 2592000 });
+        };
+        if (url.pathname.endsWith("/poll")) {
+          dev.polls++;
+          dev.pollAt.push(Date.now());
+          if (dev.pollDelayMs > 0) await new Promise((r) => setTimeout(r, dev.pollDelayMs));
+          if (dev.failPolls > 0) {
+            dev.failPolls--;
+            return json(503, { error: { code: "unavailable", message: "try later" } });
+          }
+          if (dev.slowDownOnce) {
+            dev.slowDownOnce = false;
+            return json(429, { error: { code: "slow_down", message: "slow down" } });
+          }
+          if (dev.status === "pending") return json(200, { status: "pending" });
+          if (dev.status === "approved") return pair();
+          if (dev.status === "expired") return json(400, { error: { code: "expired_token", message: "expired" } });
+          if (dev.status === "denied") return json(400, { error: { code: "access_denied", message: "denied" } });
+          return json(400, { error: { code: "invalid_grant", message: "used" } });
+        }
+        dev.claims++;
+        if (dev.status === "denied") return json(400, { error: { code: "access_denied", message: "denied" } });
+        if (dev.status === "expired") return json(400, { error: { code: "expired_token", message: "expired" } });
+        if (dev.status === "used") return json(400, { error: { code: "invalid_grant", message: "used" } });
+        if (dev.status !== "approved") return json(400, { error: { code: "authorization_pending", message: "not approved" } });
+        if (String(body.user_code).replace("-", "") === dev.userCode) return pair();
+        dev.attempts++;
+        if (dev.attempts >= 3) {
+          dev.status = "denied";
+          return json(400, { error: { code: "access_denied", message: "denied" } });
+        }
+        return json(400, { error: { code: "invalid_code", message: "wrong code" } });
       }
       if (req.method === "POST" && url.pathname === "/v1/auth/token") {
         if (body.grant_type === "refresh_token" && state.strictRefresh) {
@@ -253,17 +338,243 @@ describe("cloud-auth (loopback, backend falso)", () => {
     expect(storedRefresh()).toBeNull();
   });
 
-  it("login por e-mail: pede o link e completa quando o /cb chega", async () => {
-    const auth = make();
-    await auth.beginLogin("email", "user@example.com");
-    expect(auth.getStatus().state).toBe("pending");
-    expect(backend.state.emailFlow).not.toBeNull();
-    expect(openUrl).not.toHaveBeenCalled();
+  describe("login por e-mail: device flow (polling e código)", () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const device = () => backend.state.device!;
 
-    const flow = backend.state.emailFlow!;
-    await fetch(`${flow.redirectUri}?code=CODE1&state=${flow.state}`);
-    await waitFor(() => auth.getStatus().state === "logged-in");
-    expect(backend.state.tokenRequests).toBe(1);
+    /** The e-mail login is open and the request is on the fake server. */
+    async function openEmailLogin(loginTimeoutMs?: number): Promise<CloudAuth> {
+      const auth = createCloudAuth({
+        apiBaseUrl: backend.baseUrl,
+        dataDir: dir,
+        identity: () => ({ userId: USER_ID, installId: INSTALL_ID }),
+        openUrl,
+        deviceLabel: "test",
+        now: () => clock,
+        fetchImpl: fetch,
+        loginTimeoutMs,
+      });
+      auths.push(auth);
+      const status = await auth.beginLogin("email", "user@example.com");
+      expect(status).toMatchObject({ state: "pending", provider: "email" });
+      return auth;
+    }
+
+    it("o pedido vai SEM redirect_uri, com PKCE S256 e install_id; não abre navegador nem listener", async () => {
+      await openEmailLogin();
+      const body = device().body;
+      expect(body).not.toHaveProperty("redirect_uri");
+      expect(body).not.toHaveProperty("state");
+      expect(body).toMatchObject({
+        email: "user@example.com",
+        code_challenge_method: "S256",
+        install_id: INSTALL_ID,
+        device_label: "test",
+        user_id: USER_ID,
+      });
+      expect(body.code_challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(backend.state.emailFlow).toBeNull();
+      expect(openUrl).not.toHaveBeenCalled();
+    });
+
+    it("aprovado no MEIO do polling: o app loga sozinho, guarda o refresh e para de consultar", async () => {
+      const auth = await openEmailLogin();
+      await waitFor(() => device().polls >= 2);
+      expect(auth.getStatus().state).toBe("pending");
+
+      device().status = "approved"; // approved on another device
+      await waitStatus(auth, "logged-in");
+      expect(storedRefresh()).toBe("R1");
+      expect(device().status).toBe("used");
+      // The legacy exchange was never used.
+      expect(backend.state.tokenRequests).toBe(0);
+
+      const seen = device().polls;
+      await sleep(250);
+      expect(device().polls).toBe(seen); // polling stopped
+    });
+
+    it("expirado: volta deslogado com login_timeout e para de consultar", async () => {
+      const auth = await openEmailLogin();
+      await waitFor(() => device().polls >= 1);
+      device().status = "expired";
+      await waitStatus(auth, "logged-out");
+      expect(auth.getStatus()).toMatchObject({ state: "logged-out", lastError: "login_timeout" });
+      const seen = device().polls;
+      await sleep(250);
+      expect(device().polls).toBe(seen);
+    });
+
+    it("negado sem código digitado aqui: cadastro fechado", async () => {
+      const auth = await openEmailLogin();
+      device().status = "denied";
+      await waitStatus(auth, "logged-out");
+      expect(auth.getStatus()).toMatchObject({ state: "logged-out", lastError: "signup_closed" });
+    });
+
+    it("slow_down: o app respeita e espera MAIS antes da próxima consulta", async () => {
+      const auth = await openEmailLogin();
+      device().slowDownOnce = true;
+      await waitFor(() => device().polls >= 2, 6000);
+      const [first, second] = device().pollAt;
+      // The server's interval is 50ms; after slow_down the app adds 2s.
+      expect(second! - first!).toBeGreaterThanOrEqual(1900);
+      expect(auth.getStatus().state).toBe("pending");
+    }, 10_000);
+
+    it("falha passageira (5xx) não derruba o login: tenta de novo e completa", async () => {
+      const auth = await openEmailLogin();
+      device().failPolls = 2;
+      await waitFor(() => device().polls >= 3, 4000);
+      device().status = "approved";
+      await waitStatus(auth, "logged-in");
+    });
+
+    it("logout durante o polling: para de consultar e a aprovação tardia não loga", async () => {
+      const auth = await openEmailLogin();
+      await waitFor(() => device().polls >= 1);
+      await auth.logout();
+      expect(auth.getStatus()).toMatchObject({ state: "logged-out" });
+
+      const seen = device().polls;
+      device().status = "approved";
+      await sleep(300);
+      expect(device().polls).toBe(seen);
+      expect(device().status).toBe("approved"); // the tokens were never taken
+      expect(auth.getStatus().state).toBe("logged-out");
+      expect(storedRefresh()).toBeNull();
+    });
+
+    it("logout com a consulta EM VOO: a resposta com os tokens chega depois e é descartada", async () => {
+      const auth = await openEmailLogin();
+      device().pollDelayMs = 300;
+      device().status = "approved";
+      await waitFor(() => device().polls >= 1);
+      await auth.logout(); // the answer with the tokens is still on its way
+      await sleep(500);
+      expect(auth.getStatus().state).toBe("logged-out");
+      expect(storedRefresh()).toBeNull();
+    });
+
+    it("cancelar e pedir de novo: o pedido antigo para de ser consultado", async () => {
+      const auth = await openEmailLogin();
+      await waitFor(() => device().polls >= 1);
+      auth.cancel();
+      expect(auth.getStatus().state).toBe("logged-out");
+      const seen = device().polls;
+      await sleep(250);
+      expect(device().polls).toBe(seen);
+    });
+
+    it("o tempo do login acaba: login_timeout e nada mais é consultado", async () => {
+      const auth = await openEmailLogin(200);
+      await waitStatus(auth, "logged-out");
+      expect(auth.getStatus()).toMatchObject({ lastError: "login_timeout" });
+      const seen = device().polls;
+      await sleep(250);
+      expect(device().polls).toBe(seen);
+    });
+
+    it("refresh em voo + e-mail concluindo: o token atrasado da conta antiga não sobrescreve o da nova", async () => {
+      const first = make();
+      await first.beginLogin("github");
+      await browserStep();
+      await waitStatus(first, "logged-in");
+      backend.state.strictRefresh = { valid: new Set(["R1"]), counter: 0, log: [], delayMs: 400 };
+
+      const second = make();
+      const stale = second.ensureAccessToken();
+      await waitFor(() => backend.state.strictRefresh!.log.length === 1);
+
+      await second.beginLogin("email", "other@example.com");
+      device().tokens = { access: "A99", refresh: "R-new" };
+      device().status = "approved";
+      await waitStatus(second, "logged-in");
+      expect(storedRefresh()).toBe("R-new");
+
+      expect(await stale).toBeNull();
+      expect(storedRefresh()).toBe("R-new");
+    });
+
+    describe("código digitado (o polling não serve)", () => {
+      /** Approved on the phone, but the polling cannot get through (the API keeps failing for it). */
+      async function approvedButPollingBlind(): Promise<CloudAuth> {
+        const auth = await openEmailLogin();
+        device().failPolls = 1000;
+        device().status = "approved";
+        return auth;
+      }
+
+      it("código certo loga (com ou sem o traço) e para o polling", async () => {
+        const auth = await approvedButPollingBlind();
+        expect(await auth.claimCode("481-925")).toEqual({ kind: "approved" });
+        await waitStatus(auth, "logged-in");
+        expect(storedRefresh()).toBe("R1");
+        expect(device().claims).toBe(1);
+        const seen = device().polls;
+        await sleep(300);
+        expect(device().polls).toBe(seen);
+      });
+
+      it("aceita 481925", async () => {
+        const auth = await approvedButPollingBlind();
+        expect(await auth.claimCode("481925")).toEqual({ kind: "approved" });
+      });
+
+      it("errado ×3: restam 2, restam 1, e na terceira o pedido é cancelado e o polling para", async () => {
+        const auth = await approvedButPollingBlind();
+
+        expect(await auth.claimCode("000-000")).toEqual({ kind: "wrong", attemptsLeft: 2 });
+        expect(auth.getStatus()).toMatchObject({ state: "pending", codeAttemptsLeft: 2 });
+        expect(await auth.claimCode("111-111")).toEqual({ kind: "wrong", attemptsLeft: 1 });
+        expect(auth.getStatus()).toMatchObject({ state: "pending", codeAttemptsLeft: 1 });
+
+        expect(await auth.claimCode("222-222")).toEqual({ kind: "blocked" });
+        expect(auth.getStatus()).toMatchObject({ state: "pending", provider: "email", codeBlocked: true });
+        expect(device().status).toBe("denied");
+
+        // Dead: not even the right code is sent, and nothing is polled.
+        const polls = device().polls;
+        expect(await auth.claimCode("481-925")).toEqual({ kind: "ended" });
+        expect(device().claims).toBe(3);
+        await sleep(300);
+        expect(device().polls).toBe(polls);
+        expect(auth.getStatus().state).toBe("pending");
+        auth.cancel();
+        expect(auth.getStatus().state).toBe("logged-out");
+      });
+
+      it("o bloqueio não vira 'login_timeout' quando o tempo passa", async () => {
+        const auth = await openEmailLogin(250);
+        device().failPolls = 1000;
+        device().status = "approved";
+        for (const c of ["000-000", "111-111", "222-222"]) await auth.claimCode(c);
+        await sleep(400);
+        expect(auth.getStatus()).toMatchObject({ state: "pending", codeBlocked: true });
+      });
+
+      it("antes do aceite ou malformado: não gasta tentativa", async () => {
+        const auth = await openEmailLogin();
+        expect(await auth.claimCode("481-925")).toEqual({ kind: "not-spent" }); // authorization_pending
+        expect(device().attempts).toBe(0);
+        expect(await auth.claimCode("12")).toEqual({ kind: "not-spent" }); // never sent
+        expect(device().claims).toBe(1);
+        expect(auth.getStatus()).toEqual(expect.not.objectContaining({ codeAttemptsLeft: expect.anything() }));
+      });
+
+      it("sem login por e-mail em andamento: nada a confirmar", async () => {
+        const auth = make();
+        expect(await auth.claimCode("481-925")).toEqual({ kind: "ended" });
+      });
+
+      it("sem conexão ao confirmar: avisa, o pedido continua vivo", async () => {
+        const auth = await openEmailLogin();
+        backend.server.close();
+        const result = await auth.claimCode("481-925");
+        expect(result).toMatchObject({ kind: "unreachable" });
+        expect(auth.getStatus().state).toBe("pending");
+      });
+    });
   });
 
   describe("login por e-mail: só vira pending com o 202 real", () => {
@@ -324,7 +635,7 @@ describe("cloud-auth (loopback, backend falso)", () => {
       expect(result).toMatchObject({ state: "logged-out", lastError: "timeout" });
     });
 
-    it("202: vira pending DEPOIS da resposta, e o listener segue vivo para o link", async () => {
+    it("202: vira pending DEPOIS da resposta", async () => {
       const auth = createCloudAuth({
         apiBaseUrl: backend.baseUrl,
         dataDir: dir,

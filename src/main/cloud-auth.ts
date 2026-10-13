@@ -1,14 +1,20 @@
 /**
  * Login na conta Stellar — a casca com I/O (BACKEND_V1.md §4/§7.2).
  *
- * Fluxo de app nativo (RFC 8252), sem embutir página de login no Electron:
+ * Fluxo de app nativo (RFC 8252), sem embutir página de login no Electron.
+ * GitHub (o navegador que volta é o do próprio PC):
  *  1. sobe um listener em 127.0.0.1:<porta livre> e gera state + PKCE (S256);
- *  2. GitHub: abre o navegador do sistema em `/v1/auth/start` (que redireciona
- *     ao GitHub). E-mail: POST `/v1/auth/email` (o link chega por e-mail);
+ *  2. abre o navegador do sistema em `/v1/auth/start` (que redireciona ao GitHub);
  *  3. recebe `/cb?code&state` (state CONFERIDO), fecha o listener (timeout 5 min);
- *  4. troca `code`+`code_verifier`+`redirect_uri` (a MESMA do start) por tokens;
- *  5. guarda o REFRESH no safeStorage do perfil e mantém o access só em memória;
- *     renova antes de expirar; logout revoga e apaga.
+ *  4. troca `code`+`code_verifier`+`redirect_uri` (a MESMA do start) por tokens.
+ * E-mail (o link pode ser aberto em OUTRO aparelho, então não há listener):
+ *  1. POST `/v1/auth/email` sem `redirect_uri` (PKCE S256 + install_id): 202 com
+ *     `request_id` e o intervalo de polling;
+ *  2. consulta `/v1/auth/email/poll` no intervalo do servidor até o aceite, que
+ *     entrega o par de tokens uma única vez; ou o usuário digita o código curto
+ *     que a página mostrou (`/v1/auth/email/code-claim`, 3 tentativas).
+ * Nos dois: o REFRESH vai para o safeStorage do perfil e o access fica só em
+ * memória; renova antes de expirar; logout revoga e apaga.
  *
  * O navegador é aberto por `openUrl` injetado (em produção `shell.openExternal`;
  * no smoke, um log — ver `STELLARCLOUD_AUTH_BROWSER` no index.ts). A decisão
@@ -18,20 +24,30 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import {
-  buildEmailStartBody,
+  buildEmailCodeClaimBody,
+  buildEmailDeviceStartBody,
+  buildEmailPollBody,
   buildRefreshBody,
   buildStartUrl,
   buildTokenExchangeBody,
+  classifyCodeClaimResponse,
+  classifyPollResponse,
   decideCallback,
   classifyAccountError,
   classifyEmailStartError,
+  decidePollStep,
   decideTokenRenewal,
+  initialPollState,
   isConnectivityError,
   LOGIN_ERROR,
   loopbackRedirectForPort,
+  normalizeUserCode,
   pkceChallengeS256,
   SIGNUP_CLOSED_ERROR,
   type CloudAccount,
+  type LoginErrorCode,
+  type ParsedTokenPair,
+  type PollState,
 } from "./cloud-auth-decision";
 import { createCloudApi, type CloudApi } from "./cloud-api";
 import { createCloudAccountCache, type CachedAccount } from "./cloud-account-cache";
@@ -58,8 +74,24 @@ export type CloudStatus =
       loginUrl?: string;
       /** The OS refused to open `loginUrl` (no browser handler); nothing is waiting on a tab. */
       openFailed?: boolean;
+      /** E-mail only: wrong confirmation codes typed so far leave this many of the 3 attempts. */
+      codeAttemptsLeft?: number;
+      /** E-mail only: the 3rd wrong code cancelled the request; polling has stopped. */
+      codeBlocked?: boolean;
     }
   | { state: "logged-in"; apiBaseUrl: string; account: CloudAccount; plan: CloudPlan | null; expiresAtMs: number };
+
+/** What typing the confirmation code did; the status carries the lasting part (attempts left, blocked). */
+export type CodeClaimResult =
+  | { kind: "approved" }
+  | { kind: "wrong"; attemptsLeft: number }
+  | { kind: "blocked" }
+  /** Not a 6-digit code, or the request is not approved yet: no attempt was spent. */
+  | { kind: "not-spent" }
+  /** The code could not be checked (offline, API down): nothing changed, try again. */
+  | { kind: "unreachable"; code: LoginErrorCode }
+  /** The login ended some other way (expired, cancelled, already finished by the polling). */
+  | { kind: "ended" };
 
 export type CloudAuthConfig = {
   apiBaseUrl: string;
@@ -111,8 +143,26 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   let plan: CloudPlan | null = null;
   let lastError: string | null = null;
 
+  /** An e-mail login waiting for the approval made on another device. */
+  type DeviceFlow = {
+    requestId: string;
+    verifier: string;
+    installId: string;
+    poll: PollState;
+    pollTimer: NodeJS.Timeout | null;
+    /** Aborts the poll or claim in flight when the login ends. */
+    abort: AbortController;
+    /** Wrong codes already counted against the 3. */
+    codeAttempts: number;
+    codeAttemptsLeft?: number;
+    codeBlocked: boolean;
+    /** A claim is on its way: it may have spent an attempt the counter does not show yet. */
+    claiming: boolean;
+  };
   type Pending = {
-    server: Server;
+    /** GitHub only: the loopback listener. */
+    server?: Server;
+    device?: DeviceFlow;
     provider: CloudProvider;
     state: string;
     verifier: string;
@@ -151,6 +201,8 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
         provider: pending.provider,
         ...(pending.loginUrl ? { loginUrl: pending.loginUrl } : {}),
         ...(pending.openFailed ? { openFailed: true } : {}),
+        ...(pending.device?.codeAttemptsLeft !== undefined ? { codeAttemptsLeft: pending.device.codeAttemptsLeft } : {}),
+        ...(pending.device?.codeBlocked ? { codeBlocked: true } : {}),
       };
     }
     const sessionOffline = isConnectivityError(lastError) && tokens.getRefreshToken() !== null;
@@ -175,14 +227,21 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     plan = null;
   }
 
+  function stopPolling(device: DeviceFlow): void {
+    if (device.pollTimer) clearTimeout(device.pollTimer);
+    device.pollTimer = null;
+    device.abort.abort();
+  }
+
   function stopPending(): void {
     if (!pending) return;
     clearTimeout(pending.timer);
     try {
-      pending.server.close();
+      pending.server?.close();
     } catch {
       /* já fechado */
     }
+    if (pending.device) stopPolling(pending.device);
     pending = null;
   }
 
@@ -372,6 +431,8 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     stopPending();
     lastError = null;
     const mine = ++attempt;
+    // E-mail needs no listener: the link may be opened on another device.
+    if (provider === "email") return beginEmailLogin(mine, email ?? "");
     const { server, port } = await startListener();
     if (mine !== attempt) {
       server.close();
@@ -400,50 +461,185 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
     // recusa com 409 `user_id_taken` (o id pertence à conta anterior).
     const userId = tokens.isLinked() ? null : (ident?.userId ?? null);
 
-    if (provider === "github") {
-      const startUrl = buildStartUrl({ apiBaseUrl: api.baseUrl, provider: "github", redirectUri, state, codeChallenge, userId });
-      const armed = arm();
-      armed.loginUrl = startUrl;
-      pending = armed;
+    const startUrl = buildStartUrl({ apiBaseUrl: api.baseUrl, provider: "github", redirectUri, state, codeChallenge, userId });
+    const armed = arm();
+    armed.loginUrl = startUrl;
+    pending = armed;
+    emit();
+    // The open is not awaited (the tab may take a while), but a refusal from
+    // the OS must reach the UI instead of leaving it waiting on a tab that
+    // never opened.
+    void (async () => cfg.openUrl(startUrl))().catch(() => {
+      if (pending !== armed) return;
+      armed.openFailed = true;
       emit();
-      // The open is not awaited (the tab may take a while), but a refusal from
-      // the OS must reach the UI instead of leaving it waiting on a tab that
-      // never opened.
-      void (async () => cfg.openUrl(startUrl))().catch(() => {
-        if (pending !== armed) return;
-        armed.openFailed = true;
-        emit();
-      });
-      return currentStatus();
-    }
+    });
+    return currentStatus();
+  }
 
-    // E-mail: nothing is "pending" until the server ACCEPTED the request —
-    // announcing it earlier made a network failure look like a sent link.
-    const res = await api.startEmail(
-      buildEmailStartBody({ provider: "email", redirectUri, state, codeChallenge, email: email ?? "", userId }),
-    );
-    if (mine !== attempt) {
-      // Cancelled or superseded while the request was in flight.
-      try {
-        server.close();
-      } catch {
-        /* já fechado */
-      }
+  // ---- E-mail login: device flow (no listener) -----------------------------
+
+  async function beginEmailLogin(mine: number, email: string): Promise<CloudStatus> {
+    const ident = cfg.identity();
+    if (!ident?.installId) {
+      // The request is tied to this installation; without one there is nothing to poll for.
+      lastError = LOGIN_ERROR.emailFailed;
+      emit();
       return currentStatus();
     }
+    const verifier = randomOpaque();
+    // The `user_id` goes with the FIRST login only (see the GitHub branch).
+    const userId = tokens.isLinked() ? null : ident.userId;
+    // Nothing is "pending" until the server ACCEPTED the request — announcing
+    // it earlier made a network failure look like a sent link.
+    const res = await api.startEmailDevice(
+      buildEmailDeviceStartBody({
+        email,
+        codeChallenge: pkceChallengeS256(verifier),
+        installId: ident.installId,
+        deviceLabel: cfg.deviceLabel,
+        userId,
+      }),
+    );
+    if (mine !== attempt) return currentStatus(); // cancelled or superseded while in flight
     if (!res.ok) {
-      try {
-        server.close();
-      } catch {
-        /* já fechado */
-      }
       lastError = classifyEmailStartError(res.error);
       emit();
       return currentStatus();
     }
-    pending = arm();
+    const device: DeviceFlow = {
+      requestId: res.value.requestId,
+      verifier,
+      installId: ident.installId,
+      poll: initialPollState(res.value.pollIntervalMs),
+      pollTimer: null,
+      abort: new AbortController(),
+      codeAttempts: 0,
+      codeBlocked: false,
+      claiming: false,
+    };
+    const timer = setTimeout(() => {
+      if (pending?.device === device) {
+        stopPending();
+        lastError = LOGIN_ERROR.loginTimeout;
+        emit();
+      }
+    }, Math.min(cfg.loginTimeoutMs ?? LOGIN_TIMEOUT_MS, res.value.expiresInMs));
+    if (typeof timer.unref === "function") timer.unref();
+    const armed: Pending = { device, provider: "email", state: "", verifier, redirectUri: "", timer };
+    pending = armed;
+    schedulePoll(armed, device.poll.intervalMs);
     emit();
     return currentStatus();
+  }
+
+  function schedulePoll(owner: Pending, delayMs: number): void {
+    const device = owner.device;
+    if (!device) return;
+    device.pollTimer = setTimeout(() => void pollOnce(owner), delayMs);
+    if (typeof device.pollTimer.unref === "function") device.pollTimer.unref();
+  }
+
+  async function pollOnce(owner: Pending): Promise<void> {
+    const device = owner.device;
+    if (!device || pending !== owner || device.codeBlocked) return;
+    device.pollTimer = null;
+    const epoch = sessionEpoch;
+    const res = await api.pollEmail(
+      buildEmailPollBody({ requestId: device.requestId, codeVerifier: device.verifier, installId: device.installId }),
+      device.abort.signal,
+    );
+    // The login ended while this poll was out (logout, cancel, a new login, the
+    // code path won): its answer is about a login that is gone.
+    if (pending !== owner || epoch !== sessionEpoch) return;
+    const step = decidePollStep({
+      outcome: classifyPollResponse(res),
+      state: device.poll,
+      codeAttempts: device.codeAttempts + (device.claiming ? 1 : 0),
+    });
+    switch (step.kind) {
+      case "complete":
+        await finishEmailLogin(step.pair);
+        return;
+      case "fail":
+        stopPending();
+        lastError = step.code;
+        emit();
+        return;
+      case "blocked":
+        blockCodeEntry(owner);
+        return;
+      case "wait":
+        device.poll = step.state;
+        schedulePoll(owner, step.delayMs);
+    }
+  }
+
+  /** The tokens arrived (by the polling or by the code): the login is over, the session is new. */
+  async function finishEmailLogin(pair: ParsedTokenPair): Promise<void> {
+    stopPending();
+    // A new login replaces whatever session (and refresh in flight) came before.
+    endSessionEpoch();
+    applyPair(pair);
+    await loadMe();
+  }
+
+  /** The 3rd wrong code (or a denial after wrong codes): the request is dead, say so and stop. */
+  function blockCodeEntry(owner: Pending): void {
+    const device = owner.device;
+    if (!device) return;
+    device.codeBlocked = true;
+    device.codeAttemptsLeft = 0;
+    clearTimeout(owner.timer);
+    stopPolling(device);
+    emit();
+  }
+
+  async function claimCode(raw: string): Promise<CodeClaimResult> {
+    const owner = pending;
+    const device = owner?.device;
+    if (!owner || !device || device.codeBlocked || device.claiming) return { kind: "ended" };
+    const userCode = normalizeUserCode(raw);
+    if (userCode === null) return { kind: "not-spent" };
+    const epoch = sessionEpoch;
+    const attemptsBefore = device.codeAttempts;
+    device.claiming = true;
+    const res = await api.claimEmailCode(
+      buildEmailCodeClaimBody({ requestId: device.requestId, codeVerifier: device.verifier, installId: device.installId, userCode }),
+      device.abort.signal,
+    );
+    device.claiming = false;
+    if (pending !== owner || epoch !== sessionEpoch) return { kind: "ended" };
+    const outcome = classifyCodeClaimResponse(res, attemptsBefore);
+    switch (outcome.kind) {
+      case "approved":
+        await finishEmailLogin(outcome.pair);
+        return { kind: "approved" };
+      case "wrong":
+        device.codeAttempts = attemptsBefore + 1;
+        device.codeAttemptsLeft = outcome.attemptsLeft;
+        emit();
+        return outcome;
+      case "blocked":
+        device.codeAttempts = attemptsBefore + 1;
+        blockCodeEntry(owner);
+        return { kind: "blocked" };
+      case "expired":
+        stopPending();
+        lastError = LOGIN_ERROR.loginTimeout;
+        emit();
+        return { kind: "ended" };
+      case "stale":
+        // The server refuses the proof: nothing left to wait for.
+        stopPending();
+        lastError = LOGIN_ERROR.emailFailed;
+        emit();
+        return { kind: "ended" };
+      case "not-spent":
+        return outcome;
+      case "unreachable":
+        return outcome;
+    }
   }
 
   async function logout(): Promise<CloudStatus> {
@@ -481,6 +677,7 @@ export function createCloudAuth(cfg: CloudAuthConfig) {
   return {
     getStatus: currentStatus,
     beginLogin,
+    claimCode,
     cancel(): CloudStatus {
       attempt++;
       stopPending();

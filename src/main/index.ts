@@ -4725,6 +4725,10 @@ function createWindow() {
     return cloudAuth.beginLogin(p, typeof email === "string" && email.trim() !== "" ? email.trim() : undefined);
   });
   ipcMain.handle("cloud:cancel", () => cloudAuth?.cancel() ?? cloudStatusOrLoggedOut());
+  // The confirmation code typed by hand in the e-mail login (the polling's fallback).
+  ipcMain.handle("cloud:claim-code", (_e, code: unknown) =>
+    cloudAuth && typeof code === "string" ? cloudAuth.claimCode(code.slice(0, 32)) : { kind: "ended" },
+  );
   ipcMain.handle("cloud:retry", () => cloudAuth?.retry() ?? cloudStatusOrLoggedOut());
   ipcMain.handle("cloud:logout", () => cloudAuth?.logout() ?? cloudStatusOrLoggedOut());
   // The plans page the "Fazer upgrade" call-to-action opens (config).

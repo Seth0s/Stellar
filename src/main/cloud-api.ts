@@ -6,10 +6,14 @@
 
 import {
   parseCloudApiError,
+  parseDeviceTokenReply,
+  parseEmailDeviceStart,
   parseMe,
   parseTokenPair,
   type CloudAccount,
   type CloudApiError,
+  type DeviceTokenReply,
+  type EmailDeviceStart,
   type ParsedTokenPair,
 } from "./cloud-auth-decision";
 import { isOpaqueId } from "./local-identity-decision";
@@ -98,6 +102,8 @@ export type CloudDevice = {
 
 /** How long the app waits for the server to accept the sign-in e-mail request. */
 const EMAIL_START_TIMEOUT_MS = 15_000;
+/** One poll or code-claim: short, the next poll is already scheduled. */
+const EMAIL_DEVICE_CALL_TIMEOUT_MS = 10_000;
 
 export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch; emailStartTimeoutMs?: number }) {
   const baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -106,7 +112,7 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
   async function request(
     method: string,
     path: string,
-    opts2: { body?: unknown; token?: string; timeoutMs?: number } = {},
+    opts2: { body?: unknown; token?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<ApiResult<unknown>> {
     const headers: Record<string, string> = {};
     if (opts2.body !== undefined) headers["Content-Type"] = "application/json";
@@ -114,13 +120,16 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
 
     // Only calls that pass `timeoutMs` are bounded: blob transfers stay open as long as they need.
     const timeout = opts2.timeoutMs !== undefined ? AbortSignal.timeout(opts2.timeoutMs) : undefined;
+    // A caller that cancels (a login that ended) aborts through `signal`; only the timeout reads as "timed out".
+    const signals = [timeout, opts2.signal].filter((x): x is AbortSignal => x !== undefined);
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
     let response: Response;
     try {
       response = await doFetch(`${baseUrl}${path}`, {
         method,
         headers,
         body: opts2.body === undefined ? undefined : JSON.stringify(opts2.body),
-        signal: timeout,
+        signal,
       });
     } catch (err) {
       if (timeout?.aborted) {
@@ -179,6 +188,14 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
     }
   }
 
+  async function deviceTokenCall(path: string, body: Record<string, string>, signal?: AbortSignal): Promise<ApiResult<DeviceTokenReply>> {
+    const res = await request("POST", path, { body, timeoutMs: EMAIL_DEVICE_CALL_TIMEOUT_MS, signal });
+    if (!res.ok) return res;
+    const reply = parseDeviceTokenReply(res.value);
+    if (!reply) return { ok: false, error: { status: 0, code: "invalid_response", message: `${path} response is neither pending nor tokens` } };
+    return { ok: true, value: reply };
+  }
+
   /** Shared POST for the B7 task sub-actions that answer a task view. A local
    *  function (not a method) so it never depends on `this` binding. */
   async function teamTaskAction(
@@ -203,6 +220,25 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
     async startEmail(body: Record<string, string>): Promise<ApiResult<null>> {
       const res = await request("POST", "/v1/auth/email", { body, timeoutMs: opts.emailStartTimeoutMs ?? EMAIL_START_TIMEOUT_MS });
       return res.ok ? { ok: true, value: null } : res;
+    },
+
+    /** POST /v1/auth/email WITHOUT redirect_uri — device flow: the 202 carries the request id and the polling interval. */
+    async startEmailDevice(body: Record<string, string>): Promise<ApiResult<EmailDeviceStart>> {
+      const res = await request("POST", "/v1/auth/email", { body, timeoutMs: opts.emailStartTimeoutMs ?? EMAIL_START_TIMEOUT_MS });
+      if (!res.ok) return res;
+      const start = parseEmailDeviceStart(res.value);
+      if (!start) return { ok: false, error: { status: 0, code: "invalid_response", message: "email response missing request_id" } };
+      return { ok: true, value: start };
+    },
+
+    /** POST /v1/auth/email/poll — still pending, or the TokenPair (delivered once). */
+    async pollEmail(body: Record<string, string>, signal?: AbortSignal): Promise<ApiResult<DeviceTokenReply>> {
+      return deviceTokenCall("/v1/auth/email/poll", body, signal);
+    },
+
+    /** POST /v1/auth/email/code-claim — the code typed by hand; spends one of 3 attempts when wrong. */
+    async claimEmailCode(body: Record<string, string>, signal?: AbortSignal): Promise<ApiResult<DeviceTokenReply>> {
+      return deviceTokenCall("/v1/auth/email/code-claim", body, signal);
     },
 
     /** POST /v1/auth/token (authorization_code). */

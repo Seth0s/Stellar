@@ -624,6 +624,118 @@
   color: var(--v2-warn);
 }
 
+/* E-mail waiting step: the confirmation code, a discreet way in below the countdown. */
+.codeToggleWrap {
+  margin-top: calc(-1 * var(--v2-s2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s4);
+}
+
+.codeToggleLink {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--v2-f13);
+  color: var(--v2-link);
+  cursor: pointer;
+  text-align: left;
+  width: fit-content;
+}
+
+.codeToggleLink:hover {
+  color: var(--fila-link-hover);
+  text-decoration: underline;
+}
+
+.codeBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-s5);
+  padding: var(--v2-s7) var(--v2-s8);
+  border-radius: var(--v2-r12);
+  background: var(--v2-field);
+  border: 1px solid var(--v2-line-input);
+}
+
+.codeLabel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--v2-f12h);
+  color: var(--v2-text-2);
+}
+
+.codeHint {
+  margin: var(--v2-s1) 0 0;
+  font-size: var(--v2-f11h);
+  line-height: 1.4;
+  color: var(--v2-text-5);
+}
+
+.codeInputRow {
+  display: flex;
+  gap: var(--v2-s5);
+  align-items: center;
+}
+
+.codeInput {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  box-sizing: border-box;
+  padding: 0 var(--v2-s6);
+  border-radius: var(--v2-r10);
+  border: 1px solid var(--v2-line-input);
+  background: var(--v2-field);
+  color: var(--v2-text);
+  font-family: var(--font-mono);
+  font-size: var(--v2-f16);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  outline: none;
+}
+
+.codeInput:focus {
+  border-color: var(--v2-primary-focus);
+}
+
+.codeInputErr {
+  border-color: var(--v2-danger);
+  background: var(--v2-danger-surface);
+  color: var(--v2-danger);
+}
+
+.codeInputBlocked {
+  border-color: var(--v2-danger-line);
+  background: var(--v2-danger-surface);
+  color: var(--v2-danger-text);
+  cursor: not-allowed;
+}
+
+.codeErrMsg {
+  display: flex;
+  align-items: center;
+  gap: var(--v2-s3);
+  font-size: var(--v2-f12h);
+  color: var(--v2-danger);
+}
+
+.codeBlockedMsg {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--v2-s4);
+  padding: var(--v2-s5) var(--v2-s6);
+  border-radius: var(--v2-r8);
+  background: var(--v2-danger-notice-bg);
+  border: 1px solid var(--v2-danger-line);
+  font-size: var(--v2-f12h);
+  line-height: 1.45;
+  color: var(--v2-danger-fg);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .spinner {
     animation: login-spin 1.1s linear infinite; /* sd:allow: continuous login feedback */

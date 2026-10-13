@@ -6,23 +6,38 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  buildEmailStartBody,
+  buildEmailCodeClaimBody,
+  buildEmailDeviceStartBody,
+  buildEmailPollBody,
   buildRefreshBody,
   buildStartUrl,
   buildTokenExchangeBody,
+  classifyCodeClaimResponse,
+  classifyPollResponse,
   CLOUD_API_DEFAULT,
+  CODE_CLAIM_MAX_ATTEMPTS,
   decideCallback,
+  decidePollStep,
   decideTokenRenewal,
+  initialPollState,
   isLoopbackRedirectUri,
   isValidCodeChallenge,
   isValidCodeVerifier,
   loopbackRedirectForPort,
+  normalizeUserCode,
   parseCloudApiError,
+  parseDeviceTokenReply,
+  parseEmailDeviceStart,
   parseMe,
   parseTokenPair,
   pkceChallengeS256,
   parseCloudApiOverride,
+  POLL_BACKOFF_CEILING_MS,
+  POLL_MAX_CONSECUTIVE_FAILURES,
   resolveCloudApiBaseUrl,
+  SLOW_DOWN_STEP_MS,
+  type CloudApiError,
+  type ParsedTokenPair,
 } from "../../src/main/cloud-auth-decision";
 
 describe("PKCE", () => {
@@ -175,12 +190,6 @@ describe("montagem das requisições", () => {
   });
 
   it("corpos têm as chaves que o backend lê", () => {
-    expect(buildEmailStartBody({ provider: "email", redirectUri: "u", state: "s", codeChallenge: "c", email: "a@b" })).toMatchObject({
-      provider: "email",
-      redirect_uri: "u",
-      code_challenge_method: "S256",
-      email: "a@b",
-    });
     expect(buildTokenExchangeBody({ code: "c", codeVerifier: "v", redirectUri: "u", installId: "i", deviceLabel: "d" })).toEqual({
       grant_type: "authorization_code",
       code: "c",
@@ -242,5 +251,206 @@ describe("parseCloudApiOverride", () => {
     expect(parseCloudApiOverride("http://127.0.0.1:1/")).toBe("http://127.0.0.1:1");
     expect(parseCloudApiOverride("http://example.com")).toBeNull();
     expect(parseCloudApiOverride("https://example.com", { loopbackOnly: true })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Login por e-mail em device flow
+// ---------------------------------------------------------------------------
+
+const PAIR: ParsedTokenPair = { accessToken: "A", refreshToken: "R", expiresInSec: 900, refreshExpiresInSec: 0 };
+const apiErr = (status: number, code: string): CloudApiError => ({ status, code, message: "m" });
+
+describe("device flow: corpos e leitura do pedido", () => {
+  it("o pedido NÃO leva redirect_uri nem state (é isso que escolhe o device flow)", () => {
+    const body = buildEmailDeviceStartBody({
+      email: "a@b",
+      codeChallenge: "C".repeat(43),
+      installId: "inst",
+      deviceLabel: "meu-pc",
+      userId: "uid",
+    });
+    expect(body).toEqual({
+      email: "a@b",
+      code_challenge: "C".repeat(43),
+      code_challenge_method: "S256",
+      install_id: "inst",
+      device_label: "meu-pc",
+      user_id: "uid",
+    });
+    expect(body).not.toHaveProperty("redirect_uri");
+    expect(body).not.toHaveProperty("state");
+  });
+
+  it("device_label vazio some e o grande é cortado em 64; sem user_id, não vai", () => {
+    expect(buildEmailDeviceStartBody({ email: "a@b", codeChallenge: "c", installId: "i", deviceLabel: "  " })).not.toHaveProperty("device_label");
+    const long = buildEmailDeviceStartBody({ email: "a@b", codeChallenge: "c", installId: "i", deviceLabel: "x".repeat(200), userId: null });
+    expect(long.device_label).toHaveLength(64);
+    expect(long).not.toHaveProperty("user_id");
+  });
+
+  it("poll e code-claim levam request_id + verifier + install_id (e o código)", () => {
+    const input = { requestId: "r", codeVerifier: "v", installId: "i" };
+    expect(buildEmailPollBody(input)).toEqual({ request_id: "r", code_verifier: "v", install_id: "i" });
+    expect(buildEmailCodeClaimBody({ ...input, userCode: "481-925" })).toEqual({
+      request_id: "r",
+      code_verifier: "v",
+      install_id: "i",
+      user_code: "481-925",
+    });
+  });
+
+  it("lê o 202: request_id obrigatório, intervalo em ms limitado, padrões quando faltam", () => {
+    expect(parseEmailDeviceStart({ request_id: "r1", poll_interval_sec: 3, expires_in: 300 })).toEqual({
+      requestId: "r1",
+      pollIntervalMs: 3000,
+      expiresInMs: 300_000,
+    });
+    expect(parseEmailDeviceStart({ request_id: "r1" })).toEqual({ requestId: "r1", pollIntervalMs: 3000, expiresInMs: 300_000 });
+    expect(parseEmailDeviceStart({ request_id: "r1", poll_interval_sec: 9999 })?.pollIntervalMs).toBe(30_000);
+    expect(parseEmailDeviceStart({ request_id: "r1", poll_interval_sec: -1 })?.pollIntervalMs).toBe(3000);
+    expect(parseEmailDeviceStart({ status: "sent" })).toBeNull();
+    expect(parseEmailDeviceStart({ request_id: "" })).toBeNull();
+    expect(parseEmailDeviceStart(null)).toBeNull();
+  });
+
+  it("lê a resposta do poll: pending, par de tokens, ou nada reconhecível", () => {
+    expect(parseDeviceTokenReply({ status: "pending" })).toEqual({ kind: "pending" });
+    expect(parseDeviceTokenReply({ access_token: "A", refresh_token: "R", expires_in: 900 })).toMatchObject({ kind: "tokens" });
+    expect(parseDeviceTokenReply({ status: "weird" })).toBeNull();
+    expect(parseDeviceTokenReply(null)).toBeNull();
+  });
+});
+
+describe("normalizeUserCode", () => {
+  it("aceita 481-925, 481925 e com espaço; recusa o resto sem mandar nada", () => {
+    expect(normalizeUserCode("481-925")).toBe("481-925");
+    expect(normalizeUserCode("481925")).toBe("481-925");
+    expect(normalizeUserCode(" 481 925 ")).toBe("481-925");
+    expect(normalizeUserCode("48192")).toBeNull();
+    expect(normalizeUserCode("4819250")).toBeNull();
+    expect(normalizeUserCode("48a-925")).toBeNull();
+    expect(normalizeUserCode("")).toBeNull();
+  });
+});
+
+describe("classifyPollResponse: resposta → estado", () => {
+  it("200 pending, 200 tokens", () => {
+    expect(classifyPollResponse({ ok: true, value: { kind: "pending" } })).toEqual({ kind: "pending" });
+    expect(classifyPollResponse({ ok: true, value: { kind: "tokens", pair: PAIR } })).toEqual({ kind: "approved", pair: PAIR });
+  });
+
+  it.each([
+    ["slow_down", 429, "slow_down"],
+    ["expired_token", 400, "expired"],
+    ["access_denied", 400, "denied"],
+    ["invalid_grant", 400, "rejected"],
+    ["invalid_request", 400, "rejected"],
+  ])("%s (%i) → %s", (code, status, kind) => {
+    expect(classifyPollResponse({ ok: false, error: apiErr(status, code) }).kind).toBe(kind);
+  });
+
+  it("rate_limited, 5xx e rede são transitórios (tenta de novo)", () => {
+    for (const e of [apiErr(429, "rate_limited"), apiErr(503, "unavailable"), apiErr(0, "network"), apiErr(0, "timeout")]) {
+      expect(classifyPollResponse({ ok: false, error: e }).kind).toBe("transient");
+    }
+  });
+});
+
+describe("decidePollStep: o próximo passo do polling", () => {
+  const state = initialPollState(3000);
+  const step = (outcome: Parameters<typeof decidePollStep>[0]["outcome"], codeAttempts = 0, s = state) =>
+    decidePollStep({ outcome, state: s, codeAttempts });
+
+  it("aprovado entrega o par; pending espera o intervalo do servidor", () => {
+    expect(step({ kind: "approved", pair: PAIR })).toEqual({ kind: "complete", pair: PAIR });
+    expect(step({ kind: "pending" })).toMatchObject({ kind: "wait", delayMs: 3000 });
+  });
+
+  it("slow_down aumenta o intervalo e o novo ritmo vale daí em diante, até o teto", () => {
+    const first = step({ kind: "slow_down" });
+    expect(first).toMatchObject({ kind: "wait", delayMs: 3000 + SLOW_DOWN_STEP_MS });
+    if (first.kind !== "wait") throw new Error("esperava wait");
+    // um pending depois NÃO volta ao ritmo antigo
+    expect(step({ kind: "pending" }, 0, first.state)).toMatchObject({ kind: "wait", delayMs: 3000 + SLOW_DOWN_STEP_MS });
+    let s = first.state;
+    for (let i = 0; i < 20; i++) {
+      const next = step({ kind: "slow_down" }, 0, s);
+      if (next.kind !== "wait") throw new Error("esperava wait");
+      s = next.state;
+    }
+    expect(s.intervalMs).toBe(POLL_BACKOFF_CEILING_MS);
+  });
+
+  it("expirado, recusado e rejeitado encerram com o código certo", () => {
+    expect(step({ kind: "expired" })).toEqual({ kind: "fail", code: "login_timeout" });
+    expect(step({ kind: "rejected" })).toEqual({ kind: "fail", code: "email_failed" });
+  });
+
+  it("denied sem código digitado aqui = cadastro fechado; com código errado = bloqueio das 3 tentativas", () => {
+    expect(step({ kind: "denied" }, 0)).toEqual({ kind: "fail", code: "signup_closed" });
+    expect(step({ kind: "denied" }, 1)).toEqual({ kind: "blocked" });
+  });
+
+  it("falha transitória dobra o intervalo (com teto), e uma boa volta ao do servidor", () => {
+    const e = apiErr(0, "network");
+    const a = step({ kind: "transient", error: e });
+    expect(a).toMatchObject({ kind: "wait", delayMs: 6000 });
+    if (a.kind !== "wait") throw new Error("esperava wait");
+    expect(a.state.consecutiveFailures).toBe(1);
+    const ok = step({ kind: "pending" }, 0, a.state);
+    expect(ok).toMatchObject({ kind: "wait", delayMs: 3000 });
+    if (ok.kind !== "wait") throw new Error("esperava wait");
+    expect(ok.state.consecutiveFailures).toBe(0);
+  });
+
+  it("uma sequência de falhas desiste como erro de conexão, no código certo", () => {
+    for (const [e, code] of [
+      [apiErr(0, "network"), "network"],
+      [apiErr(0, "timeout"), "timeout"],
+      [apiErr(503, "unavailable"), "api_unavailable"],
+    ] as const) {
+      let s = state;
+      let last = step({ kind: "transient", error: e }, 0, s);
+      for (let i = 1; i < POLL_MAX_CONSECUTIVE_FAILURES; i++) {
+        if (last.kind !== "wait") break;
+        s = last.state;
+        last = step({ kind: "transient", error: e }, 0, s);
+      }
+      expect(last).toEqual({ kind: "fail", code });
+    }
+  });
+});
+
+describe("classifyCodeClaimResponse: código digitado", () => {
+  const claim = (res: Parameters<typeof classifyCodeClaimResponse>[0], before = 0) => classifyCodeClaimResponse(res, before);
+  const err = (status: number, code: string) => ({ ok: false as const, error: apiErr(status, code) });
+
+  it("código certo entrega o par", () => {
+    expect(claim({ ok: true, value: { kind: "tokens", pair: PAIR } })).toEqual({ kind: "approved", pair: PAIR });
+  });
+
+  it("errado ×3: restam 2, restam 1 e na terceira o pedido é bloqueado", () => {
+    expect(claim(err(400, "invalid_code"), 0)).toEqual({ kind: "wrong", attemptsLeft: 2 });
+    expect(claim(err(400, "invalid_code"), 1)).toEqual({ kind: "wrong", attemptsLeft: 1 });
+    expect(claim(err(400, "invalid_code"), CODE_CLAIM_MAX_ATTEMPTS - 1)).toEqual({ kind: "blocked" });
+  });
+
+  it("access_denied é bloqueio mesmo sem a contagem local (o servidor manda)", () => {
+    expect(claim(err(400, "access_denied"), 0)).toEqual({ kind: "blocked" });
+  });
+
+  it("authorization_pending e código malformado não gastam tentativa", () => {
+    expect(claim(err(400, "authorization_pending"))).toEqual({ kind: "not-spent" });
+    expect(claim(err(400, "invalid_request"))).toEqual({ kind: "not-spent" });
+  });
+
+  it("expirado, prova recusada e sem conexão", () => {
+    expect(claim(err(400, "expired_token"))).toEqual({ kind: "expired" });
+    expect(claim(err(400, "invalid_grant"))).toEqual({ kind: "stale" });
+    expect(claim(err(0, "network"))).toEqual({ kind: "unreachable", code: "network" });
+    expect(claim(err(0, "timeout"))).toEqual({ kind: "unreachable", code: "timeout" });
+    expect(claim(err(429, "rate_limited"))).toEqual({ kind: "unreachable", code: "rate_limited" });
+    expect(claim(err(503, "x"))).toEqual({ kind: "unreachable", code: "api_unavailable" });
   });
 });

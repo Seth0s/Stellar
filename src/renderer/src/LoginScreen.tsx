@@ -4,6 +4,7 @@ import type { CloudStatusInfo, WorkHomeTool } from "../../preload/index";
 import { decideLoginOutcome, loginErrorForStatus, readPendingExtras } from "./login-flow-decision";
 import type { MessageKey } from "../../shared/i18n";
 import { AppLogo } from "./AppLogo";
+import { feedbackForClaim, formatUserCodeInput, isCodeComplete, readCodeStatus, wrongCodeKey, type CodeFeedback } from "./LoginScreenCode";
 import styles from "./LoginScreen.module.css";
 
 const ALL_TOOLS: WorkHomeTool[] = ["claude", "codex", "cursor", "gemini", "stellar"];
@@ -64,6 +65,11 @@ export function LoginScreen({
   // A login failed on this screen: the send button now reads "try again".
   const [failedOnce, setFailedOnce] = useState(false);
   const [copied, setCopied] = useState(false);
+  // E-mail waiting step: the confirmation code typed by hand (the polling's fallback).
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [codeValue, setCodeValue] = useState("");
+  const [codeFeedback, setCodeFeedback] = useState<CodeFeedback>({ kind: "none" });
+  const [claiming, setClaiming] = useState(false);
   // True from the moment the user starts a login until it fails, is cancelled or lands.
   const attemptingRef = useRef(false);
 
@@ -90,6 +96,7 @@ export function LoginScreen({
 
   const loggedIn = cloud?.state === "logged-in";
   const pendingExtras = readPendingExtras(cloud);
+  const codeStatus = readCodeStatus(cloud);
   const displayName =
     fixtureDisplayName ?? (loggedIn && cloud.state === "logged-in" ? cloud.account.displayName : "");
 
@@ -109,10 +116,31 @@ export function LoginScreen({
     return () => window.clearInterval(id);
   }, [mode]);
 
+  function resetCodeEntry() {
+    setCodeOpen(false);
+    setCodeValue("");
+    setCodeFeedback({ kind: "none" });
+    setClaiming(false);
+  }
+
+  async function confirmCode() {
+    if (claiming || codeStatus.blocked || !isCodeComplete(codeValue)) return;
+    setClaiming(true);
+    setCodeFeedback({ kind: "none" });
+    try {
+      const result = await window.cloud.claimCode(codeValue);
+      setCodeFeedback(feedbackForClaim(result, codeStatus.attemptsLeft));
+    } catch {
+      setCodeFeedback({ kind: "unreachable", key: "cloud.error.generic" });
+    }
+    setClaiming(false);
+  }
+
   async function start(p: "github" | "email") {
     setProvider(p);
     setError(null);
     setCopied(false);
+    resetCodeEntry();
     attemptingRef.current = true;
     if (p === "email") {
       // No browser step: the link arrives by e-mail. Stay on this screen until
@@ -189,6 +217,7 @@ export function LoginScreen({
     } catch {
       /* nothing to cancel is fine */
     }
+    resetCodeEntry();
     setMode("choose");
   }
 
@@ -285,10 +314,82 @@ export function LoginScreen({
                   ? t("LoginScreen.waitingGithub", { time: formatCountdown(expiresSec) })
                   : t("LoginScreen.waitingEmail", { time: formatCountdown(expiresSec) })}
               </div>
+              {provider === "email" ? (
+                <div className={styles.codeToggleWrap}>
+                  {!codeOpen && !codeStatus.blocked ? (
+                    <button type="button" className={styles.codeToggleLink} data-role="toggle-code-link" onClick={() => setCodeOpen(true)}>
+                      {t("LoginScreen.code.toggle")}
+                    </button>
+                  ) : (
+                    <div className={styles.codeBox} data-role="code-expanded-box">
+                      <div className={styles.codeLabel}>
+                        <label htmlFor="lg-code">{t("LoginScreen.code.label")}</label>
+                        {codeStatus.blocked ? null : (
+                          <button type="button" className={styles.cancelLink} onClick={() => setCodeOpen(false)}>
+                            {t("LoginScreen.code.hide")}
+                          </button>
+                        )}
+                      </div>
+                      <div className={styles.codeInputRow}>
+                        <input
+                          id="lg-code"
+                          className={`${styles.codeInput}${codeFeedback.kind === "wrong" ? ` ${styles.codeInputErr}` : ""}${codeStatus.blocked ? ` ${styles.codeInputBlocked}` : ""}`}
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={7}
+                          placeholder="481-925"
+                          value={codeValue}
+                          disabled={codeStatus.blocked}
+                          data-role="code-input"
+                          onChange={(e) => {
+                            setCodeValue(formatUserCodeInput(e.target.value));
+                            setCodeFeedback({ kind: "none" });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void confirmCode();
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className={styles.primaryBtn}
+                          data-role="confirm-btn"
+                          disabled={codeStatus.blocked || claiming || !isCodeComplete(codeValue)}
+                          onClick={() => void confirmCode()}
+                        >
+                          {t("LoginScreen.code.confirm")}
+                        </button>
+                      </div>
+                      {codeFeedback.kind === "wrong" ? (
+                        <div className={styles.codeErrMsg} data-role="code-err-msg" role="alert">
+                          {t(wrongCodeKey(codeFeedback.attemptsLeft), { n: codeFeedback.attemptsLeft })}
+                        </div>
+                      ) : null}
+                      {codeFeedback.kind === "unreachable" ? (
+                        <div className={styles.codeErrMsg} data-role="code-err-msg" role="alert">
+                          {t(codeFeedback.key)}
+                        </div>
+                      ) : null}
+                      {codeStatus.blocked ? (
+                        <div className={styles.codeBlockedMsg} data-role="code-blocked-msg" role="alert">
+                          {t("LoginScreen.code.blocked")}
+                        </div>
+                      ) : null}
+                      <p className={styles.codeHint}>{t("LoginScreen.code.hint")}</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
               <div className={styles.stepActions}>
-                <button type="button" className={styles.ghostBtn} onClick={() => void backFromWaiting()}>
-                  {t("common.back")}
-                </button>
+                {codeStatus.blocked ? (
+                  <button type="button" className={styles.primaryBtn} data-role="code-new-email" onClick={() => void backFromWaiting()}>
+                    {t("LoginScreen.code.newEmail")}
+                  </button>
+                ) : (
+                  <button type="button" className={styles.ghostBtn} onClick={() => void backFromWaiting()}>
+                    {t("common.back")}
+                  </button>
+                )}
                 <span className={styles.grow} />
                 {fixtureDisplayName != null ? (
                   <button type="button" className={styles.primaryBtn} data-role="fixture-advance" onClick={() => setMode(2)}>

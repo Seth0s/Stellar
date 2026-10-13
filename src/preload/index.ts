@@ -18,6 +18,7 @@ import type {
 } from "../main/cloud-sessions";
 import type { SessionFailure as AccountSessionFailure, ProjectRef as AccountSessionProjectRef, SessionSummary as AccountSessionSummary } from "../main/cloud-sessions-decision";
 import type { SessionLink as AccountSessionLink } from "../main/cloud-sessions-links";
+import type { CodeClaimResult as CloudAuthCodeClaimResult } from "../main/cloud-auth";
 import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
 import type { TaskPhase } from "../main/task-phase-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
@@ -2407,8 +2408,18 @@ export type CloudPlanInfo = {
 };
 export type CloudStatusInfo =
   | { state: "logged-out"; apiBaseUrl: string; lastError: string | null }
-  | { state: "pending"; apiBaseUrl: string; provider: "github" | "email" }
+  | {
+      state: "pending";
+      apiBaseUrl: string;
+      provider: "github" | "email";
+      /** E-mail login: attempts left of the 3 for the confirmation code, once one was wrong. */
+      codeAttemptsLeft?: number;
+      /** E-mail login: the 3rd wrong code cancelled the request. */
+      codeBlocked?: boolean;
+    }
   | { state: "logged-in"; apiBaseUrl: string; account: CloudAccountInfo; plan: CloudPlanInfo | null; expiresAtMs: number };
+/** What typing the e-mail login's confirmation code did (`cloud-auth.ts` owns the shape). */
+export type CloudCodeClaimResult = CloudAuthCodeClaimResult;
 /** A8 — one machine of the account (`cloud-link.ts` declares the same shape).
  *  `current` is THIS machine (the `install_id` matches); `lastSeenAt` may be
  *  null. */
@@ -2426,6 +2437,8 @@ export type CloudApi = {
   status: () => Promise<CloudStatusInfo>;
   login: (provider: "github" | "email", email?: string) => Promise<CloudStatusInfo>;
   cancel: () => Promise<CloudStatusInfo>;
+  /** E-mail login: check the confirmation code the phone page showed (3 attempts). */
+  claimCode: (code: string) => Promise<CloudCodeClaimResult>;
   /** Restore a saved session now (the manual "try again" of an offline session). */
   retry: () => Promise<CloudStatusInfo>;
   logout: () => Promise<CloudStatusInfo>;
@@ -2438,6 +2451,7 @@ const cloud: CloudApi = {
   status: () => ipcRenderer.invoke("cloud:status"),
   login: (provider, email) => ipcRenderer.invoke("cloud:login", provider, email),
   cancel: () => ipcRenderer.invoke("cloud:cancel"),
+  claimCode: (code) => ipcRenderer.invoke("cloud:claim-code", code),
   retry: () => ipcRenderer.invoke("cloud:retry"),
   logout: () => ipcRenderer.invoke("cloud:logout"),
   plansUrl: () => ipcRenderer.invoke("cloud:plans-url"),
