@@ -21,6 +21,7 @@ import {
   parseMe,
   parseTokenPair,
   pkceChallengeS256,
+  parseCloudApiOverride,
   resolveCloudApiBaseUrl,
 } from "../../src/main/cloud-auth-decision";
 
@@ -201,5 +202,45 @@ describe("resolveCloudApiBaseUrl", () => {
   it("env vence e tira barra final; sem env, produção", () => {
     expect(resolveCloudApiBaseUrl({ STELLARCLOUD_API_URL: "http://127.0.0.1:9999/" })).toBe("http://127.0.0.1:9999");
     expect(resolveCloudApiBaseUrl({})).toBe(CLOUD_API_DEFAULT);
+    expect(resolveCloudApiBaseUrl({ STELLARCLOUD_API_URL: "   " })).toBe(CLOUD_API_DEFAULT);
+  });
+
+  it("aceita http só em loopback e https em qualquer host (fora do empacotado)", () => {
+    const resolve = (url: string) => resolveCloudApiBaseUrl({ STELLARCLOUD_API_URL: url }, { packaged: false });
+    expect(resolve("http://localhost:18082")).toBe("http://localhost:18082");
+    expect(resolve("http://[::1]:18082/")).toBe("http://[::1]:18082");
+    expect(resolve("https://api.staging.example.com/")).toBe("https://api.staging.example.com");
+    expect(resolve("https://example.com/stellar/")).toBe("https://example.com/stellar");
+  });
+
+  it("recusa o resto e cai em produção, sem usar o valor", () => {
+    const resolve = (url: string, packaged = false) =>
+      resolveCloudApiBaseUrl({ STELLARCLOUD_API_URL: url }, { packaged });
+    for (const bad of [
+      "http://example.com",
+      "http://192.168.0.10:8080",
+      "ftp://127.0.0.1",
+      "http://127.0.0.1.evil.com",
+      "http://user:pw@127.0.0.1:8080",
+      "https://example.com?x=1",
+      "not a url",
+    ]) {
+      expect(resolve(bad), bad).toBe(CLOUD_API_DEFAULT);
+    }
+  });
+
+  it("no app empacotado só loopback: https de outro host é recusado", () => {
+    const resolve = (url: string) => resolveCloudApiBaseUrl({ STELLARCLOUD_API_URL: url }, { packaged: true });
+    expect(resolve("https://api.staging.example.com")).toBe(CLOUD_API_DEFAULT);
+    expect(resolve("http://127.0.0.1:18082")).toBe("http://127.0.0.1:18082");
+    expect(resolve("https://localhost:8443")).toBe("https://localhost:8443");
+  });
+});
+
+describe("parseCloudApiOverride", () => {
+  it("normaliza e devolve null para o que a regra recusa", () => {
+    expect(parseCloudApiOverride("http://127.0.0.1:1/")).toBe("http://127.0.0.1:1");
+    expect(parseCloudApiOverride("http://example.com")).toBeNull();
+    expect(parseCloudApiOverride("https://example.com", { loopbackOnly: true })).toBeNull();
   });
 });

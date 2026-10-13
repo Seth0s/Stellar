@@ -24,10 +24,61 @@ import { createHash } from "node:crypto";
 export const CLOUD_API_DEFAULT = "https://api.stellar.idyplatform.com";
 export const CLOUD_API_ENV = "STELLARCLOUD_API_URL";
 
-/** Base da API: env (dev/smoke) ou produção. */
-export function resolveCloudApiBaseUrl(env: Record<string, string | undefined>): string {
+/** Hosts for which plain http is acceptable: the machine itself, never the network. */
+const LOOPBACK_API_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Validate an API base URL coming from the environment (dev/testing override).
+ * Returns the normalized base (no trailing slash) or null.
+ *
+ * Rule: `http` only for loopback (127.0.0.1, localhost, ::1); `https` for any
+ * host; no userinfo, query or fragment; path only as a prefix. In a PACKAGED
+ * app (`loopbackOnly`) even `https` must be loopback: the override receives the
+ * login tokens, so a non-loopback host there would hand them to whoever can set
+ * the app's environment (a launcher, a shell profile).
+ */
+export function parseCloudApiOverride(raw: string, opts: { loopbackOnly?: boolean } = {}): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") return null;
+  const loopback = LOOPBACK_API_HOSTS.has(url.hostname);
+  if (url.protocol === "http:" && !loopback) return null;
+  if (opts.loopbackOnly && !loopback) return null;
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+}
+
+/** Electron sets `defaultApp` only when launched as `electron <path>` (dev/testing build). */
+function isPackagedElectron(): boolean {
+  return Boolean(process.versions.electron) && !(process as NodeJS.Process & { defaultApp?: boolean }).defaultApp;
+}
+
+let warnedInvalidOverride = false;
+
+/**
+ * Base da API: env (dev/smoke/ambiente de teste local) ou produção. Um valor
+ * recusado pela regra de `parseCloudApiOverride` cai em produção — nunca num
+ * destino que o usuário não validou — e avisa uma vez no stderr.
+ */
+export function resolveCloudApiBaseUrl(
+  env: Record<string, string | undefined>,
+  opts: { packaged?: boolean } = {},
+): string {
   const raw = env[CLOUD_API_ENV]?.trim();
-  return raw && raw.length > 0 ? raw.replace(/\/+$/, "") : CLOUD_API_DEFAULT;
+  if (!raw) return CLOUD_API_DEFAULT;
+  const accepted = parseCloudApiOverride(raw, { loopbackOnly: opts.packaged ?? isPackagedElectron() });
+  if (accepted !== null) return accepted;
+  if (!warnedInvalidOverride) {
+    warnedInvalidOverride = true;
+    process.stderr.write(
+      `[cloud-auth] ${CLOUD_API_ENV} ignorada (só http://127.0.0.1|localhost ou https; no app empacotado, só loopback) — usando ${CLOUD_API_DEFAULT}\n`,
+    );
+  }
+  return CLOUD_API_DEFAULT;
 }
 
 // ---------------------------------------------------------------------------
