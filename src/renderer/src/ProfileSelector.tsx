@@ -434,9 +434,12 @@ export function ProfileSelector({
                 window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { page: "profiles" } }));
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
-                <circle cx="8" cy="8" r="2.2" />
-                <path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6" />
+              {/* A person with a small gear: managing profiles and accounts, not a generic setting. */}
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+                <circle cx="6.5" cy="5" r="2.5" />
+                <path d="M1.8 13.5c.4-2.6 2.3-4.2 4.7-4.2 1 0 1.9.3 2.6.8" />
+                <circle cx="12" cy="12" r="1.25" />
+                <path d="M12 9.3v.8M12 13.9v.8M9.3 12h.8M13.9 12h.8M10.1 10.1l.55.55M13.35 13.35l.55.55M10.1 13.9l.55-.55M13.35 10.65l.55-.55" />
               </svg>
               {t("profiles.manageAccounts")}
             </button>
