@@ -2363,6 +2363,10 @@ export type CloudLinkView = {
   available: CloudProfileRef[];
 };
 export type CloudLinkResult = { ok: true; view: CloudLinkView } | { ok: false; error: string };
+export type AccountProfileRenameFailure = "invalid-name" | "duplicate-name" | "forbidden" | "not-found" | "offline" | "not-signed-in" | "failed";
+export type AccountProfileRenameResult =
+  | { ok: true; profile: { id: string; name: string } }
+  | { ok: false; reason: AccountProfileRenameFailure };
 export type ProfilesApi = {
   list: () => Promise<ProfilesState>;
   create: (input: { name: string; kind: ProfileKind; homeMode?: ProviderHomeMode }) => Promise<ProfilesMutationResult>;
@@ -2373,6 +2377,8 @@ export type ProfilesApi = {
   cloudLink: () => Promise<CloudLinkResult>;
   setCloudLink: (profileId: string, cloudProfileId: string | null) => Promise<CloudLinkResult>;
   createCloudProfile: (name: string) => Promise<CloudLinkResult>;
+  /** Renames a profile of the account on the server (the token never leaves the main process). */
+  renameAccountProfile: (id: string, name: string) => Promise<AccountProfileRenameResult>;
 };
 const profiles: ProfilesApi = {
   list: () => ipcRenderer.invoke("profiles:list"),
@@ -2384,6 +2390,7 @@ const profiles: ProfilesApi = {
   cloudLink: () => ipcRenderer.invoke("profiles:cloud-link"),
   setCloudLink: (profileId, cloudProfileId) => ipcRenderer.invoke("profiles:set-cloud-link", profileId, cloudProfileId),
   createCloudProfile: (name) => ipcRenderer.invoke("profiles:create-cloud-profile", name),
+  renameAccountProfile: (id, name) => ipcRenderer.invoke("profiles:rename-account", id, name),
 };
 
 /** Conta Stellar (A2 — BACKEND_V1.md §4/§7.2). O login roda no MAIN (listener

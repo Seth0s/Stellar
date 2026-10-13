@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CloudStatusInfo } from "../../preload/index";
 import { hasCloudAccount } from "./account-mode-decision";
 import { readOfflineAccount } from "./account-display-decision";
+import { PROFILES_CHANGED_EVENT } from "./settings-nav-decision";
 import {
   accountProfilesFrom,
   assignmentsFromRows,
@@ -75,6 +76,14 @@ export function useAccountProfiles(cloud: CloudStatusInfo | null, profileId: str
     let alive = true;
     setStatus("loading");
     setSavedAtMs(null);
+    // The read failed: the list saved by the last good read stands in, marked stale; with none, it is an error.
+    const showSaved = () => {
+      if (!alive) return;
+      const cached = readProfilesCache(browserStorage(), profileId);
+      setProfiles(cached?.profiles ?? []);
+      setSavedAtMs(cached?.savedAtMs ?? null);
+      setStatus(cached ? "stale" : "error");
+    };
     void window.team
       .overview()
       .then((res) => {
@@ -85,11 +94,11 @@ export function useAccountProfiles(cloud: CloudStatusInfo | null, profileId: str
           setProfiles(list);
           setStatus("ok");
         } else {
-          setStatus("error");
+          showSaved();
         }
       })
       .catch(() => {
-        if (alive) setStatus("error");
+        if (alive) showSaved();
       });
     return () => {
       alive = false;
@@ -97,6 +106,11 @@ export function useAccountProfiles(cloud: CloudStatusInfo | null, profileId: str
   }, [loggedIn, offline, profileId, attempt]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  // A profile was renamed (here or on the server): read the list again.
+  useEffect(() => {
+    window.addEventListener(PROFILES_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(PROFILES_CHANGED_EVENT, reload);
+  }, [reload]);
   return { profiles, status, savedAtMs, reload };
 }
 

@@ -2,7 +2,7 @@
 // #perfis-editando, #perfis-erro), with SYNTHETIC profiles and a fake backend only.
 //   1. behaviour: the profile menu's "Gerenciar perfis e contas" opens Settings on Perfis,
 //      renaming works (and shows in the selector), a repeated name is refused, the account's
-//      profiles are read-only, Esc leaves the edit without closing the modal;
+//      profiles have their own Renomear (see smoke-profile-account-rename.mjs), Esc leaves the edit without closing the modal;
 //   2. parity: getComputedStyle of every element of the spec table, app × prototype;
 //   3. prints side by side in /tmp/perfil-nome/.
 import { spawnSync } from "node:child_process";
@@ -214,7 +214,7 @@ try {
   const names = await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-part="profiles-machine"] [data-part="profile-name"]')].map((n) => n.textContent))`);
   check("the machine's profiles are listed (Pessoal, Idy Platform)", JSON.parse(names), (v) => v.join("|") === "Pessoal|Idy Platform");
   check("the account's profiles are listed", await page.evalJs(`document.querySelectorAll('[data-part="account-profile-row"]').length`), 2);
-  check("the account's profiles have no rename button (read-only)", await page.evalJs(`!document.querySelector('[data-part="profiles-account"] [data-part="rename-btn"]')`), true);
+  check("the account's profiles can be renamed too (button on each; the backend decides who)", await page.evalJs(`document.querySelectorAll('[data-part="profiles-account"] [data-part="rename-btn"]').length`), 2);
   shots.push(["perfis", await shot(page, "app-perfis")]);
   measured.app.view = JSON.parse(await page.evalJs(MEASURE(pairsOf("view"), "app")));
 

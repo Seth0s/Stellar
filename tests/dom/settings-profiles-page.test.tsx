@@ -135,18 +135,115 @@ describe("Perfis page", () => {
     expect(closeInterceptorRef.current!()).toBe(false);
   });
 
-  it("with an account, its profiles are listed read-only with the note", async () => {
-    cloud = { state: "logged-in", account: { displayName: "Ana Exemplo", identities: [{ kind: "email", login: "ana@example.com" }] } };
-    accountProfiles = [
-      { id: "a1", name: "Pessoal", kind: "personal", teamId: null },
-      { id: "a2", name: "Idy Platform", kind: "team", teamId: "t1" },
-    ];
-    await mount();
-    const section = q('[data-part="profiles-account"]')!;
-    expect(section.textContent).toContain("ana@example.com");
-    expect(section.querySelectorAll('[data-part="account-profile-row"]').length).toBe(2);
-    expect(section.textContent).toContain("Pessoal · sincronizada");
-    expect(section.querySelector('[data-part="rename-btn"]')).toBeNull();
-    expect(q('[data-part="account-name-note"]')!.textContent).toContain("vem do servidor");
+  describe("account profiles", () => {
+    const accountSession = () => {
+      cloud = { state: "logged-in", account: { displayName: "Ana Exemplo", identities: [{ kind: "email", login: "ana@example.com" }] } };
+      accountProfiles = [
+        { id: "a1", name: "Pessoal", kind: "personal", teamId: null },
+        { id: "a2", name: "Idy Platform", kind: "team", teamId: "t1" },
+      ];
+    };
+    let renameAccountProfile: ReturnType<typeof vi.fn>;
+    let role: "owner" | "admin" | "member";
+    const accountRows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-part="account-profile-row"]'));
+
+    beforeEach(() => {
+      role = "owner";
+      accountSession();
+      renameAccountProfile = vi.fn(async (id: string, name: string) => ({ ok: true as const, profile: { id, name } }));
+      Object.assign(window, {
+        profiles: { list, rename, renameAccountProfile },
+        team: {
+          overview: vi.fn(async () => ({ ok: true, view: { accountId: "me", displayName: "Ana", teams: [], profiles: [], identitySubjects: [] } })),
+          detail: vi.fn(async () => ({ ok: true, detail: { team: {}, members: [{ accountId: "me", role }], seats: null } })),
+        },
+      });
+    });
+
+    it("lists them with the note and a Renomear button each", async () => {
+      await mount();
+      const section = q('[data-part="profiles-account"]')!;
+      expect(section.textContent).toContain("ana@example.com");
+      expect(accountRows().length).toBe(2);
+      expect(section.textContent).toContain("Pessoal · sincronizada");
+      expect(section.querySelectorAll('[data-part="rename-btn"]').length).toBe(2);
+      expect(q('[data-part="account-name-note"]')!.textContent).toContain("owner ou admin");
+    });
+
+    it("the personal profile is always renamable; the team's is for its owner or admin", async () => {
+      await mount();
+      const buttons = accountRows().map((r) => r.querySelector<HTMLButtonElement>('[data-part="rename-btn"]')!);
+      expect(buttons[0]!.disabled).toBe(false);
+      expect(buttons[1]!.disabled).toBe(false);
+      expect(accountRows()[1]!.querySelector('[data-part="rename-blocked"]')).toBeNull();
+    });
+
+    it("a plain member sees the team profile's button disabled, with the reason as text and as the tip", async () => {
+      role = "member";
+      await mount();
+      const [personalRow, teamRow] = accountRows();
+      expect(personalRow!.querySelector<HTMLButtonElement>('[data-part="rename-btn"]')!.disabled).toBe(false);
+      const button = teamRow!.querySelector<HTMLButtonElement>('[data-part="rename-btn"]')!;
+      expect(button.disabled).toBe(true);
+      expect(button.title).toContain("owner ou admin");
+      expect(teamRow!.querySelector('[data-part="rename-blocked"]')?.getAttribute("data-reason")).toBe("role");
+    });
+
+    it("renames through the main process, then announces the change so the lists reload", async () => {
+      await mount();
+      const changed = vi.fn();
+      window.addEventListener(PROFILES_CHANGED_EVENT, changed);
+      fireEvent.click(accountRows()[0]!.querySelector('[data-part="rename-btn"]')!);
+      const input = q('[data-part="rename-input"]') as HTMLInputElement;
+      expect(input.value).toBe("Pessoal");
+      expect(accountRows()[0]!.textContent).toContain("Só o nome muda");
+      fireEvent.change(input, { target: { value: "  Casa  " } });
+      await act(async () => void fireEvent.click(q('[data-part="rename-save"]')!));
+      expect(renameAccountProfile).toHaveBeenCalledWith("a1", "Casa");
+      expect(rename).not.toHaveBeenCalled();
+      expect(q('[data-part="rename-input"]')).toBeNull();
+      expect(changed).toHaveBeenCalledTimes(1);
+      window.removeEventListener(PROFILES_CHANGED_EVENT, changed);
+    });
+
+    it("a repeated name (409) stays in edit with the account's own text under the field", async () => {
+      renameAccountProfile.mockResolvedValue({ ok: false as const, reason: "duplicate-name" });
+      await mount();
+      fireEvent.click(accountRows()[0]!.querySelector('[data-part="rename-btn"]')!);
+      fireEvent.change(q('[data-part="rename-input"]')!, { target: { value: "Idy Platform" } });
+      await act(async () => void fireEvent.click(q('[data-part="rename-save"]')!));
+      expect(q('[data-part="rename-error"]')!.textContent).toBe("Já existe um perfil com esse nome nesta conta.");
+      expect(q('[data-part="rename-input"]')!.getAttribute("aria-invalid")).toBe("true");
+      expect(q('[data-part="rename-input"]')!.className).toMatch(/profileInputError/);
+      fireEvent.change(q('[data-part="rename-input"]')!, { target: { value: "Idy" } });
+      expect(q('[data-part="rename-error"]')).toBeNull();
+    });
+
+    it("a refusal for permission or connection says so, and the unchanged name never calls the server", async () => {
+      renameAccountProfile.mockResolvedValue({ ok: false as const, reason: "forbidden" });
+      await mount();
+      fireEvent.click(accountRows()[1]!.querySelector('[data-part="rename-btn"]')!);
+      await act(async () => void fireEvent.click(q('[data-part="rename-save"]')!));
+      expect(renameAccountProfile).not.toHaveBeenCalled();
+      expect(q('[data-part="rename-input"]')).toBeNull();
+      fireEvent.click(accountRows()[1]!.querySelector('[data-part="rename-btn"]')!);
+      fireEvent.change(q('[data-part="rename-input"]')!, { target: { value: "Outro" } });
+      await act(async () => void fireEvent.click(q('[data-part="rename-save"]')!));
+      expect(q('[data-part="rename-error"]')!.textContent).toBe("Você não tem permissão para renomear este perfil.");
+    });
+
+    it("only one name is edited at a time, and Esc leaves the account edit too", async () => {
+      const closeInterceptorRef = { current: null as (() => boolean) | null };
+      render(<ProfilesPage closeInterceptorRef={closeInterceptorRef} />);
+      await act(async () => {});
+      fireEvent.click(accountRows()[0]!.querySelector('[data-part="rename-btn"]')!);
+      expect(document.querySelectorAll('[data-part="rename-input"]').length).toBe(1);
+      fireEvent.click(rows()[0]!.querySelector('[data-part="rename-btn"]')!);
+      expect(document.querySelectorAll('[data-part="rename-input"]').length).toBe(1);
+      expect(rows()[0]!.getAttribute("data-editing")).toBe("true");
+      expect(accountRows()[0]!.getAttribute("data-editing")).toBeNull();
+      act(() => void expect(closeInterceptorRef.current!()).toBe(true));
+      expect(q('[data-part="rename-input"]')).toBeNull();
+    });
   });
 });

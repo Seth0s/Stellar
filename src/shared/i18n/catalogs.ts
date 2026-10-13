@@ -2901,6 +2901,18 @@ export const ptBR = {
   "settings.profiles.invalid": "O nome precisa ter de 1 a {max} caracteres.",
   "settings.profiles.machineNote": "Trocar de perfil da máquina reabre o app; o nome aqui vale só nesta máquina.",
   "settings.profiles.accountNote": "O nome de um perfil da conta vem do servidor; ainda não dá para mudá-lo por aqui.",
+  // Renaming a profile of the account (stored on the server).
+  "settings.profiles.accountNoteEditable": "O nome de um perfil da conta fica no servidor. O do Pessoal você muda sempre; o de um time, só quem é owner ou admin do time.",
+  "settings.profiles.accountOnlyName": "Só o nome muda: a casa de trabalho, as sessões e o time ficam como estão.",
+  "settings.profiles.accountDuplicate": "Já existe um perfil com esse nome nesta conta.",
+  "settings.profiles.accountNoServer": "este perfil ainda não existe no servidor",
+  "settings.profiles.accountOffline": "sem conexão com a conta: o nome só muda online",
+  "settings.profiles.accountRole": "só owner ou admin do time renomeia o perfil do time",
+  "settings.profiles.accountChecking": "conferindo a sua permissão no time…",
+  "settings.profiles.accountForbidden": "Você não tem permissão para renomear este perfil.",
+  "settings.profiles.accountGone": "Este perfil não existe mais na conta.",
+  "settings.profiles.accountOfflineError": "Sem conexão com o servidor. Tente de novo quando voltar.",
+  "settings.profiles.accountSignedOut": "A sessão da conta acabou. Entre de novo para renomear.",
 } as const;
 
 export type MessageKey = keyof typeof ptBR;
@@ -5743,6 +5755,18 @@ export const en: Record<MessageKey, string> = {
   "settings.profiles.invalid": "The name must be 1 to {max} characters.",
   "settings.profiles.machineNote": "Switching the machine profile restarts the app; the name here only applies on this machine.",
   "settings.profiles.accountNote": "An account profile's name comes from the server; it cannot be changed here yet.",
+  // Renaming a profile of the account (stored on the server).
+  "settings.profiles.accountNoteEditable": "An account profile's name is kept on the server. You can always rename Personal; a team's only if you are the team's owner or admin.",
+  "settings.profiles.accountOnlyName": "Only the name changes: the work home, the sessions and the team stay as they are.",
+  "settings.profiles.accountDuplicate": "A profile with that name already exists on this account.",
+  "settings.profiles.accountNoServer": "this profile does not exist on the server yet",
+  "settings.profiles.accountOffline": "no connection to the account: the name only changes online",
+  "settings.profiles.accountRole": "only a team owner or admin can rename the team profile",
+  "settings.profiles.accountChecking": "checking your permission in the team…",
+  "settings.profiles.accountForbidden": "You are not allowed to rename this profile.",
+  "settings.profiles.accountGone": "This profile no longer exists on the account.",
+  "settings.profiles.accountOfflineError": "No connection to the server. Try again when it is back.",
+  "settings.profiles.accountSignedOut": "The account session ended. Sign in again to rename.",
 };
 
 export const CATALOGS = {

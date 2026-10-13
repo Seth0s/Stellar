@@ -214,6 +214,12 @@
   border-color: #3a4258; /* sd:allow: Configuracoes.dc.html approved measure (SPEC-Configuracoes-V7.md) */;
 }
 
+/* A button that cannot act now (the tip says why). */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .closeBtn {
   min-height: 34px; /* sd:allow: Configuracoes.dc.html approved measure (SPEC-Configuracoes-V7.md) */;
   width: 34px; /* sd:allow: Configuracoes.dc.html approved measure (SPEC-Configuracoes-V7.md) */;

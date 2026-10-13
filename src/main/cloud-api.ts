@@ -313,6 +313,17 @@ export function createCloudApi(opts: { baseUrl: string; fetchImpl?: typeof fetch
       return { ok: true, value: ref };
     },
 
+    /** PATCH /v1/profiles/{id} -> rename a profile of the account (only `name` changes).
+     *  403: a team profile whose owner is not owner/admin of the team; 404: not this
+     *  account's profile; 409: the account already has a profile with that name. */
+    async renameProfile(token: string, profileId: string, name: string): Promise<ApiResult<CloudProfileRef>> {
+      const res = await request("PATCH", `/v1/profiles/${encodeURIComponent(profileId)}`, { token, body: { name } });
+      if (!res.ok) return res;
+      const ref = parseCloudProfile(res.value);
+      if (!ref) return { ok: false, error: { status: 0, code: "invalid_response", message: "rename profile response missing id" } };
+      return { ok: true, value: ref };
+    },
+
     // ---- DEVICES ------------------------------------------------------------
 
     /** GET /v1/devices -> the machines of the account. */

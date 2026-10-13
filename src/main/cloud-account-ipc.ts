@@ -13,6 +13,7 @@
 
 import { app, ipcMain } from "electron";
 import { createCloudApi, type CloudApi } from "./cloud-api";
+import { accountRenameFailure, validateAccountProfileName, type AccountRenameResult } from "./cloud-profile-rename-decision";
 import { loadLoginV2Fixture, type LoginV2Fixture } from "./login-v2-fixture";
 import {
   createAndLinkCloudProfile,
@@ -95,6 +96,19 @@ export function registerCloudAccountIpc(deps: CloudAccountIpcDeps): void {
     if (!token) return { ok: false, error: NOT_LOGGED_IN };
     const res = await cloudApi().deleteDevice(token, id);
     return res.ok ? { ok: true } : { ok: false, error: res.error.message };
+  });
+
+  // Rename a profile of the account. The token stays here: the page sends the id and
+  // the name, and gets back the stored name or the reason it was refused.
+  ipcMain.handle("profiles:rename-account", async (_e, id: unknown, name: unknown): Promise<AccountRenameResult> => {
+    if (typeof id !== "string" || id === "") return { ok: false, reason: "not-found" };
+    const valid = validateAccountProfileName(name);
+    if (!valid.ok) return valid;
+    const token = await deps.ensureToken();
+    if (!token) return { ok: false, reason: "not-signed-in" };
+    const res = await cloudApi().renameProfile(token, id, valid.name);
+    if (!res.ok) return { ok: false, reason: accountRenameFailure(res.error) };
+    return { ok: true, profile: { id: res.value.id, name: res.value.name } };
   });
 
   /** Isolated Boot/LoginWaiting/Invite fixture — dev/smoke only; packaged builds refuse. */
