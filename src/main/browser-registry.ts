@@ -1,8 +1,9 @@
 import { app, BrowserWindow, type Session } from "electron";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
 import { randomUUID } from "node:crypto";
 import { t } from "../shared/i18n";
+import { registerSessionListenerOnce, reserveUniqueDownloadPath } from "./browser-download-decision";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 import { createFocusGate, decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
 import {
@@ -740,6 +741,8 @@ export function createBrowserRegistry(callbacks: {
    * card. Uma entrada morre junto com o card em `destroy`. */
   const wcIdToCardId = new Map<number, string>();
   const tappedSessions = new WeakSet<Session>();
+  const downloadTappedSessions = new WeakSet<Session>();
+  const reservedDownloadPaths = new WeakMap<Session, Set<string>>();
 
   function recordNetwork(webContentsId: number | undefined, record: NetworkEntry) {
     if (webContentsId === undefined) return;
@@ -796,6 +799,20 @@ export function createBrowserRegistry(callbacks: {
     ses.setPermissionCheckHandler((_wc, permission) => {
       if (permission === "notifications" && persistent) return true;
       return permission === "fullscreen" || permission === "pointerLock";
+    });
+  }
+
+  function ensureDownloadTap(session: Session) {
+    const reserved = reservedDownloadPaths.get(session) ?? new Set<string>();
+    reservedDownloadPaths.set(session, reserved);
+    registerSessionListenerOnce(session, downloadTappedSessions, () => {
+      session.on("will-download", (_event, item) => {
+        const downloadsPath = app.getPath("downloads");
+        mkdirSync(downloadsPath, { recursive: true });
+        const savePath = reserveUniqueDownloadPath(downloadsPath, item.getFilename(), reserved);
+        item.setSavePath(savePath);
+        item.once("done", () => reserved.delete(savePath));
+      });
     });
   }
 
@@ -924,12 +941,24 @@ export function createBrowserRegistry(callbacks: {
     // unmanaged, un-offscreen, un-hidden, ACTUALLY VISIBLE native
     // `BrowserWindow` — outside this registry's `entries` map, outside
     // every card lifecycle (resize/destroy/paint), a real "outra janela"
-    // by definition. Denied outright: this app has no UI for a second
-    // window per card, and a real one showing up broken/unstyled (no
-    // `webPreferences` matching this card's own, no positioning) is worse
-    // than just not opening it — `navigate()` already exists for a card
-    // that wants to follow a link in place.
-    wc.setWindowOpenHandler(() => ({ action: "deny" }));
+    // by definition. Keep the destination inside this card instead: a
+    // BrowserCard has no native child-window UI, and a popup would escape
+    // its lifecycle and canvas rendering.
+    wc.setWindowOpenHandler(({ url: targetUrl }) => {
+      try {
+        wc.loadURL(normalizeUrl(targetUrl)).catch((error: unknown) => {
+          console.warn(`[browser:${id}] could not open window target`, error);
+        });
+      } catch (error) {
+        console.warn(`[browser:${id}] refused window target`, error);
+      }
+      return { action: "deny" };
+    });
+
+    // Partition sessions do not inherit default-session download handling.
+    // A persistent partition is reused when its card is recreated, so wire
+    // its listener once and reserve a collision-free destination per item.
+    ensureDownloadTap(wc.session);
 
     // Same item — HTML5 fullscreen (a video's own fullscreen button) has
     // no business trying to make the underlying host `BrowserWindow`
