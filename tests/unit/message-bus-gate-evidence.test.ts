@@ -231,7 +231,7 @@ describe("message-bus: evidência de gate é do app", () => {
     const res = (await b.handleRequest({
       cmd: "report",
       requesterId: "card-t-run",
-      report: { ok: true, gate: "373 passed, 1 failed" },
+      report: { ok: true, estado: "final", gate: "373 passed, 1 failed" },
     } as BusRequest)) as { ok: boolean };
     expect(res.ok).toBe(true);
 
@@ -258,7 +258,7 @@ describe("message-bus: evidência de gate é do app", () => {
       }),
     );
 
-    await b.handleRequest({ cmd: "report", requesterId: "card-t-fail", report: { ok: true } } as BusRequest);
+    await b.handleRequest({ cmd: "report", requesterId: "card-t-fail", report: { ok: true, estado: "final" } } as BusRequest);
     try {
       const measured = await waitForGate(s, "t-fail");
       expect(measured).not.toBeNull();
@@ -288,7 +288,7 @@ describe("message-bus: evidência de gate é do app", () => {
       }),
     );
 
-    await b.handleRequest({ cmd: "report", requesterId: "card-t-noroot", report: { ok: true } } as BusRequest);
+    await b.handleRequest({ cmd: "report", requesterId: "card-t-noroot", report: { ok: true, estado: "final" } } as BusRequest);
     try {
       const measured = await waitForGate(s, "t-noroot");
       expect(measured).not.toBeNull();

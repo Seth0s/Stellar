@@ -158,7 +158,7 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     await bus!.handleRequest({
       cmd: "report",
       requesterId: `card-${id}`,
-      report: { ok: true, taskId: id },
+      report: { ok: true, taskId: id, estado: "final" },
     } as BusRequest);
 
     const body = await waitForBody(written, "gates 2/2");
@@ -182,7 +182,7 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     await bus!.handleRequest({
       cmd: "report",
       requesterId: `card-${id}`,
-      report: { ok: true, taskId: id },
+      report: { ok: true, taskId: id, estado: "final" },
     } as BusRequest);
 
     // Wait past other tests' repo-lock queue: the notice itself waits up to
@@ -209,7 +209,7 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     const res = (await bus!.handleRequest({
       cmd: "report",
       requesterId: `card-${id}`,
-      report: { ok: true, taskId: id },
+      report: { ok: true, taskId: id, estado: "final" },
     } as BusRequest)) as { ok: boolean };
     expect(res.ok).toBe(true);
 
@@ -218,4 +218,24 @@ describe("message-bus: aviso de report com gate e contradição (board 64)", () 
     expect(body!).toContain("d00a03fa");
     expect(body!).not.toContain("gates");
   }, 40_000);
+
+  it("checkpoint parcial não dispara gateRun", async () => {
+    const written: Written = [];
+    const s = setup(written);
+    const id = "d00a03fa-1234-5678-9999-aaaaaaaaaaaa";
+    s.upsertTask(baseTask(id, { cwd: workDir, gates_json: JSON.stringify([GATES_GREEN[0]]) }));
+
+    const res = (await bus!.handleRequest({
+      cmd: "report",
+      requesterId: `card-${id}`,
+      report: { ok: true, taskId: id, estado: "parcial" },
+    } as BusRequest)) as { ok: boolean; estado?: string };
+
+    expect(res).toMatchObject({ ok: true, estado: "parcial" });
+    // Give a mistakenly started runner time to execute and emit its notice.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(written.some(([, text]) => text.includes("gates "))).toBe(false);
+    expect(s.getTask(id)?.result_json ?? "").not.toContain("gateRun");
+  }, 40_000);
+
 });

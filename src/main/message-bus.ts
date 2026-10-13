@@ -6573,8 +6573,12 @@ export function createMessageBus(
       const reportFilesChanged = readDeclaredFilesFromReport(
         typeof report === "string" ? report : JSON.stringify(report ?? null),
       );
+      // Checkpoints are frequent and are not a delivery. Reuse the shared
+      // report contract for successful reports; accepted failures keep the
+      // existing diagnostic gate run so reviewers can compare the evidence.
       const gatePromise =
-        decision.action === "accept" || decision.action === "accept_failure"
+        decision.action === "accept_failure" ||
+        (decision.action === "accept" && reportConcludesTask(report))
           ? startTaskGates(participatingTask, { reportSeq: stored.seq, filesChanged: reportFilesChanged })
           : null;
       const reportClaimsSuccess = !(
