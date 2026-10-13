@@ -8,6 +8,7 @@ import { buildProviderGroups } from "./provider-groups";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { useProviderClassification } from "./useProviderClassification";
 import { decideProviderUsage } from "./provider-usage-decision";
+import { decideProviderQuota } from "./provider-quota-decision";
 import type { ProviderUsageStats } from "../../main/provider-usage";
 import { t } from "../../shared/i18n";
 
@@ -17,6 +18,9 @@ export type AgentProviderRow = {
   label: string;
   disabled: boolean;
   quota: { text: string; warn: boolean } | null;
+  quotaWarning: boolean;
+  quotaWarningState: "unknown" | "exhausted" | null;
+  unavailableReason: string | null;
 };
 
 /** The new-agent form the board keeps (App's `new*` state). */
@@ -39,16 +43,30 @@ export type AgentFormValues = {
 };
 
 export function quotaLabel(stats: ProviderUsageStats | undefined, nowMs: number): { text: string; warn: boolean } | null {
+  const quotaDecision = decideProviderQuota({ stats, nowMs });
+  if (quotaDecision.kind === "warning") {
+    if (quotaDecision.state === "unknown") return { text: t("rail.v3.quota.unknown"), warn: true };
+    if (quotaDecision.resetsAtMs === null) return { text: t("rail.v3.quota.exhausted"), warn: true };
+    return { text: t("rail.v3.quota.warningReset", { time: formatQuotaResetTime(quotaDecision.resetsAtMs) }), warn: true };
+  }
   const view = decideProviderUsage({ stats, nowMs });
   if (view.kind === "measured" && view.bars.length > 0) {
-    const week = view.bars.find((b) => b.key === "week") ?? view.bars[0];
+    const current = view.bars.filter((bar) => bar.resetsAtMs === undefined || bar.resetsAtMs > nowMs);
+    const week = current.find((b) => b.key === "week") ?? current[0];
+    if (!week) return { text: t("rail.v3.quota.unknown"), warn: true };
+    const codexWindow = week.key.match(/^(?:primary|secondary)-(\d+)m$/);
+    if (codexWindow) {
+      const minutes = Number(codexWindow[1]);
+      const window = minutes % 1440 === 0 ? `${minutes / 1440}d` : `${minutes}m`;
+      return { text: t("rail.v3.quota.window", { value: String(week.percent), window }), warn: false };
+    }
     return { text: t("rail.v3.quota.week", { value: String(week.percent) }), warn: false };
   }
-  if (view.kind === "unavailable") {
-    // Keep the chip short — long CLI reasons belong in Settings, not a list row.
-    return { text: t("settings.providers.quotaUnavailable"), warn: true };
-  }
   return null;
+}
+
+export function formatQuotaResetTime(resetsAtMs: number): string {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(resetsAtMs));
 }
 
 const EFFORT_LABEL: Record<string, string> = {
@@ -107,22 +125,42 @@ export function useAgentProviderRows(providers: string[]): { rows: AgentProvider
     return () => {
       cancelled = true;
     };
-  }, [idsKey]);
+  }, [idsKey, nowMs]);
 
   const rows = useMemo(() => {
     const out: AgentProviderRow[] = [];
     for (const opt of [...groups.native, ...groups.generic]) {
       if (opt.id === "bash") continue;
-      const quota = quotaLabel(usage[opt.id], nowMs);
-      const disabled = Boolean(quota?.warn && /sem cota|sem crédito|no quota|no credit/i.test(quota.text));
+      const availability = available.find((provider) => provider.id === opt.id);
+      const unavailableReason = !opt.installed
+        ? availability?.installCommand ?? t("radial.notInstalled", { id: opt.id })
+        : availability?.readiness === "not-ready"
+          ? availability.readinessHint ?? availability.readinessEvidence
+          : null;
+      const rowDecision = decideProviderQuota({
+        stats: usage[opt.id],
+        nowMs,
+        installed: opt.installed,
+        readiness: availability?.readiness,
+        unavailableReason,
+      });
+      const quota = rowDecision.kind === "blocked"
+        ? null
+        : rowDecision.kind === "warning"
+        ? (rowDecision.state === "unknown"
+            ? { text: t("rail.v3.quota.unknown"), warn: true }
+            : rowDecision.resetsAtMs === null
+              ? { text: t("rail.v3.quota.exhausted"), warn: true }
+            : { text: t("rail.v3.quota.warningReset", { time: formatQuotaResetTime(rowDecision.resetsAtMs) }), warn: true })
+          : quotaLabel(usage[opt.id], nowMs);
+      const disabled = rowDecision.kind === "blocked";
       // The prototype labels Claude as "Claude Code"; keep that surface string.
-      out.push({ id: opt.id, label: opt.id === "claude" ? "Claude Code" : opt.label, disabled, quota });
+      out.push({ id: opt.id, label: opt.id === "claude" ? "Claude Code" : opt.label, disabled, quota: disabled ? { text: unavailableReason ?? "Unavailable", warn: true } : quota, quotaWarning: rowDecision.kind === "warning", quotaWarningState: rowDecision.kind === "warning" ? rowDecision.state : null, unavailableReason });
     }
-    out.push({ id: "bash", label: t("rail.v3.provider.bash"), disabled: false, quota: null });
+    out.push({ id: "bash", label: t("rail.v3.provider.bash"), disabled: false, quota: null, quotaWarning: false, quotaWarningState: null, unavailableReason: null });
     return out;
-  }, [groups, usage, nowMs]);
+  }, [groups, usage, nowMs, available]);
 
   const effortValuesFor = useCallback((id: string) => available.find((p) => p.id === id)?.effortValues ?? [], [available]);
   return { rows, effortValuesFor };
 }
-

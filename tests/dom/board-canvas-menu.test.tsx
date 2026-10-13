@@ -51,7 +51,10 @@ const tiles = () => Array.from(document.querySelectorAll<HTMLButtonElement>("but
 
 beforeEach(() => {
   setLocale("pt-BR");
-  Object.assign(window, { providerUsage: { get: vi.fn(async () => undefined) } });
+  Object.assign(window, {
+    confirm: vi.fn(() => true),
+    providerUsage: { get: vi.fn(async () => ({ provider: "claude", supported: true, source: "http", segments: [{ key: "week", percent: 100, resetsAtMs: Date.now() + 60_000 }] })) },
+  });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -88,6 +91,28 @@ describe("with the agent flow", () => {
     // The row owns the highlight while its panel is open.
     expect(firstRow().className).not.toMatch(/itemActive/);
     expect(row().className).toMatch(/itemActive/);
+  });
+
+  it("keeps an exhausted provider selectable after explicit confirmation", async () => {
+    const { f } = open();
+    fireEvent.click(row());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const provider = document.querySelector<HTMLButtonElement>('button[data-provider="claude"]')!;
+    expect(provider.disabled).toBe(false);
+    expect(provider.textContent).toContain("cota pode estar esgotada");
+    fireEvent.click(provider);
+    expect(document.querySelector('[aria-labelledby="confirm-title"]')).toBeTruthy();
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".modal-actions button.primary")!);
+    expect(f.setNewProvider).toHaveBeenCalledWith("claude");
+  });
+
+  it("does not select the exhausted provider when confirmation is declined", async () => {
+    const { f } = open();
+    fireEvent.click(row());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    fireEvent.click(document.querySelector<HTMLButtonElement>('button[data-provider="claude"]')!);
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".modal-actions button.ghost")!);
+    expect(f.setNewProvider).not.toHaveBeenCalled();
   });
 
   it("resting the pointer on the row opens it after a short dwell, without taking focus", () => {

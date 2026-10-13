@@ -5574,7 +5574,7 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     "providers:usage",
     (_event, providerId: string, opts?: { allowSpawn?: boolean }) =>
-      getProviderUsage(providerId, { allowSpawn: opts?.allowSpawn === true }),
+      getProviderUsage(providerId, { allowSpawn: opts?.allowSpawn === true, isPackaged: app.isPackaged }),
   );
 
   /**

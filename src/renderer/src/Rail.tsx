@@ -87,11 +87,11 @@ const PROTO_FIND_CARDS: RailCard[] = [
 
 /** Prototype terminal1 provider list (Rail.dc.html). */
 const PROTO_TERMINAL1_ROWS: AgentProviderRow[] = [
-  { id: "claude", label: "Claude Code", disabled: false, quota: { text: "77% da semana", warn: false } },
-  { id: "agy", label: "Antigravity", disabled: false, quota: { text: "só Gemini", warn: false } },
-  { id: "commandcode", label: "Command Code", disabled: true, quota: { text: "sem cota até sex", warn: true } },
-  { id: "codex", label: "Codex", disabled: true, quota: { text: "sem crédito", warn: true } },
-  { id: "bash", label: "Terminal (bash)", disabled: false, quota: null },
+  { id: "claude", label: "Claude Code", disabled: false, quota: { text: "77% da semana", warn: false }, quotaWarning: false, quotaWarningState: null, unavailableReason: null },
+  { id: "agy", label: "Antigravity", disabled: false, quota: { text: "só Gemini", warn: false }, quotaWarning: false, quotaWarningState: null, unavailableReason: null },
+  { id: "commandcode", label: "Command Code", disabled: false, quota: { text: "cota pode estar esgotada · renova 18:30", warn: true }, quotaWarning: true, quotaWarningState: "exhausted", unavailableReason: null },
+  { id: "codex", label: "Codex", disabled: false, quota: { text: "cota desconhecida", warn: true }, quotaWarning: true, quotaWarningState: "unknown", unavailableReason: null },
+  { id: "bash", label: "Terminal (bash)", disabled: false, quota: null, quotaWarning: false, quotaWarningState: null, unavailableReason: null },
 ];
 
 /** Prototype Board panel facts (RailPassos.dc.html #no-topbar). */

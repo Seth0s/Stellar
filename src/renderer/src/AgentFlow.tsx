@@ -6,8 +6,10 @@
  * card stays with the caller.
  */
 
+import { useState } from "react";
 import { providerAccentVar } from "./provider-icon-map";
 import { effortLabel, type AgentFormValues, type AgentProviderRow } from "./agent-flow-model";
+import { ConfirmModal } from "./ConfirmModal";
 import { t } from "../../shared/i18n";
 import styles from "./Rail.module.css";
 
@@ -22,6 +24,7 @@ export function AgentWhoStep({
   /** Link above the list (the rail's "‹ Novo card"); none inside the menu's panel. */
   back?: { label: string; onClick: () => void };
 }) {
+  const [pendingExhausted, setPendingExhausted] = useState<AgentProviderRow | null>(null);
   return (
     <>
       {back && (
@@ -38,7 +41,14 @@ export function AgentWhoStep({
             data-provider={row.id}
             className={`${styles.tile} ${styles.tileRow}${row.disabled ? ` ${styles.tileRowDisabled}` : ""}`}
             disabled={row.disabled}
-            onClick={() => onPick(row)}
+            title={row.unavailableReason ?? undefined}
+            onClick={() => {
+              if (row.quotaWarningState === "exhausted") {
+                setPendingExhausted(row);
+                return;
+              }
+              onPick(row);
+            }}
           >
             <span
               className={`${styles.providerDot}${row.id === "bash" ? ` ${styles.providerDotBash}` : ""}`}
@@ -51,6 +61,19 @@ export function AgentWhoStep({
           </button>
         ))}
       </div>
+      {pendingExhausted && (
+        <ConfirmModal
+          title={t("rail.v3.quota.confirmTitle")}
+          message={t("rail.v3.quota.confirm", { provider: pendingExhausted.label })}
+          confirmLabel={t("rail.v3.quota.confirmContinue")}
+          onConfirm={() => {
+            const row = pendingExhausted;
+            setPendingExhausted(null);
+            onPick(row);
+          }}
+          onCancel={() => setPendingExhausted(null)}
+        />
+      )}
     </>
   );
 }

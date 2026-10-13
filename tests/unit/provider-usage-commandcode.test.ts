@@ -136,12 +136,38 @@ describe("readCommandcodeCredits — HTTP com auth injetado", () => {
   });
 });
 
+describe("provider usage cache after a quota reset", () => {
+  it("invalidates a cached provider window exactly when its reset passes", async () => {
+    const path = await authFile({ apiKey: "k_test" });
+    const resetAt = 2_000_000_000_000;
+    let fetchCount = 0;
+    const fetchImpl = vi.fn(async () => {
+      fetchCount++;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ windowLimits: { fiveHour: {
+          used: fetchCount > 1 ? 0 : 14,
+          cap: 14,
+          resetAt: fetchCount > 1 ? resetAt + 18_000_000 : resetAt,
+        } } }),
+      };
+    }) as unknown as typeof fetch;
+    const before = await getProviderUsage("commandcode", { nowMs: resetAt - 1, fetchImpl, commandcodeAuthPath: path });
+    const after = await getProviderUsage("commandcode", { nowMs: resetAt, fetchImpl, commandcodeAuthPath: path });
+    expect(before.supported && before.segments?.[0].percent).toBe(100);
+    expect(after.supported && after.segments?.[0].percent).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("getProviderUsage('commandcode') — integração com injeção", () => {
   it("devolve o percentual e RESPEITA o cache de TTL (sem segundo fetch)", async () => {
     const path = await authFile({ apiKey: "k_test" });
     const doFetch = fakeFetch({ ok: true, status: 200, json: async () => REAL_RESPONSE });
-    const first = await getProviderUsage("commandcode", { commandcodeAuthPath: path, fetchImpl: doFetch });
-    const second = await getProviderUsage("commandcode", { commandcodeAuthPath: path, fetchImpl: doFetch });
+    const nowMs = REAL_RESPONSE.windowLimits.fiveHour.resetAt - 1_000;
+    const first = await getProviderUsage("commandcode", { nowMs, commandcodeAuthPath: path, fetchImpl: doFetch });
+    const second = await getProviderUsage("commandcode", { nowMs, commandcodeAuthPath: path, fetchImpl: doFetch });
     expect(first.supported).toBe(true);
     expect(second).toEqual(first);
     expect(doFetch).toHaveBeenCalledTimes(1);

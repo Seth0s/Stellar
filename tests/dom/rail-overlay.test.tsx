@@ -97,6 +97,7 @@ beforeEach(() => {
   setLocale("pt-BR");
   localStorage.clear();
   Object.assign(window, {
+    confirm: vi.fn(() => true),
     providerUsage: { get: vi.fn(async () => undefined) },
     store: { boardAgentRoles: vi.fn(async () => []), boards: { list: vi.fn(async () => []) } },
   });
@@ -168,6 +169,19 @@ describe("rail strip", () => {
 });
 
 describe("panel over the board", () => {
+  it("keeps an unknown-quota provider selectable without confirmation", () => {
+    render(rail());
+    fireEvent.click(byLabel("Novo card"));
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-kind="terminal"]')!);
+    const provider = document.querySelector<HTMLButtonElement>('button[data-provider="claude"]')!;
+    expect(provider.disabled).toBe(false);
+    expect(provider.textContent).toContain("cota desconhecida");
+    fireEvent.click(provider);
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-labelledby="confirm-title"]')).toBeNull();
+    expect(dock().getAttribute("data-rail-step")).toBe("terminal2");
+  });
+
   it("a strip button opens its panel and a second press closes it", () => {
     render(rail());
     fireEvent.click(byLabel("Novo card"));

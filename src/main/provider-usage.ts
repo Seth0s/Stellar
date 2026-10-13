@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
@@ -38,7 +38,7 @@ export type ProviderUsageStats =
       segments?: UsageSegment[];
       /**
        * Quando a FONTE capturou o dado — não quando esta leitura rodou. Vem do
-       * próprio arquivo quando ele declara (ex.: `lastComputedDate` do claude);
+       * próprio arquivo quando ele declara (ex.: mtime do rollout Codex);
        * `undefined` quando a fonte não carimba data (aí a idade não é exposta).
        */
       capturedAtMs?: number;
@@ -99,7 +99,10 @@ export function resetProviderUsageCache(): void {
 function readCache(key: string, nowMs: number): ProviderUsageStats | null {
   const hit = cache.get(key);
   if (!hit) return null;
-  if (nowMs - hit.atMs > USAGE_CACHE_TTL_MS) {
+  const resetReached = hit.stats.supported && (hit.stats.segments ?? []).some(
+    (segment) => segment.resetsAtMs !== undefined && segment.resetsAtMs <= nowMs,
+  );
+  if (nowMs - hit.atMs >= USAGE_CACHE_TTL_MS || resetReached) {
     cache.delete(key);
     return null;
   }
@@ -349,20 +352,125 @@ export type ProviderUsageOptions = {
   /** Injetáveis para teste das fontes HTTP (nunca rede/auth reais na suíte). */
   fetchImpl?: typeof fetch;
   commandcodeAuthPath?: string;
+  /** Test seam for the explicitly requested OpenCode stats command. */
+  opencodeStatsReader?: () => Promise<ProviderUsageStats>;
+  /** Explicit main-process build identity; verification payloads are dev-only. */
+  isPackaged?: boolean;
+  /** Test seam; production defaults to the current user's Codex home. */
+  codexHomeDir?: string;
 };
+
+type CodexRateLimit = {
+  used_percent?: unknown;
+  window_minutes?: unknown;
+  resets_at?: unknown;
+};
+
+/** Parse only quota fields from a Codex token_count event. `resets_at` is epoch seconds. */
+export function parseCodexRateLimits(rateLimits: unknown, capturedAtMs: number, nowMs: number): ProviderUsageStats {
+  if (!rateLimits || typeof rateLimits !== "object") {
+    return { provider: "codex", supported: false, reason: "Rollout Codex sem rate_limits", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+  }
+  const root = rateLimits as { primary?: CodexRateLimit | null; secondary?: CodexRateLimit | null };
+  const segments = ["primary", "secondary"].flatMap((name) => {
+    const limit = root[name as "primary" | "secondary"];
+    if (!limit || typeof limit !== "object") return [];
+    const percent = limit.used_percent;
+    const duration = limit.window_minutes;
+    const resetSeconds = limit.resets_at;
+    if (typeof percent !== "number" || !Number.isFinite(percent) ||
+        typeof duration !== "number" || !Number.isFinite(duration) ||
+        typeof resetSeconds !== "number" || !Number.isFinite(resetSeconds)) return [];
+    const resetsAtMs = resetSeconds * 1000;
+    if (resetsAtMs <= nowMs) return [];
+    return [{ key: `${name}-${duration}m`, percent, resetsAtMs }];
+  });
+  if (!segments.length) return { provider: "codex", supported: false, reason: "Rollout Codex sem janela de cota vigente", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+  return { provider: "codex", supported: true, source: "local-cache", segments, capturedAtMs };
+}
+
+async function findLatestCodexRollout(homeDir: string): Promise<{ path: string; mtimeMs: number } | null> {
+  const root = join(homeDir, ".codex", "sessions");
+  const candidates: { path: string; mtimeMs: number }[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > 4) return;
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    await Promise.all(entries.map(async (entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return visit(path, depth + 1);
+      if (!entry.isFile() || !/^rollout-.*\.jsonl$/.test(entry.name)) return;
+      try { candidates.push({ path, mtimeMs: (await stat(path)).mtimeMs }); } catch { /* file rotated */ }
+    }));
+  }
+  await visit(root, 0);
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0] ?? null;
+}
+
+/** Yields lines from a file in reverse order without buffering the full rollout. */
+async function* readLinesReverse(path: string): AsyncGenerator<string> {
+  const file = await open(path, "r");
+  try {
+    const size = (await file.stat()).size;
+    const blockSize = 64 * 1024;
+    let position = size;
+    let carry = Buffer.alloc(0);
+    while (position > 0) {
+      const start = Math.max(0, position - blockSize);
+      const block = Buffer.alloc(position - start);
+      await file.read(block, 0, block.length, start);
+      position = start;
+      const data = Buffer.concat([block, carry]);
+      let end = data.length;
+      for (let i = end - 1; i >= 0; i--) {
+        if (data[i] !== 10) continue;
+        if (i + 1 < end) yield data.subarray(i + 1, end).toString("utf8").replace(/\r$/, "");
+        end = i;
+      }
+      carry = data.subarray(0, end);
+    }
+    if (carry.length) yield carry.toString("utf8").replace(/\r$/, "");
+  } finally {
+    await file.close();
+  }
+}
+
+export async function readCodexUsage(homeDir = homedir(), nowMs = Date.now()): Promise<ProviderUsageStats> {
+  const latest = await findLatestCodexRollout(homeDir);
+  if (!latest) return { provider: "codex", supported: false, reason: "Nenhum rollout Codex encontrado", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+  try {
+    for await (const line of readLinesReverse(latest.path)) {
+      if (!line.includes('"rate_limits"')) continue;
+      let event: unknown;
+      try { event = JSON.parse(line); } catch { continue; }
+      const payload = (event as { payload?: { type?: unknown; info?: { rate_limits?: unknown } } })?.payload;
+      if (payload?.type !== "token_count") continue;
+      const rateLimits = payload.info?.rate_limits;
+      if (rateLimits !== undefined) {
+        const parsed = parseCodexRateLimits(rateLimits, latest.mtimeMs, nowMs);
+        if (!parsed.supported) return parsed;
+        // A rollout whose captured window has reset is stale, even when its file is recent.
+        if (parsed.segments?.every((segment) => segment.resetsAtMs !== undefined && segment.resetsAtMs <= nowMs)) {
+          return { provider: "codex", supported: false, reason: "A última cota Codex do rollout expirou", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+        }
+        return parsed;
+      }
+    }
+  } catch {
+    return { provider: "codex", supported: false, reason: "Não foi possível ler rollout Codex", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+  }
+  return { provider: "codex", supported: false, reason: "Rollout Codex sem rate_limits", dashboardUrl: PROVIDER_DASHBOARDS.codex };
+}
 
 /**
  * Leitura por provider. Ordem de preferência da task: arquivo/cache (barato)
  * → HTTP → sessão já viva; spawn é a ÚLTIMA e só sob pedido.
  *
- * PERCENTUAL (medido 2026-10-03): a ÚNICA fonte é o COMMANDCODE, por HTTP
- * (`/alpha/billing/credits` — numerador E denominador por janela). O CLAUDE tem
- * `rate_limits.*.used_percentage`, mas só no JSON que a CLI injeta por STDIN no
- * statusLine: NÃO há arquivo (o transcript guarda apenas o EVENTO 429
- * `quotaLimits{status,resetsAt,rateLimitType}`, sem %) e NÃO há endpoint
- * standalone (a cota chega nos HEADERS `anthropic-ratelimit-unified-*` de uma
- * chamada de API). Os demais não expõem número — então "sem fonte ⇒ não
- * disponível" segue sendo o caminho comum, por decisão, não por omissão.
+ * Current quota percentages come from Codex's latest local token_count rollout
+ * and Commandcode's `/alpha/billing/credits` response. Claude statusline input
+ * contains rate_limits but was not found in the local files inspected here;
+ * providers without a standalone source remain explicitly unavailable.
  */
 export async function getProviderUsage(
   providerId: string,
@@ -371,7 +479,17 @@ export async function getProviderUsage(
   const norm = providerId.trim().toLowerCase();
   const nowMs = opts.nowMs ?? Date.now();
 
-  const cached = readCache(norm, nowMs);
+  const verificationPayload = opts.isPackaged === false ? process.env.STELLAR_VERIFY_PROVIDER_USAGE : undefined;
+  if (verificationPayload) {
+    try {
+      const sample = JSON.parse(verificationPayload) as ProviderUsageStats;
+      if (sample.provider === norm) return sample;
+    } catch {
+      // Invalid verification input falls through to the provider's real source.
+    }
+  }
+
+  const cached = norm === "opencode" && opts.allowSpawn ? null : readCache(norm, nowMs);
   if (cached) return cached;
 
   let result: ProviderUsageStats;
@@ -384,7 +502,7 @@ export async function getProviderUsage(
     };
   } else if (norm === "opencode") {
     result = opts.allowSpawn
-      ? await readOpencodeStats()
+      ? await (opts.opencodeStatsReader ?? readOpencodeStats)()
       : {
           provider: "opencode",
           supported: false,
@@ -394,9 +512,11 @@ export async function getProviderUsage(
         };
   } else if (norm === "claude") {
     result = await readClaudeStats();
+  } else if (norm === "codex") {
+    result = await readCodexUsage(opts.codexHomeDir ?? homedir(), nowMs);
   } else if (norm === "commandcode") {
-    // A única fonte de PERCENTUAL: HTTP com o apiKey do próprio CLI. Sem
-    // spawn; o cache de TTL acima evita repetir a chamada a cada montagem.
+    // Commandcode quota source: HTTP with the CLI's apiKey. No process spawn;
+    // the TTL cache avoids repeating the request on each mount.
     result = await readCommandcodeCredits({
       authPath: opts.commandcodeAuthPath,
       fetchImpl: opts.fetchImpl,
@@ -404,7 +524,6 @@ export async function getProviderUsage(
   } else {
     // Providers sem API CLI de uso desacoplada.
     const reasons: Record<string, string> = {
-      codex: "Codex CLI não expõe endpoint ou comando CLI para consulta de cota/tokens restantes.",
       cursor: "Cursor é um aplicativo de desktop Electron sem interface CLI para consulta de fast requests/cota.",
       antigravity: "Antigravity CLI (agy) opera sob cotas da API Gemini sem comando desacoplado de telemetria.",
       cline: "Cline atua como agente BYOK/OpenRouter sem cota unificada no CLI.",
