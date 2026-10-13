@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stellar — área do time v3</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bg:#080a0f;--panel:#0e1119;--card:#121722;--card-2:#171d29;--line:#252c3a;--line-soft:#1b2230;--text:#edf0f7;--muted:#969fb2;--dim:#6f788c;--blue:#7588ff;--blue-bg:#1b2444;--green:#75d5ad;--green-bg:#153126;--amber:#efc16b;--amber-bg:#352b18;--red:#f08e99;--red-bg:#351c24;--purple:#c3a8ff;--purple-bg:#2b2240}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 'Space Grotesk',system-ui,sans-serif}button,input,select{font:inherit}button{color:inherit}a{color:inherit;text-decoration:none}.mono{font-family:'JetBrains Mono',monospace}.muted{color:var(--muted)}.dim{color:var(--dim)}
+.app{min-height:100vh;background:radial-gradient(ellipse at 58% -30%,rgba(69,83,156,.18),transparent 50%),var(--bg)}
+.chrome{height:46px;display:flex;align-items:center;gap:11px;padding:0 22px;border-bottom:1px solid #171c27;background:#090b10;color:#c8cede}.brand{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:600}.mark{width:20px;height:20px;border:1.5px solid #788cff;border-radius:7px;display:grid;place-items:center;color:#b7c1ff;font-size:13px}.crumb{font-size:12px;color:var(--dim)}.chrome .right{margin-left:auto;display:flex;align-items:center;gap:8px}.status-dot{width:7px;height:7px;border-radius:50%;background:#5ec99a;box-shadow:0 0 0 3px rgba(94,201,154,.12)}
+.page{width:min(1440px,100%);margin:auto;padding:28px clamp(18px,4vw,56px) 54px}.team-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.team-title{flex:1 1 300px;min-width:0}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#91a0d8;font-weight:600}.team-title h1{margin:3px 0 2px;font-size:25px;line-height:1.2;letter-spacing:-.025em}.team-meta{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.slug{color:#c7cdea}.sep{color:#465064}.team-picker{height:38px;min-width:190px;border-radius:9px;border:1px solid var(--line);background:var(--panel);padding:0 32px 0 11px;color:var(--text)}.btn{min-height:36px;border:1px solid var(--line);border-radius:9px;background:var(--card);padding:0 13px;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;font-size:13px;font-weight:500;cursor:pointer}.btn:hover{border-color:#46516a;background:#181f2c}.btn.primary{border-color:#6074ec;background:#5268df;color:white;font-weight:600}.btn.primary:hover{background:#6178f1}.btn.subtle{background:transparent}.btn.small{min-height:29px;padding:0 10px;font-size:12px}.btn:focus-visible,.tab:focus-visible,.choice:focus-visible,.ucheck:focus-visible{outline:2px solid #9aa8ff;outline-offset:2px}
+.prototype-choice{margin-top:19px;padding:11px 13px;border:1px solid #272e42;border-radius:11px;background:linear-gradient(100deg,#121729,#10141d);display:flex;align-items:center;gap:12px;flex-wrap:wrap}.prototype-choice .label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;color:#aab5e6}.choice-set{display:flex;gap:5px;flex-wrap:wrap}.choice{border:1px solid transparent;border-radius:7px;padding:5px 9px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer}.choice:hover{color:var(--text);background:#1c2231}.choice.on{border-color:#414c75;background:#202944;color:#dfe4ff}.prototype-choice .note{margin-left:auto;color:var(--dim);font-size:11px}
+.tabs{display:flex;align-items:center;gap:4px;margin:19px 0 0;padding:0 0 9px;border-bottom:1px solid var(--line-soft);overflow-x:auto;scrollbar-width:thin}.tab{height:37px;flex:none;display:inline-flex;align-items:center;gap:7px;padding:0 11px;border:1px solid transparent;border-radius:8px;background:transparent;color:#a1aabd;font-size:12.5px;cursor:pointer;white-space:nowrap}.tab:hover{background:#121722;color:var(--text)}.tab.on{border-color:#303c5b;background:#1a2236;color:#f1f3ff}.tab-mark{width:6px;height:6px;border-radius:3px;background:transparent}.tab.on .tab-mark{background:#8ea0ff}
+.content{padding-top:24px}.page-intro{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px}.intro-copy{flex:1;min-width:240px}.intro-copy h2{margin:0;font-size:21px;letter-spacing:-.02em}.intro-copy p{margin:5px 0 0;color:var(--muted);font-size:13px}.tag{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--line);border-radius:99px;background:#111620;color:#b4bdce;font-size:11px;white-space:nowrap}.tag.blue{border-color:#313d67;background:#171f39;color:#c5ceff}.tag.green{border-color:#254837;background:var(--green-bg);color:#9de5c4}.tag.amber{border-color:#524120;background:var(--amber-bg);color:#f0ce86}.tag .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.grid{display:grid;gap:14px}.stats4{grid-template-columns:repeat(4,minmax(0,1fr))}.stat{padding:17px;border:1px solid var(--line-soft);border-radius:12px;background:linear-gradient(145deg,#131924,#10141c);min-height:114px}.stat-label{color:#a1aabd;font-size:12px;display:flex;align-items:center;gap:7px}.stat-value{display:block;margin:10px 0 1px;font-size:26px;line-height:1;font-weight:600;letter-spacing:-.03em}.stat-foot{font-size:11.5px;color:var(--dim)}.stat-icon{width:27px;height:27px;border:1px solid #303950;border-radius:8px;display:grid;place-items:center;color:#a8b5ff;background:#192039;font-size:13px}
+.panel{border:1px solid var(--line-soft);border-radius:12px;background:var(--panel);overflow:hidden}.panel-head{min-height:54px;padding:13px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line-soft)}.panel-head h3{margin:0;font-size:13px;font-weight:600}.panel-head .push{margin-left:auto}.panel-body{padding:16px}.section-title{margin:0;font-size:13px;font-weight:600}.hint{font-size:11.5px;color:var(--dim);line-height:1.5}.activity{display:flex;flex-direction:column}.activity-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 16px;border-bottom:1px solid #1a202c}.activity-row:last-child{border-bottom:0}.avatar{width:29px;height:29px;border-radius:9px;background:#28335a;color:#d1d8ff;display:grid;place-items:center;font-size:10px;font-weight:700}.activity-row strong{font-size:12px;font-weight:550}.activity-row p{margin:2px 0 0;font-size:11px;color:var(--muted)}.activity-row time{color:var(--dim);font-size:11px;white-space:nowrap}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr);gap:14px;margin-top:14px}.quick-list{display:flex;flex-direction:column;gap:0}.quick{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid var(--line-soft)}.quick:last-child{border-bottom:0;padding-bottom:0}.quick:first-child{padding-top:0}.quick .grow{flex:1}.quick strong{font-size:12px}.quick p{margin:2px 0 0;color:var(--muted);font-size:11px}
+.board-toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:13px}.board-toolbar .push{margin-left:auto}.search{height:34px;width:min(250px,100%);border:1px solid var(--line);border-radius:8px;background:#0b0e14;color:var(--text);padding:0 10px;font-size:12px}.filter{height:34px;border:1px solid var(--line);border-radius:8px;background:#0d1118;color:#bac2d2;padding:0 27px 0 9px;font-size:12px}.bulk{display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid #252d3b;border-radius:9px;background:#0e131c;margin-bottom:13px}.bulk-text{font-size:12px;color:#d0d6e5}.bulk .hint{margin-left:2px}.lanes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;align-items:start}.lane{min-width:0;border:1px solid var(--line-soft);border-radius:11px;background:#0c0f16;overflow:hidden}.lane-head{display:flex;align-items:center;gap:8px;padding:11px 11px;border-bottom:1px solid var(--line-soft);font-size:11.5px;font-weight:600}.lane-count{margin-left:auto;color:var(--dim);font:11px 'JetBrains Mono',monospace}.lane-dot{width:7px;height:7px;border-radius:50%;background:#8b96af}.lane[data-tone="blue"] .lane-dot{background:#8597ff}.lane[data-tone="amber"] .lane-dot{background:#edc26e}.lane[data-tone="green"] .lane-dot{background:#71d2a7}.task-list{display:flex;flex-direction:column;gap:8px;padding:8px}.task-card{padding:10px;border:1px solid #252c39;border-radius:9px;background:#121721}.task-card:hover{border-color:#3a455a}.task-top{display:flex;align-items:flex-start;gap:8px}.task-title{font-size:12px;font-weight:550;line-height:1.4;flex:1}.task-id{display:block;margin-top:5px;color:#818ba0;font:10px 'JetBrains Mono',monospace}.task-meta{display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap}.task-meta .tag{font-size:10px;padding:3px 6px}.assignee{margin-left:auto;display:inline-flex;align-items:center;gap:5px;color:#bac2d1;font-size:10.5px}.tiny-avatar{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:#263257;color:#d8ddff;font-size:8px;font-weight:700}
+/* Shared prototype treatment for the universal checkbox: a custom 16px mark, mixed state, disabled state, keyboard focus and a linked description. */
+.ucheck{width:17px;height:17px;flex:none;display:inline-grid;place-items:center;padding:0;border:1px solid #566174;border-radius:4px;background:#0c1017;color:white;cursor:pointer;vertical-align:middle}.ucheck svg{width:12px;height:12px;opacity:0}.ucheck[aria-checked="true"]{border-color:#8192ff;background:#596fe0}.ucheck[aria-checked="true"] svg{opacity:1}.ucheck[aria-checked="mixed"]{border-color:#8192ff;background:#26345e}.ucheck[aria-checked="mixed"] svg{opacity:1}.ucheck[aria-checked="mixed"] .checkmark{display:none}.ucheck[aria-checked="mixed"] .dash{display:block}.ucheck .dash{display:none}.ucheck:disabled{cursor:not-allowed;opacity:.42}.checkline{display:flex;align-items:flex-start;gap:9px}.checkline .copy{min-width:0}.checkline strong{display:block;font-size:12px;font-weight:550}.checkline small{display:block;margin-top:2px;color:var(--muted);font-size:11px;line-height:1.4}
+.member-table{width:100%;border-collapse:collapse}.member-table th{padding:10px 14px;text-align:left;color:#7f899d;font:10px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--line-soft)}.member-table td{padding:12px 14px;border-bottom:1px solid var(--line-soft);font-size:12px;vertical-align:middle}.member-table tr:last-child td{border-bottom:0}.person{display:flex;align-items:center;gap:10px}.person-avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:#29345a;color:#d5dcff;font-size:11px;font-weight:700}.person strong{display:block;font-size:12px}.person small{display:block;margin-top:2px;color:var(--muted);font-size:11px}.role{padding:4px 8px;border:1px solid #30384a;border-radius:7px;background:#141a25;color:#ced4e1;font-size:11px}.seats-bar{height:6px;border-radius:10px;background:#252c3a;overflow:hidden}.seats-bar span{display:block;height:100%;width:20%;border-radius:inherit;background:linear-gradient(90deg,#6579eb,#9b8af6)}.seat-card{display:grid;grid-template-columns:minmax(0,1fr) 160px;align-items:center;gap:24px;padding:17px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel)}
+.environment-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.resource{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--line-soft);border-radius:11px;background:#10141c}.resource-icon{width:32px;height:32px;border-radius:9px;background:#1c2440;color:#bdc8ff;display:grid;place-items:center;flex:none}.resource h3{margin:1px 0 3px;font-size:12px}.resource p{margin:0;color:var(--muted);font-size:11px;line-height:1.5}.resource .tag{margin-left:auto}.revision{display:flex;align-items:center;gap:10px}.revision .num{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#1d2747;color:#c5ceff;font:12px 'JetBrains Mono',monospace}
+.import-scope{display:inline-flex;padding:3px;border:1px solid var(--line);border-radius:9px;background:#0c1017;gap:3px}.import-scope button{height:29px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:11.5px;cursor:pointer}.import-scope button.on{background:#202944;color:#e1e6ff}.import-layout{display:grid;grid-template-columns:245px minmax(0,1fr);gap:14px;align-items:stretch}.import-rail{padding:12px;border:1px solid var(--line-soft);border-radius:11px;background:#0d1118}.rail-label{margin:4px 6px 8px;color:#7d879a;font:10px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase}.source-list,.step-list{display:flex;flex-direction:column;gap:3px}.source-choice,.step-choice{width:100%;display:flex;align-items:center;gap:9px;text-align:left;border:1px solid transparent;border-radius:8px;background:transparent;padding:8px 9px;color:#a9b2c5;font-size:12px;cursor:pointer}.source-choice:hover,.step-choice:hover{background:#171d28;color:var(--text)}.source-choice.on,.step-choice.on{border-color:#313d5d;background:#1a2337;color:#eef1ff}.source-icon{width:23px;height:23px;border-radius:7px;display:grid;place-items:center;background:#20283b;color:#c1ccff;font-size:10px;font-weight:700}.steps-divider{height:1px;background:var(--line-soft);margin:12px 4px}.step-number{width:19px;height:19px;border:1px solid #414a5c;border-radius:50%;display:grid;place-items:center;color:#9ca7bb;font:10px 'JetBrains Mono',monospace}.step-choice.done .step-number{background:#173327;border-color:#28533e;color:#92dfb7}.import-detail{padding:20px;border:1px solid var(--line-soft);border-radius:11px;background:var(--panel);min-height:320px}.import-detail h3{margin:0;font-size:16px}.import-detail>p{margin:5px 0 17px;color:var(--muted);font-size:12px}.flow-step{display:grid;grid-template-columns:28px minmax(0,1fr);gap:11px;padding:12px 0;border-top:1px solid var(--line-soft)}.flow-step:first-of-type{border-top:0}.flow-circle{width:24px;height:24px;border-radius:50%;border:1px solid #41495a;display:grid;place-items:center;color:#b5bed0;font:10px 'JetBrains Mono',monospace}.flow-step.current .flow-circle{border-color:#6378ef;background:#222d52;color:#dce2ff}.flow-step.complete .flow-circle{border-color:#2d664a;background:#173327;color:#9ae2bc}.flow-step h4{margin:1px 0 3px;font-size:12px}.flow-step p{margin:0;color:var(--muted);font-size:11px;line-height:1.5}.map-row{display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);gap:8px;align-items:center;margin:8px 0}.map-cell{padding:8px 10px;border:1px solid #2a3344;border-radius:7px;background:#0c1017;color:#dce1ed;font:11px 'JetBrains Mono',monospace}.map-cell.target{border-color:#3b4772;color:#d3dcff}.personal-note{padding:11px 12px;border:1px solid #38416a;border-radius:9px;background:#171e33;color:#cad2f7;font-size:11.5px;line-height:1.5;margin-bottom:14px}
+.import-subtabs{display:flex;gap:4px;padding:3px;border:1px solid var(--line);border-radius:9px;background:#0c1017;width:max-content;margin:0 0 17px}.import-subtabs button{height:30px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer}.import-subtabs button.on{background:#202944;color:#e1e6ff}
+.integration-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.integration{padding:16px;border:1px solid var(--line-soft);border-radius:11px;background:var(--panel);display:flex;flex-direction:column;gap:12px}.integration-head{display:flex;align-items:center;gap:11px}.provider-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#20283a;color:#c2ccff;font-size:13px;font-weight:700}.integration-head strong{font-size:13px}.integration-head .tag{margin-left:auto}.integration p{margin:0;color:var(--muted);font-size:11.5px;min-height:33px}.integration-foot{display:flex;align-items:center;gap:8px;padding-top:9px;border-top:1px solid var(--line-soft)}
+.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.filters .search{flex:1;min-width:180px}.audit-table-wrap{overflow-x:auto}.audit-table{width:100%;min-width:740px;border-collapse:collapse}.audit-table th{padding:10px 13px;text-align:left;color:#7f899d;font:10px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;background:#0c0f15}.audit-table td{padding:11px 13px;border-top:1px solid var(--line-soft);font-size:11.5px}.audit-table tr:hover td{background:#111722}.audit-actor{display:flex;align-items:center;gap:8px}.audit-actor .avatar{width:25px;height:25px;font-size:9px}.event-code{font:10px 'JetBrains Mono',monospace;color:#c2caff}.target{color:#cad1df}.time{color:var(--muted);white-space:nowrap}.filterchips{display:flex;gap:5px;flex-wrap:wrap;margin:0 0 13px}.filterchip{border:1px solid var(--line);border-radius:99px;padding:5px 9px;background:#0e121a;color:#9ca7ba;font-size:10.5px}.filterchip.on{border-color:#414d76;background:#1c2540;color:#d8deff}.privacy-note{padding:11px 13px;border-top:1px solid var(--line-soft);color:#939db0;font-size:11px;line-height:1.5}.privacy-note strong{color:#d2d8e4;font-weight:550}
+.chart-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(260px,.8fr);gap:14px}.bars{height:188px;display:flex;align-items:flex-end;gap:clamp(8px,2vw,22px);padding:15px 4px 0;border-bottom:1px solid #343d50}.bar-col{height:100%;flex:1;min-width:20px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px}.bar-value{font:10px 'JetBrains Mono',monospace;color:#aab5cc}.bar{width:min(34px,74%);height:var(--h);min-height:5px;border-radius:6px 6px 2px 2px;background:linear-gradient(180deg,#8494ff,#475bc3);box-shadow:0 0 20px rgba(102,120,230,.12)}.bar-label{font-size:10px;color:#8d97aa}.legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:10px}.legend i{display:inline-block;width:7px;height:7px;border-radius:2px;background:#7588ff;margin-right:5px}.rank-list{display:flex;flex-direction:column;gap:13px}.rank{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:9px;align-items:center}.rank-num{width:23px;height:23px;border-radius:7px;background:#1d2434;color:#aeb9d0;display:grid;place-items:center;font:10px 'JetBrains Mono',monospace}.rank strong{font-size:11.5px}.rank small{display:block;color:var(--muted);font-size:10.5px}.rank-value{font:11px 'JetBrains Mono',monospace;color:#d9dfff}
+.settings-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(260px,.8fr);gap:14px}.field-label{display:block;color:#aeb7c8;font-size:11px;margin-bottom:6px}.field{width:100%;height:37px;border:1px solid #30394b;border-radius:8px;background:#0b0f16;color:var(--text);padding:0 10px;font-size:12px}.field:focus{outline:2px solid #677bf0;outline-offset:1px}.form-stack{display:flex;flex-direction:column;gap:14px}.setting-line{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line-soft)}.setting-line:first-of-type{border-top:0}.setting-line .grow{flex:1}.setting-line strong{display:block;font-size:12px;font-weight:550}.setting-line small{display:block;margin-top:3px;color:var(--muted);font-size:10.5px;line-height:1.45}.disabled-option{padding:11px;border:1px dashed #303747;border-radius:9px;color:#8791a4;background:#0c1017;font-size:11px;line-height:1.5}.notice{padding:11px 12px;border:1px solid #39456c;border-radius:9px;background:#171e31;color:#c3ccef;font-size:11px;line-height:1.5}.danger-zone{border-color:#462b34}.danger-zone .panel-head{border-bottom-color:#38232c}.danger-title{color:#f0a2aa}.danger-zone p{margin:0;color:#b9a1a6;font-size:11px;line-height:1.5}
+.footer-note{margin-top:17px;text-align:right;color:#697386;font-size:10px}
+@media(max-width:1050px){.page{padding-inline:22px}.lanes{grid-template-columns:repeat(2,minmax(0,1fr))}.stats4{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-grid,.chart-grid,.settings-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.chrome{padding:0 14px}.page{padding:20px 14px 36px}.team-title{flex-basis:100%}.team-picker{flex:1;min-width:150px}.prototype-choice{margin-top:14px}.prototype-choice .note{width:100%;margin-left:0}.tabs{margin-top:13px}.content{padding-top:18px}.page-intro{align-items:flex-start}.stats4{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.stat{padding:13px;min-height:102px}.stat-value{font-size:23px}.lanes{grid-template-columns:1fr}.lane{min-width:0}.environment-grid,.integration-grid{grid-template-columns:1fr}.import-layout{grid-template-columns:1fr}.import-rail{display:grid;grid-template-columns:1fr 1fr;gap:8px}.rail-label{grid-column:1/-1}.steps-divider{display:none}.source-list,.step-list{min-width:0}.import-detail{padding:15px}.seat-card{grid-template-columns:1fr;gap:14px}.audit-table{min-width:690px}.board-toolbar .push{margin-left:0}.search{flex:1}.board-toolbar{align-items:stretch}.board-toolbar .btn{flex:1}.audit-table td{white-space:nowrap}}
+</style>
+</helmet>
+<div class="app">
+  <header class="chrome">
+    <div class="brand"><span class="mark">✦</span><span>Stellar</span></div>
+    <span class="crumb">/</span><span class="crumb">Times</span><span class="crumb">/</span><span style="font-size:12px">Testing Team A</span>
+    <div class="right"><span class="status-dot"></span><span class="crumb">Conectado</span></div>
+  </header>
+  <div class="page">
+    <header class="team-head">
+      <div class="team-title">
+        <div class="eyebrow">Área do time <span style="color:#59647b">· protótipo v3</span></div>
+        <h1>Testing Team A</h1>
+        <div class="team-meta"><span class="tag green"><span class="dot"></span>1 de 5 assentos</span><span class="sep">·</span><span>slug <span class="slug mono">testing-team-a</span></span><span class="sep">·</span><span>dados fictícios</span></div>
+      </div>
+      <select class="team-picker" aria-label="Selecionar time"><option>Testing Team A</option></select>
+      <button type="button" class="btn primary" aria-label="Convidar pessoa"><span aria-hidden="true">＋</span>Convidar pessoa</button>
+    </header>
+
+    <section class="prototype-choice" aria-label="Escolha o nome da casa do time">
+      <span class="label">Como chamar a casa do time?</span>
+      <div class="choice-set">
+        <sc-for list="{{nameOptions}}" as="option"><button type="button" class="{{option.cls}}" aria-pressed="{{option.selected}}" onClick="{{option.pick}}">{{option.label}}</button></sc-for>
+      </div>
+      <span class="note">Escolha de nomenclatura para o protótipo</span>
+    </section>
+
+    <nav class="tabs" aria-label="Páginas do time">
+      <sc-for list="{{tabs}}" as="tab"><button type="button" class="{{tab.cls}}" aria-current="{{tab.current}}" onClick="{{tab.pick}}"><span class="tab-mark"></span>{{tab.label}}</button></sc-for>
+    </nav>
+
+    <main class="content">
+      <sc-if value="{{isOverview}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Visão geral</h2><p>Atividade e acesso do time em um só lugar.</p></div><span class="tag">Atualizado há 4 min</span></div>
+        <div class="grid stats4">
+          <article class="stat"><span class="stat-label"><span class="stat-icon">♙</span>Membros</span><strong class="stat-value">1</strong><span class="stat-foot">1 de 5 assentos usados</span></article>
+          <article class="stat"><span class="stat-label"><span class="stat-icon">▦</span>Tasks abertas</span><strong class="stat-value">6</strong><span class="stat-foot">2 aguardando revisão</span></article>
+          <article class="stat"><span class="stat-label"><span class="stat-icon">↗</span>Integrações</span><strong class="stat-value">1</strong><span class="stat-foot">Slack conectado</span></article>
+          <article class="stat"><span class="stat-label"><span class="stat-icon">◷</span>Convites pendentes</span><strong class="stat-value">1</strong><span class="stat-foot">Não ocupa assento</span></article>
+        </div>
+        <div class="overview-grid">
+          <section class="panel"><div class="panel-head"><h3>Atividade recente</h3><span class="push"></span><button class="btn small subtle" type="button" onClick="{{openAudit}}">Ver auditoria →</button></div><div class="activity">
+            <div class="activity-row"><span class="avatar">MC</span><div><strong>Maya Chen</strong><p>criou <span class="event-code">task.create</span> · “Revisar onboarding”</p></div><time>há 18 min</time></div>
+            <div class="activity-row"><span class="avatar" style="background:#233a34;color:#a9e5ce">MC</span><div><strong>Maya Chen</strong><p>conectou Slack · <span class="event-code">integration.connect</span></p></div><time>há 2 h</time></div>
+            <div class="activity-row"><span class="avatar" style="background:#302743;color:#ddc7ff">MC</span><div><strong>Maya Chen</strong><p>publicou a versão 3 do ambiente</p></div><time>ontem</time></div>
+          </div></section>
+          <section class="panel"><div class="panel-head"><h3>Acesso do time</h3><span class="push"></span><button class="btn small" type="button" onClick="{{openMembers}}">Gerenciar membros</button></div><div class="panel-body">
+            <div class="seat-card" style="padding:0;border:0;background:transparent;grid-template-columns:minmax(0,1fr) 110px"><div><strong style="font-size:13px">1 de 5 assentos</strong><p class="hint" style="margin:4px 0 11px">Quatro assentos disponíveis para novas pessoas.</p><div class="seats-bar"><span></span></div></div><span class="tag green">80% livres</span></div>
+            <div class="quick" style="margin-top:16px"><span class="avatar">MC</span><div class="grow"><strong>Maya Chen</strong><p>Owner · maya@testing.example</p></div><span class="tag">Você</span></div>
+            <div class="quick"><span class="avatar" style="background:#30313d;color:#c9cad3">＋</span><div class="grow"><strong>Convidar alguém</strong><p>O convite só ocupa assento quando é aceito.</p></div><button class="btn small" type="button">Convidar</button></div>
+          </div></section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isBoard}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Quadro do time</h2><p>Tasks compartilhadas, responsáveis e revisão em andamento.</p></div><button class="btn primary" type="button">＋ Nova task</button></div>
+        <div class="board-toolbar"><input class="search" aria-label="Buscar tasks" placeholder="⌕  Buscar tasks"><select class="filter" aria-label="Filtrar por pessoa"><option>Todas as pessoas</option><option>Maya Chen</option><option>Sem responsável</option></select><select class="filter" aria-label="Filtrar por prioridade"><option>Todas as prioridades</option><option>Alta</option><option>Média</option></select><span class="push"></span><button class="btn small" type="button">⋯</button></div>
+        <div class="bulk"><button class="ucheck" type="button" role="checkbox" aria-checked="mixed" aria-label="Selecionar tasks visíveis (algumas selecionadas)" aria-describedby="bulk-desc"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path class="dash" d="M3.5 8h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></button><span class="bulk-text">1 task selecionada</span><span id="bulk-desc" class="hint">Checkbox universal · parcial</span><button class="btn small subtle" type="button" style="margin-left:auto">Ações</button></div>
+        <div class="lanes">
+          <section class="lane" data-tone=""><header class="lane-head"><span class="lane-dot"></span>A fazer<span class="lane-count">2</span></header><div class="task-list">
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task1Class}}" type="button" role="checkbox" aria-checked="{{task1Checked}}" aria-label="Selecionar task Revisar onboarding" aria-describedby="task1-desc" onClick="{{toggleTask1}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Revisar onboarding do workspace<span class="task-id">TA-024</span></div></div><div class="task-meta"><span class="tag">Média</span><span class="tag">Produto</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div><span id="task1-desc" class="hint" style="display:none">Selecionar esta task para ação em lote.</span></article>
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task2Class}}" type="button" role="checkbox" aria-checked="{{task2Checked}}" aria-label="Selecionar task Documentar API" onClick="{{toggleTask2}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Documentar API de importação<span class="task-id">TA-025</span></div></div><div class="task-meta"><span class="tag">Alta</span><span class="tag">Plataforma</span><span class="tag">Sem responsável</span></div></article>
+          </div></section>
+          <section class="lane" data-tone="blue"><header class="lane-head"><span class="lane-dot"></span>Em andamento<span class="lane-count">2</span></header><div class="task-list">
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task3Class}}" type="button" role="checkbox" aria-checked="{{task3Checked}}" aria-label="Selecionar task Importar projetos" onClick="{{toggleTask3}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Importar projetos do trimestre<span class="task-id">TA-019</span></div></div><div class="task-meta"><span class="tag">Média</span><span class="tag">Operações</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task4Class}}" type="button" role="checkbox" aria-checked="{{task4Checked}}" aria-label="Selecionar task Validar eventos" onClick="{{toggleTask4}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Validar eventos recebidos do Slack<span class="task-id">TA-021</span></div></div><div class="task-meta"><span class="tag">Alta</span><span class="tag">Integração</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+          </div></section>
+          <section class="lane" data-tone="amber"><header class="lane-head"><span class="lane-dot"></span>Aguardando revisão<span class="lane-count">2</span></header><div class="task-list">
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task5Class}}" type="button" role="checkbox" aria-checked="{{task5Checked}}" aria-label="Selecionar task Ajustar estados vazios" onClick="{{toggleTask5}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Ajustar estados vazios do quadro<span class="task-id">TA-017</span></div></div><div class="task-meta"><span class="tag amber">Revisão</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task7Class}}" type="button" role="checkbox" aria-checked="{{task7Checked}}" aria-label="Selecionar task Revisar mapeamento" onClick="{{toggleTask7}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Revisar mapeamento de campos<span class="task-id">TA-016</span></div></div><div class="task-meta"><span class="tag amber">Revisão</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+          </div></section>
+          <section class="lane" data-tone="green"><header class="lane-head"><span class="lane-dot"></span>Concluídas<span class="lane-count">2</span></header><div class="task-list">
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task6Class}}" type="button" role="checkbox" aria-checked="{{task6Checked}}" aria-label="Selecionar task Criar canal" onClick="{{toggleTask6}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Criar canal de suporte interno<span class="task-id">TA-011</span></div></div><div class="task-meta"><span class="tag green">Concluída</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+            <article class="task-card"><div class="task-top"><button class="ucheck {{task8Class}}" type="button" role="checkbox" aria-checked="{{task8Checked}}" aria-label="Selecionar task Preparar convite" onClick="{{toggleTask8}}"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><div class="task-title">Preparar convite de boas-vindas<span class="task-id">TA-010</span></div></div><div class="task-meta"><span class="tag green">Concluída</span><span class="assignee"><span class="tiny-avatar">MC</span>Maya</span></div></article>
+          </div></section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isMembers}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Membros</h2><p>Gerencie quem participa do time e acompanhe o uso de assentos.</p></div><span class="tag green">1 de 5 assentos</span></div>
+        <section class="panel"><div class="panel-head"><h3>Pessoas no time</h3><span class="tag">1 membro</span></div><div class="audit-table-wrap"><table class="member-table"><thead><tr><th>Pessoa</th><th>Papel</th><th>Tasks abertas</th><th>Entrou em</th><th></th></tr></thead><tbody>
+          <tr><td><div class="person"><span class="person-avatar">MC</span><span><strong>Maya Chen</strong><small>maya@testing.example · você</small></span></div></td><td><span class="role">Owner</span></td><td>5</td><td>02 out 2026</td><td><button class="btn small" type="button" disabled aria-label="Opções da Maya">⋯</button></td></tr>
+          <tr><td><div class="person"><span class="person-avatar" style="background:#242a36;color:#acb5c5;border:1px dashed #566174">＋</span><span><strong>alex@testing.example</strong><small>Convite pendente · vence em 5 dias</small></span></div></td><td><span class="role">Membro</span></td><td class="muted">—</td><td class="muted">Aguardando</td><td><button class="btn small" type="button">Revogar</button></td></tr>
+        </tbody></table></div></section>
+        <section class="panel" style="margin-top:14px"><div class="panel-head"><h3>Assentos do plano</h3><span class="push"></span><span class="tag blue">1 / 5 usados</span></div><div class="panel-body"><div class="seat-card"><div><strong style="font-size:13px">Quatro assentos disponíveis</strong><p class="hint" style="margin:4px 0 12px">Convites pendentes não ocupam assento; a vaga entra em uso quando a pessoa aceita.</p><div class="seats-bar"><span></span></div></div><button class="btn primary" type="button">＋ Convidar pessoa</button></div></div></section>
+        <p class="hint" style="margin-top:14px">Papéis disponíveis: owner, admin e member. O time sempre mantém ao menos um owner.</p>
+      </sc-if>
+
+      <sc-if value="{{isEnvironment}}">
+        <div class="page-intro"><div class="intro-copy"><h2>{{spaceLabel}}</h2><p>Regras e recursos publicados para os perfis deste time.</p></div><span class="tag green"><span class="dot"></span>Publicado</span></div>
+        <section class="panel" style="margin-bottom:14px"><div class="panel-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div class="revision"><span class="num">03</span><div><strong style="font-size:12px">Versão publicada</strong><div class="hint">por Maya Chen · 12 out, 16:40</div></div></div><span class="push"></span><span class="tag">Manifesto do time</span><button class="btn" type="button">Ver histórico</button><button class="btn primary" type="button">Sincronizar perfil</button></div></section>
+        <div class="grid environment-grid">
+          <article class="resource"><span class="resource-icon">⌘</span><div><h3>Regras do time</h3><p>Orientações compartilhadas que complementam as regras do seu perfil local.</p><span class="hint mono" style="display:block;margin-top:9px">rules/TEAM.md · 6 regras</span></div><span class="tag">Publicado</span></article>
+          <article class="resource"><span class="resource-icon">✳</span><div><h3>Skills</h3><p>Receitas e instruções reutilizáveis disponíveis nos perfis associados.</p><span class="hint mono" style="display:block;margin-top:9px">skills/ · 4 itens</span></div><span class="tag">4 arquivos</span></article>
+          <article class="resource"><span class="resource-icon">◈</span><div><h3>Agentes e configurações</h3><p>Bundle portátil publicado pelo owner/admin; segredos locais ficam fora do manifesto.</p><span class="hint mono" style="display:block;margin-top:9px">agents/ · 2 itens</span></div><span class="tag blue">Somente leitura</span></article>
+          <article class="resource"><span class="resource-icon">↻</span><div><h3>Sincronização</h3><p>Seu perfil pode receber a versão publicada. Conflitos ficam para revisão antes de aplicar.</p><span class="hint" style="display:block;margin-top:9px">Última sincronização: há 3 min</span></div><button class="btn small" type="button">Ver alterações</button></article>
+        </div>
+        <div class="notice" style="margin-top:14px"><strong>Como funciona:</strong> a casa publicada é um manifesto versionado do time. Tokens e segredos locais não são compartilhados por esta tela.</div>
+      </sc-if>
+
+      <sc-if value="{{isImport}}">
+        <div class="import-subtabs" role="tablist" aria-label="Importação e integrações"><button type="button" class="on" role="tab" aria-selected="true">Importar</button><button type="button" role="tab" onClick="{{showIntegrations}}">Integrações</button></div>
+        <div class="page-intro"><div class="intro-copy"><h2>Importar</h2><p>Escolha uma fonte à esquerda; o fluxo correspondente aparece aqui.</p></div><div class="import-scope" role="group" aria-label="Destino da importação"><button type="button" class="{{scopeTeamClass}}" aria-pressed="{{scopeTeam}}" onClick="{{setTeamScope}}">No time</button><button type="button" class="{{scopePersonalClass}}" aria-pressed="{{scopePersonal}}" onClick="{{setPersonalScope}}">Perfil pessoal</button></div></div>
+        <sc-if value="{{scopePersonal}}"><div class="personal-note"><strong>Perfil pessoal:</strong> esta prévia direciona o resultado para seus próprios boards. As integrações do time não aparecem neste escopo; use CSV ou JSON.</div></sc-if>
+        <div class="import-layout">
+          <aside class="import-rail" aria-label="Fonte e etapas">
+            <div><div class="rail-label">Fonte</div><div class="source-list"><sc-for list="{{sources}}" as="source"><button type="button" class="{{source.cls}}" aria-pressed="{{source.selected}}" onClick="{{source.pick}}"><span class="source-icon">{{source.icon}}</span>{{source.label}}</button></sc-for></div></div>
+            <div><div class="rail-label">Etapas</div><div class="step-list"><sc-for list="{{steps}}" as="step"><button type="button" class="{{step.cls}}" aria-current="{{step.current}}" onClick="{{step.pick}}"><span class="step-number">{{step.number}}</span>{{step.label}}</button></sc-for></div></div>
+          </aside>
+          <section class="import-detail" aria-live="polite">
+            <span class="tag blue">{{sourceLabel}} · etapa {{stepNumber}} de 4</span>
+            <h3 style="margin-top:12px">{{stepTitle}}</h3><p>{{stepDescription}}</p>
+            <sc-if value="{{stepSource}}"><div class="flow-step current"><span class="flow-circle">1</span><div><h4>Selecione o arquivo ou a conexão</h4><p>{{sourceDetail}}</p><div style="display:flex;gap:8px;margin-top:11px"><button class="btn" type="button">{{sourceAction}}</button><span class="tag">Até 200 itens por execução</span></div></div></div><div class="flow-step"><span class="flow-circle">2</span><div><h4>Mapeie os campos</h4><p>Confira quais dados viram título, tipo e prioridade da task.</p></div></div><div class="flow-step"><span class="flow-circle">3</span><div><h4>Revise a prévia</h4><p>Linhas repetidas são ignoradas usando a origem e o identificador externo.</p></div></div><div class="flow-step"><span class="flow-circle">4</span><div><h4>Importe para {{scopeDestination}}</h4><p>Você verá quantas tasks foram criadas e quantas foram ignoradas.</p></div></div></sc-if>
+            <sc-if value="{{stepMapping}}"><div class="map-row"><span class="map-cell">issue_title</span><span class="muted">→</span><span class="map-cell target">Título da task</span></div><div class="map-row"><span class="map-cell">issue_type</span><span class="muted">→</span><span class="map-cell target">Tipo</span></div><div class="map-row"><span class="map-cell">priority</span><span class="muted">→</span><span class="map-cell target">Prioridade</span></div><div class="notice" style="margin-top:13px">{{sourceLabel}} permite mapear os campos antes de criar qualquer task. Nada foi importado nesta prévia.</div><div style="margin-top:14px"><button class="btn primary" type="button">Continuar para revisão</button></div></sc-if>
+            <sc-if value="{{stepPreview}}"><div class="grid stats4" style="grid-template-columns:repeat(3,minmax(0,1fr))"><div class="stat" style="min-height:80px"><span class="stat-label">Novas</span><strong class="stat-value" style="font-size:21px">18</strong></div><div class="stat" style="min-height:80px"><span class="stat-label">Duplicadas</span><strong class="stat-value" style="font-size:21px">2</strong></div><div class="stat" style="min-height:80px"><span class="stat-label">Inválidas</span><strong class="stat-value" style="font-size:21px">0</strong></div></div><div class="flow-step current" style="margin-top:12px"><span class="flow-circle">✓</span><div><h4>Prévia pronta</h4><p>18 tasks novas para Testing Team A. A execução ainda não foi iniciada.</p></div></div><button class="btn primary" type="button">Confirmar importação</button></sc-if>
+            <sc-if value="{{stepRun}}"><div class="flow-step complete"><span class="flow-circle">✓</span><div><h4>Importação concluída</h4><p>18 tasks criadas · 2 repetidas ignoradas · nenhuma falha.</p></div></div><div class="notice">Este é um estado demonstrativo; o arquivo não acessa nem altera dados reais.</div></sc-if>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{isIntegrations}}">
+        <div class="import-subtabs" role="tablist" aria-label="Importação e integrações"><button type="button" role="tab" onClick="{{showImport}}">Importar</button><button type="button" class="on" role="tab" aria-selected="true">Integrações</button></div>
+        <div class="page-intro"><div class="intro-copy"><h2>Integrações</h2><p>Conectores do time para entrada de eventos e criação de tasks.</p></div><span class="tag">Gerenciado por owner/admin</span></div>
+        <div class="grid integration-grid">
+          <article class="integration"><div class="integration-head"><span class="provider-icon" style="background:#35253a;color:#f3b5e8">S</span><strong>Slack</strong><span class="tag green"><span class="dot"></span>Conectado</span></div><p>Receba comandos e eventos do workspace conectado. Importações podem usar canais autorizados.</p><div class="integration-foot"><span class="hint">workspace · testing-team</span><span class="push"></span><button class="btn small" type="button">Configurar</button></div></article>
+          <article class="integration"><div class="integration-head"><span class="provider-icon" style="background:#212a3d;color:#d5defa">GH</span><strong>GitHub</strong><span class="tag">Não conectado</span></div><p>Associe repositórios e receba atualizações de issues no quadro do time.</p><div class="integration-foot"><span class="hint">OAuth seguro</span><span class="push"></span><button class="btn small" type="button">Conectar</button></div></article>
+          <article class="integration"><div class="integration-head"><span class="provider-icon" style="background:#32304a;color:#d6c9ff">L</span><strong>Linear</strong><span class="tag">Não conectado</span></div><p>Mapeie estados externos para estados das tasks do time.</p><div class="integration-foot"><span class="hint">Webhook assinado</span><span class="push"></span><button class="btn small" type="button">Conectar</button></div></article>
+          <article class="integration"><div class="integration-head"><span class="provider-icon" style="background:#312b25;color:#f0c995">J</span><strong>Jira</strong><span class="tag">Não conectado</span></div><p>Conecte um projeto e sincronize eventos suportados para o quadro.</p><div class="integration-foot"><span class="hint">OAuth / integração</span><span class="push"></span><button class="btn small" type="button">Conectar</button></div></article>
+        </div>
+        <p class="hint" style="margin-top:13px">Tokens ficam protegidos no backend. Uma integração por tipo em cada time.</p>
+      </sc-if>
+
+      <sc-if value="{{isAudit}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Auditoria</h2><p>Registro de alterações do time: autoria, ação e horário.</p></div><span class="tag">Eventos do StellarCloud</span></div>
+        <div class="filters"><input class="search" aria-label="Buscar auditoria" placeholder="⌕  Buscar pessoa ou alvo"><select class="filter" aria-label="Filtrar categoria"><option>Todas as ações</option><option>Time e membros</option><option>Tasks e sprints</option><option>Integrações e importação</option><option>Ambiente</option></select><select class="filter" aria-label="Período"><option>Últimos 30 dias</option><option>Últimos 7 dias</option><option>Todo o período</option></select><button class="btn small" type="button">Exportar lista</button></div>
+        <div class="filterchips"><span class="filterchip on">Tudo · 12</span><span class="filterchip">Time · 3</span><span class="filterchip">Tasks · 5</span><span class="filterchip">Integrações · 2</span><span class="filterchip">Ambiente · 2</span></div>
+        <section class="panel"><div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>Quem</th><th>O quê</th><th>Alvo</th><th>Quando</th></tr></thead><tbody>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">task.create</span></td><td class="target">TA-024 · Revisar onboarding</td><td class="time">13 out · 10:42</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">task.assign</span></td><td class="target">TA-024 · Maya Chen</td><td class="time">13 out · 10:45</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar" style="background:#233a34;color:#a9e5ce">MC</span>Maya Chen</span></td><td><span class="event-code">integration.connect</span></td><td class="target">Slack</td><td class="time">13 out · 08:31</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">team.invite.create</span></td><td class="target">alex@testing.example</td><td class="time">12 out · 17:08</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">team.house.publish</span></td><td class="target">Manifesto do time · v3</td><td class="time">12 out · 16:40</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">task.report</span></td><td class="target">TA-017 · Ajustar estados vazios</td><td class="time">12 out · 15:22</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar">MC</span>Maya Chen</span></td><td><span class="event-code">team.rename</span></td><td class="target">Testing Team A</td><td class="time">02 out · 09:14</td></tr>
+          <tr><td><span class="audit-actor"><span class="avatar" style="background:#233a34;color:#a9e5ce">MC</span>Maya Chen</span></td><td><span class="event-code">integration.import_run</span></td><td class="target">Slack · importação concluída</td><td class="time">01 out · 14:06</td></tr>
+        </tbody></table></div><div class="privacy-note"><strong>Escopo auditado:</strong> ações de time, membros, convites, manifesto, tasks, sprints, integrações, importações e webhooks que o StellarCloud grava em <span class="mono">audit_log</span>. Dados e detalhes abaixo são fictícios; a tabela não expõe conteúdo de comentários nem tokens.</div></section>
+        <p class="hint" style="margin-top:10px">A lista real vem ordenada por horário decrescente. Filtros e busca são proposta visual para este protótipo.</p>
+      </sc-if>
+
+      <sc-if value="{{isStats}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Estatísticas do time</h2><p>Um retrato do quadro a partir dos estados das tasks.</p></div><span class="tag blue">Dados de exemplo · Testing Team A</span></div>
+        <div class="grid stats4">
+          <article class="stat"><span class="stat-label">Tasks abertas</span><strong class="stat-value">6</strong><span class="stat-foot">no quadro agora</span></article>
+          <article class="stat"><span class="stat-label">Sem responsável</span><strong class="stat-value">1</strong><span class="stat-foot">aberta para atribuição</span></article>
+          <article class="stat"><span class="stat-label">Aguardando revisão</span><strong class="stat-value">2</strong><span class="stat-foot">precisam de owner/admin</span></article>
+          <article class="stat"><span class="stat-label">Concluídas</span><strong class="stat-value">2</strong><span class="stat-foot">no quadro agora</span></article>
+        </div>
+        <div class="chart-grid" style="margin-top:14px">
+          <section class="panel"><div class="panel-head"><h3>Tasks por estado</h3><span class="push"></span><span class="tag">Visão atual</span></div><div class="panel-body"><div class="bars" style="height:220px"><div class="bar-col"><span class="bar-value">2</span><span class="bar" style="--h:48%"></span><span class="bar-label">A fazer</span></div><div class="bar-col"><span class="bar-value">2</span><span class="bar" style="--h:48%;background:linear-gradient(180deg,#73a7ff,#4d6bb8)"></span><span class="bar-label">Em curso</span></div><div class="bar-col"><span class="bar-value">2</span><span class="bar" style="--h:48%;background:linear-gradient(180deg,#f0ca77,#a27737)"></span><span class="bar-label">Revisão</span></div><div class="bar-col"><span class="bar-value">2</span><span class="bar" style="--h:48%;background:linear-gradient(180deg,#79d8ae,#3a8e6b)"></span><span class="bar-label">Concluídas</span></div></div><div class="legend" style="margin-top:12px"><span><i></i>Tasks por estado no quadro</span><span class="hint">Snapshot demonstrativo, sem série histórica.</span></div></div></section>
+          <section class="panel"><div class="panel-head"><h3>Fluxo de trabalho</h3><span class="push"></span><span class="tag">Agora</span></div><div class="panel-body"><div class="rank-list"><div class="rank"><span class="rank-num">01</span><span><strong>Tasks no quadro</strong><small>Abertas e concluídas</small></span><span class="rank-value">8</span></div><div class="rank"><span class="rank-num">02</span><span><strong>Com responsável</strong><small>Atribuídas a Maya</small></span><span class="rank-value">7</span></div><div class="rank"><span class="rank-num">03</span><span><strong>Origem externa</strong><small>Slack</small></span><span class="rank-value">1</span></div></div><div class="notice" style="margin-top:17px">A tela pode agregar a lista de tasks que o board já carrega. Não há métrica de custo, tempo individual ou quota do time nesta proposta.</div></div></section>
+        </div>
+        <p class="hint" style="margin-top:12px">Fonte proposta: tarefas e estados já exibidos no quadro do time. Valores fictícios para avaliação visual; sem rastreamento novo.</p>
+      </sc-if>
+
+      <sc-if value="{{isSettings}}">
+        <div class="page-intro"><div class="intro-copy"><h2>Configurações do time</h2><p>Personalização disponível hoje e limites explícitos da API.</p></div><span class="tag">Owner / admin</span></div>
+        <div class="settings-grid">
+          <div class="form-stack">
+            <section class="panel"><div class="panel-head"><h3>Identidade</h3><span class="tag green">Suportado</span></div><div class="panel-body form-stack">
+              <div><label class="field-label" for="team-name">Nome do time</label><input id="team-name" class="field" value="Testing Team A" maxlength="80"><p class="hint" style="margin:6px 0 0">Owner/admin podem alterar o nome. Limite atual: 80 caracteres.</p></div>
+              <div><label class="field-label" for="team-slug">Slug</label><input id="team-slug" class="field mono" value="testing-team-a" readonly><p class="hint" style="margin:6px 0 0">Identificador criado com o time; o backend não oferece alteração do slug.</p></div>
+              <div style="display:flex;justify-content:flex-end"><button class="btn primary" type="button">Salvar nome</button></div>
+            </div></section>
+            <section class="panel"><div class="panel-head"><h3>Quadro e compartilhamento</h3><span class="tag green">Suportado</span></div><div class="panel-body">
+              <div class="checkline"><button class="ucheck" type="button" role="checkbox" aria-checked="false" aria-label="Compartilhar caminhos de arquivos com o time" aria-describedby="share-desc"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path class="checkmark" d="m3 8 3.1 3.1L13 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button><span class="copy"><strong>Compartilhar caminhos de arquivos com o time</strong><small id="share-desc">Permite mostrar caminhos associados a tasks. É uma opção existente no backend e começa desativada.</small></span></div>
+              <div class="setting-line" style="margin-top:12px"><span class="grow"><strong>Padrões do board</strong><small>Autodispatch, colunas e política padrão de revisão ainda não têm configuração persistida por time.</small></span><span class="tag">Não disponível</span></div>
+            </div></section>
+            <section class="panel"><div class="panel-head"><h3>Avatar e cor</h3><span class="tag">Não disponível</span></div><div class="panel-body"><div class="disabled-option">O modelo atual do time não guarda avatar nem cor. Esta prévia não oferece uma escolha que ainda não possa ser salva.</div></div></section>
+          </div>
+          <div class="form-stack">
+            <section class="panel"><div class="panel-head"><h3>Prévia de identidade</h3><span class="push"></span><span class="tag">Mock</span></div><div class="panel-body"><div class="person"><span class="person-avatar" style="width:48px;height:48px;border-radius:14px;font-size:15px">T</span><span><strong style="font-size:14px">Testing Team A</strong><small>testing-team-a · 1 de 5 assentos</small></span></div><div class="hint" style="margin-top:12px">Avatar com iniciais e cor de interface são apresentados sem sugerir persistência de personalização.</div></div></section>
+            <section class="panel danger-zone"><div class="panel-head"><h3 class="danger-title">Zona de risco</h3><span class="tag" style="color:#f0a2aa;border-color:#54313a">Owner</span></div><div class="panel-body form-stack"><p>Excluir o time remove os dados associados após confirmar o slug. A ação é auditada e não pode ser desfeita.</p><label class="field-label" for="delete-confirm">Digite <span class="mono">testing-team-a</span> para confirmar</label><input id="delete-confirm" class="field mono" placeholder="testing-team-a"><button class="btn" type="button" style="border-color:#60323b;color:#f0a2aa;justify-self:start">Excluir time…</button></div></section>
+            <div class="notice"><strong>Decisão do protótipo:</strong> manter editável só o que o backend já persiste. Slug fica estável; avatar, cor e padrões do board aguardam suporte de API.</div>
+          </div>
+        </div>
+      </sc-if>
+      <div class="footer-note">Protótipo de avaliação · nenhuma informação ou ação é real</div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1050}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const allowed = ['overview','board','members','environment','import','audit','stats','settings','integrations'];
+    const requested = (location.hash || '').replace(/^#/, '');
+    const initialTab = requested === 'integrations' ? 'import' : (allowed.includes(requested) ? requested : 'overview');
+    this.state = {
+      tab: initialTab,
+      importSection: requested === 'integrations' ? 'integrations' : 'import',
+      spaceName: 'Ambiente',
+      scope: 'team',
+      source: 'csv',
+      step: 1,
+      checks: { task1: false, task2: false, task3: false, task4: false, task5: false, task6: true, task7: false, task8: false },
+    };
+  }
+  renderVals() {
+    const labels = { overview: 'Visão geral', board: 'Quadro', members: 'Membros', environment: this.state.spaceName, import: 'Importar', audit: 'Auditoria', stats: 'Estatísticas', settings: 'Configurações' };
+    const tab = this.state.tab;
+    const nameChoices = ['Ambiente', 'Espaço de trabalho', 'Base do time'];
+    const tabs = Object.entries(labels).map(([id, label]) => ({
+      label,
+      cls: id === tab ? 'tab on' : 'tab',
+      current: id === tab ? 'page' : 'false',
+      pick: () => this.setState({ tab: id }),
+    }));
+    const nameOptions = nameChoices.map((label) => ({
+      label,
+      cls: this.state.spaceName === label ? 'choice on' : 'choice',
+      selected: this.state.spaceName === label ? 'true' : 'false',
+      pick: () => this.setState({ spaceName: label }),
+    }));
+    const sources = [
+      { id: 'csv', label: 'Arquivo CSV', icon: 'CSV' },
+      { id: 'json', label: 'Arquivo JSON', icon: '{}' },
+      { id: 'slack', label: 'Slack', icon: 'S' },
+    ].map((source) => ({ ...source, cls: this.state.source === source.id ? 'source-choice on' : 'source-choice', selected: this.state.source === source.id ? 'true' : 'false', pick: () => this.setState({ source: source.id, step: 1 }) }));
+    const stepNames = ['Selecionar fonte', 'Mapear campos', 'Revisar prévia', 'Importar'];
+    const steps = stepNames.map((label, index) => ({ number: String(index + 1), label, cls: `step-choice${this.state.step === index + 1 ? ' on' : ''}${this.state.step > index + 1 ? ' done' : ''}`, current: this.state.step === index + 1 ? 'step' : 'false', pick: () => this.setState({ step: index + 1 }) }));
+    const sourceLabels = { csv: 'Arquivo CSV', json: 'Arquivo JSON', slack: 'Slack' };
+    const sourceDetails = { csv: 'Envie um CSV e selecione quais colunas correspondem aos campos de task.', json: 'Envie um JSON com registros de tasks e revise a estrutura antes de mapear.', slack: 'Selecione o workspace conectado, canal e limite de mensagens para a prévia.' };
+    const sourceActions = { csv: 'Escolher CSV', json: 'Escolher JSON', slack: 'Selecionar canal' };
+    const stepTitles = ['Escolha uma fonte', 'Mapeie os campos', 'Revise antes de importar', 'Importe as tasks'];
+    const stepDescriptions = ['Comece pela fonte de dados e escolha onde as tasks serão criadas.', 'Associe os campos de origem aos campos que o StellarCloud aceita.', 'Confira novas tasks, itens repetidos e dados inválidos.', 'Confirme a criação; o histórico informa quantas tasks entraram.'];
+    const step = Math.max(1, Math.min(4, this.state.step));
+    const checkbox = (id) => this.state.checks[id] ? 'ucheck' : 'ucheck';
+    const toggle = (id) => () => this.setState({ checks: { ...this.state.checks, [id]: !this.state.checks[id] } });
+    const v = {
+      tabs,
+      nameOptions,
+      sources,
+      steps,
+      spaceLabel: this.state.spaceName,
+      sourceLabel: sourceLabels[this.state.source],
+      sourceDetail: sourceDetails[this.state.source],
+      sourceAction: sourceActions[this.state.source],
+      stepNumber: String(step),
+      stepTitle: stepTitles[step - 1],
+      stepDescription: stepDescriptions[step - 1],
+      scopeDestination: this.state.scope === 'team' ? 'Testing Team A' : 'seu perfil pessoal',
+      scopeTeam: this.state.scope === 'team',
+      scopePersonal: this.state.scope === 'personal',
+      scopeTeamClass: this.state.scope === 'team' ? 'on' : '',
+      scopePersonalClass: this.state.scope === 'personal' ? 'on' : '',
+      stepSource: step === 1,
+      stepMapping: step === 2,
+      stepPreview: step === 3,
+      stepRun: step === 4,
+      isOverview: tab === 'overview',
+      isBoard: tab === 'board',
+      isMembers: tab === 'members',
+      isEnvironment: tab === 'environment',
+      isImport: tab === 'import' && this.state.importSection === 'import',
+      isIntegrations: tab === 'import' && this.state.importSection === 'integrations',
+      isAudit: tab === 'audit',
+      isStats: tab === 'stats',
+      isSettings: tab === 'settings',
+      openAudit: () => this.setState({ tab: 'audit' }),
+      openMembers: () => this.setState({ tab: 'members' }),
+      setTeamScope: () => this.setState({ scope: 'team' }),
+      setPersonalScope: () => this.setState({ scope: 'personal', source: this.state.source === 'slack' ? 'csv' : this.state.source }),
+      showImport: () => this.setState({ tab: 'import', importSection: 'import' }),
+      showIntegrations: () => this.setState({ tab: 'import', importSection: 'integrations' }),
+    };
+    for (let i = 1; i <= 8; i++) {
+      const key = `task${i}`;
+      v[`${key}Checked`] = this.state.checks[key] ? 'true' : 'false';
+      v[`${key}Class`] = checkbox(key);
+      v[`toggleTask${i}`] = toggle(key);
+    }
+    return v;
+  }
+}
+</script>
+</body>
+</html>

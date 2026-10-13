@@ -32,17 +32,76 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 .preset{flex:1;border:1px solid #232838;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;background:#0c0f15;cursor:pointer;text-align:left;color:#e8eaf0;font:inherit}
 .preset:hover{border-color:#3b4570}
 .kbd{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:5px;border:1px solid #2f3546;border-bottom-width:2px;background:#12151d;font:500 11px 'JetBrains Mono',monospace;color:#e8eaf0}
+.checkRow{display:flex;align-items:center;gap:12px;min-height:48px}
+.checkLabel{display:flex;align-items:center;gap:10px;min-width:0;flex:1;cursor:pointer}
+.checkText{display:flex;flex-direction:column;gap:3px;font-size:14px}
+.checkInput{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.checkBox{width:18px;height:18px;flex:none;display:grid;place-items:center;border:1px solid #454c60;border-radius:5px;background:#0c0f15;color:#fff;transition:background .14s,border-color .14s,box-shadow .14s}
+.checkInput:checked+.checkBox{background:#6677f4;border-color:#8290ff}
+.checkInput[aria-checked="mixed"]+.checkBox{background:#6677f4;border-color:#8290ff}
+.checkInput:disabled+.checkBox{background:#1a1d26;border-color:#343846;color:#747b8d}
+.checkInput:focus-visible+.checkBox{outline:2px solid #b2bdff;outline-offset:3px;box-shadow:0 0 0 5px #687aff33}
+.componentGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.componentSample{border:1px solid #232838;border-radius:10px;background:#0c0f15;padding:13px}
+.componentSample.focusSample .checkBox{outline:2px solid #b2bdff;outline-offset:3px;box-shadow:0 0 0 5px #687aff33}
+.componentSample .checkRow{align-items:flex-start}
+.sourceList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 18px;margin:0;padding:0;list-style:none}
+.sourceList li{font:11px/1.55 'JetBrains Mono',monospace;color:#aeb5c5;overflow-wrap:anywhere}
+.sourceList strong{color:#d6dae6;font-weight:500}
+.componentCanvas{position:absolute;inset:0;display:flex;flex-direction:column;gap:18px;padding:36px 52px;background:#080a10;overflow:auto}
+.componentCanvasHead{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #1d2230;padding-bottom:16px}
+.componentCanvasHead h1{margin:0;font-size:22px;font-weight:600}
+.componentCanvasHead span{font-size:12px;color:#8d94a6}
+.componentCanvasBody{width:min(1120px,100%);margin:0 auto;display:flex;flex-direction:column;gap:14px}
 </style>
 </helmet>
 <div style="position: relative; width: 1440px; height: 900px; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+  <sc-if value="{{pComponentes}}" hint-placeholder-val="{{ false }}">
+    <div class="componentCanvas" data-part="component-sheet">
+      <header class="componentCanvasHead"><h1>Componentes · checkbox universal</h1><span>Folha de componente · fora de Configurações</span></header>
+      <main class="componentCanvasBody">
+        <section class="sec" data-part="checkbox-component">
+          <div class="row"><div class="lbl"><span>Checkbox reutilizável</span><span class="hint">Estados visuais e acessíveis · pressione Tab para experimentar o foco.</span></div></div>
+          <div class="componentGrid">
+            <div class="componentSample"><label class="checkRow checkLabel"><input class="checkInput" type="checkbox" aria-describedby="check-unchecked-help"><span class="checkBox" aria-hidden="true"></span><span class="checkText"><span>Desmarcado</span><span class="hint" id="check-unchecked-help">Estado inicial</span></span></label></div>
+            <div class="componentSample"><label class="checkRow checkLabel"><input class="checkInput" type="checkbox" checked aria-describedby="check-checked-help"><span class="checkBox" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2 6 2.5 2.5L10 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span><span class="checkText"><span>Marcado</span><span class="hint" id="check-checked-help">Opção ativa</span></span></label></div>
+            <div class="componentSample"><label class="checkRow checkLabel"><input class="checkInput" type="checkbox" aria-checked="mixed" aria-describedby="check-mixed-help"><span class="checkBox" aria-hidden="true"><span style="width:9px;height:2px;border-radius:2px;background:currentColor"></span></span><span class="checkText"><span>Indeterminado</span><span class="hint" id="check-mixed-help">Seleção parcial de um grupo</span></span></label></div>
+            <div class="componentSample"><label class="checkRow checkLabel" style="cursor:not-allowed;opacity:.65"><input class="checkInput" type="checkbox" checked disabled aria-describedby="check-disabled-help"><span class="checkBox" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2 6 2.5 2.5L10 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span><span class="checkText"><span>Desabilitado</span><span class="hint" id="check-disabled-help">Indisponível nesta condição</span></span></label></div>
+            <div class="componentSample focusSample"><label class="checkRow checkLabel"><input class="checkInput" type="checkbox" tabindex="0" aria-describedby="check-focus-help"><span class="checkBox" aria-hidden="true"></span><span class="checkText"><span>Foco por teclado</span><span class="hint" id="check-focus-help">Amostra do contorno · pressione Tab para focar</span></span></label></div>
+            <div class="componentSample"><label class="checkRow checkLabel"><input class="checkInput" type="checkbox" checked aria-describedby="check-description-help"><span class="checkBox" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2 6 2.5 2.5L10 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span><span class="checkText"><span>Com descrição</span><span class="hint" id="check-description-help">Texto de apoio associado por aria-describedby.</span></span></label></div>
+          </div>
+          <p class="hint" style="margin:0">O input nativo continua sendo o controle acessível; a caixa desenhada herda foco visível, estado e rótulo.</p>
+        </section>
+        <section class="sec" data-part="native-checkbox-inventory">
+          <h2 class="sh">Checkboxes nativos encontrados em src/renderer</h2>
+          <ul class="sourceList">
+            <li><strong>AccountSessionImport.tsx:48</strong> · seleção de boards</li>
+            <li><strong>TeamPage.tsx:1950, 2840</strong> · filtro e seleção em lote</li>
+            <li><strong>LocalBoardImport.tsx:282, 422, 437</strong> · importação e conflitos</li>
+            <li><strong>ImportWizard.tsx:427, 467</strong> · opções da importação</li>
+            <li><strong>LoginScreen.tsx:468</strong> · ferramentas habilitadas</li>
+            <li><strong>CreateTaskModal.tsx:436</strong> · opção ao criar task</li>
+            <li><strong>TeamTaskForm.tsx:347, 466</strong> · opções da task</li>
+            <li><strong>Shell.tsx:305, 317, 329</strong> · opções do terminal</li>
+            <li><strong>IntegrationsPage.tsx:224, 235, 246, 265, 278, 291, 304, 331, 342, 353</strong> · permissões e integrações</li>
+            <li><strong>ChangesCard.tsx:251</strong> · seleção de arquivo</li>
+            <li><strong>WorkHomePage.tsx:274</strong> · seleção de item</li>
+            <li><strong>ProvidersPage.tsx:438, 987</strong> · configuração de providers</li>
+            <li><strong>StickyCard.tsx:227</strong> · checkbox desabilitado identificado via seletor</li>
+          </ul>
+        </section>
+      </main>
+    </div>
+  </sc-if>
   <sc-if value="{{pPerfis}}" hint-placeholder-val="{{ false }}"><span data-part="entry-note" style="position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 12px; color: #8d94a6">Aberta pela linha “Gerenciar perfis e contas” do menu do perfil, já nesta página</span></sc-if>
+  <sc-if value="{{pModal}}" hint-placeholder-val="{{ true }}">
   <section role="dialog" aria-modal="true" aria-labelledby="cfg" style="width: 1280px; height: 820px; border-radius: 16px; background: #0b0d12; border: 1px solid #262b3a; display: flex; overflow: hidden">
 
     <nav aria-label="Seções" style="width: 260px; flex: none; border-right: 1px solid #1d2230; background: #0c0f15; padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto">
       <h1 id="cfg" style="margin: 0 10px 12px; font-size: 18px; font-weight: 600">Configurações</h1>
       <label style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; margin: 0 0 10px; border: 1px solid #2a2f3d; border-radius: 8px"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#8d94a6" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="4.5"></circle><path d="M9.5 9.5L13 13"></path></svg><input aria-label="Buscar configuração" placeholder="Buscar configuração" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #e8eaf0; font: inherit; font-size: 13px; outline: none"></label>
       <span class="sh" style="padding: 6px 10px">Aplicativo</span>
-      <sc-for list="{{appNav}}" as="n" hint-placeholder-count="8">
+      <sc-for list="{{appNav}}" as="n" hint-placeholder-count="10">
         <button type="button" class="{{n.cls}}" onClick="{{n.pick}}">{{n.label}}<sc-if value="{{n.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">novo</span></sc-if></button>
       </sc-for>
       <span class="sh" style="padding: 14px 10px 6px">Este board · 64</span>
@@ -63,7 +122,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 
         <sc-if value="{{pConta}}" hint-placeholder-val="{{ true }}">
           <section class="sec">
-            <div class="row"><span style="width: 44px; height: 44px; border-radius: 12px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">LS</span><div class="lbl"><span>Lucas Sabino</span><span class="hint">ana@example.com · GitHub e e-mail ligados</span></div><button type="button" class="btn">Sair</button></div>
+            <div class="row"><span style="width: 44px; height: 44px; border-radius: 12px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">AS</span><div class="lbl"><span>Ana Souza</span><span class="hint">ana@example.com · GitHub e e-mail ligados</span></div><button type="button" class="btn">Sair</button></div>
           </section>
           <section class="sec">
             <h3 class="sh">Plano</h3>
@@ -169,6 +228,23 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
           </section>
         </sc-if>
 
+        <sc-if value="{{pNotificacoes}}" hint-placeholder-val="{{ false }}">
+          <section class="sec" data-part="notifications-master">
+            <div class="row"><div class="lbl"><span>Notificações</span><span class="hint">Escolha onde quer receber atualizações do Stellar.</span></div><span class="pill" style="background:#14302a;color:#8fdcc0">preferências deste app</span></div>
+          </section>
+          <section class="sec" aria-labelledby="notification-channels-title">
+            <h3 class="sh" id="notification-channels-title">Canais</h3>
+            <label class="checkRow checkLabel"><input class="checkInput" type="checkbox" checked aria-describedby="notify-app-help"><span class="checkBox" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2 6 2.5 2.5L10 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span><span class="checkText"><span>No app</span><span class="hint" id="notify-app-help">Avisos dentro do Stellar, como tarefas concluídas e perguntas dos agentes.</span></span></label>
+            <label class="checkRow checkLabel"><input class="checkInput" type="checkbox" checked aria-describedby="notify-system-help"><span class="checkBox" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2 6 2.5 2.5L10 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></span><span class="checkText"><span>No sistema</span><span class="hint" id="notify-system-help">Notificações da área de trabalho quando o Stellar estiver em segundo plano.</span></span></label>
+          </section>
+          <section class="sec" aria-labelledby="notification-email-title">
+            <h3 class="sh" id="notification-email-title">Resumo por e-mail</h3>
+            <label class="checkRow checkLabel"><input class="checkInput" type="checkbox" aria-describedby="notify-email-help"><span class="checkBox" aria-hidden="true"></span><span class="checkText"><span>Receber um resumo diário</span><span class="hint" id="notify-email-help">Um e-mail por dia com o que precisa da sua atenção. Sem mensagens de marketing.</span></span></label>
+            <div class="row"><span class="hint">Enviado para ana@example.com · você pode mudar isso a qualquer momento.</span></div>
+          </section>
+          <div class="hint">Preferências de exemplo para o protótipo. As notificações do sistema também dependem da permissão do sistema operacional.</div>
+        </sc-if>
+
         <sc-if value="{{pDesempenho}}" hint-placeholder-val="{{ false }}">
           <section class="sec">
             <h3 class="sh">O que o app faz para economizar</h3>
@@ -234,6 +310,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
       </div>
     </main>
   </section>
+  </sc-if>
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
@@ -249,13 +326,13 @@ class Component extends DCLogic {
   }
   renderVals() {
     const p = this.state.p;
-    const A = [['conta','Conta e plano',true,'quem você é, o plano e a casa de trabalho'],['perfis','Perfis',true,'os perfis desta máquina e os da conta'],['providers','Providers',false,'os CLIs que rodam nos cards, com a cota de cada um'],['atalhos','Atalhos',false,'ver e trocar teclas'],['chaves','Chaves de API',false,'para chat e ações de IA'],['disp','Dispositivos',false,'máquinas da conta e celular'],['aparencia','Aparência',true,'idioma, texto e movimento'],['desempenho','Desempenho',true,'o que o app faz para economizar e o consumo agora'],['sobre','Sobre',false,'versão, atualização e documentos']];
+    const A = [['conta','Conta e plano',true,'quem você é, o plano e a casa de trabalho'],['perfis','Perfis',true,'os perfis desta máquina e os da conta'],['providers','Providers',false,'os CLIs que rodam nos cards, com a cota de cada um'],['atalhos','Atalhos',false,'ver e trocar teclas'],['chaves','Chaves de API',false,'para chat e ações de IA'],['disp','Dispositivos',false,'máquinas da conta e celular'],['aparencia','Aparência',true,'idioma, texto e movimento'],['notificacoes','Notificações',false,'avisos no app, no sistema e por e-mail'],['desempenho','Desempenho',true,'o que o app faz para economizar e o consumo agora'],['sobre','Sobre',false,'versão, atualização e documentos']];
     const B = [['modo','Modo de trabalho',false,'preset e ajustes padrão das tasks'],['regras','Regras e gates',true,'o que todo agente recebe e como os gates rodam'],['time','Time',true,'ligação deste board com o time']];
     const mk = (list) => list.map(([id, label, isNew]) => ({ label, isNew, cls: p === id ? 'nav navOn' : 'nav', pick: () => this.setState({ p: id }) }));
     const cur = A.concat(B).find(x => x[0] === p) || A[0];
     const isBoard = B.some(x => x[0] === p);
     const v = {};
-    ['conta','perfis','providers','atalhos','chaves','disp','aparencia','desempenho','sobre','modo','regras','time'].forEach(id => { v['p' + id.charAt(0).toUpperCase() + id.slice(1)] = p === id; });
+    ['conta','perfis','providers','atalhos','chaves','disp','aparencia','notificacoes','componentes','desempenho','sobre','modo','regras','time'].forEach(id => { v['p' + id.charAt(0).toUpperCase() + id.slice(1)] = p === id; });
     const stage = this.state.stage;
     Object.assign(v, {
       profView: stage === 'view',
@@ -264,7 +341,7 @@ class Component extends DCLogic {
       profInputBorder: stage === 'erro' ? '#e0626a' : '#4a5fe0',
       profInputValue: stage === 'erro' ? 'Idy Platform' : 'Pessoal',
     });
-    return Object.assign(v, { appNav: mk(A), boardNav: mk(B), title: cur[1], subtitle: cur[3], scope: isBoard ? 'vale só para o board 64' : 'vale para o app inteiro' });
+    return Object.assign(v, { appNav: mk(A), boardNav: mk(B), title: cur[1], subtitle: cur[3], scope: isBoard ? 'vale só para o board 64' : 'vale para o app inteiro', pModal: p !== 'componentes' });
   }
 }
 </script>
