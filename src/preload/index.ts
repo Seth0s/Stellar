@@ -1218,6 +1218,8 @@ export type TaskBoardItem = {
   promptSnapshot?: string | null;
   provider: string | null;
   status: string;
+  /** Failure classification derived from `result_json` in the main process. */
+  failureKind?: "julgada" | "interrompida" | null;
   cardId: string | null;
   boardId: string | null;
   order: number | null;

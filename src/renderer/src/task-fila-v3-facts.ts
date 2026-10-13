@@ -60,7 +60,7 @@ export function queueFactsFromBoardItem(
       extras?.approverLabel ??
       (lastReviewer ? "revisor" : rounds > 0 ? "Master" : null),
     rounds,
-    failureKind: extras?.failureKind ?? null,
+    failureKind: task.failureKind ?? extras?.failureKind ?? null,
     updatedAt: task.updatedAt,
     supersededBy: task.supersededBy,
     supersededTargetDone: extras?.supersededTargetDone,

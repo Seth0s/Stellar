@@ -56,7 +56,7 @@ import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { readSpawnProfiles } from "./spawn-profiles";
 import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
-import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
+import { decideFailureKind, failureKindFromResultJson, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { registerCreateTaskIpc } from "./create-task-ipc";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
@@ -2021,6 +2021,7 @@ function createWindow() {
     promptTruncated: boolean;
     provider: string | null;
     status: string;
+    failureKind: "julgada" | "interrompida" | null;
     cardId: string | null;
     boardId: string | null;
     order: number | null;
@@ -2272,6 +2273,7 @@ function createWindow() {
         promptTruncated: promptProjection.truncated,
         provider: t.provider,
         status: storedStatus,
+        failureKind: failureKindFromResultJson(t.result_json),
         cardId: t.card_id,
         boardId: t.board_id,
         order: t.order,
