@@ -61,6 +61,7 @@ export function WorkHomePage() {
   const [status, setStatus] = useState<WorkHomeStatusInfo | null>(null);
   const [counts, setCounts] = useState<Partial<Record<WorkHomeTool, WorkHomeToolCounts>>>({});
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The status itself could not be read: shown as such (with a retry), never as "not signed in".
   const [loadFailed, setLoadFailed] = useState(false);
@@ -96,17 +97,14 @@ export function WorkHomePage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
     void window.workhome
       .toolSummary()
       .then((res) => {
         if (res.ok) setCounts(res.tools);
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {})
+      .finally(() => void refresh());
+  }, [refresh]);
 
   function toolDesc(tool: WorkHomeTool): string {
     const c = counts[tool];
@@ -119,9 +117,10 @@ export function WorkHomePage() {
     return parts.length > 0 ? parts.join(" · ") : t("workhome.counts.empty");
   }
 
-  async function run(fn: () => Promise<unknown>): Promise<void> {
+  async function run(fn: () => Promise<unknown>, syncAction = false): Promise<void> {
     lastRun.current = fn;
     setBusy(true);
+    if (syncAction) setSyncing(true);
     setError(null);
     setNote(null);
     try {
@@ -130,6 +129,7 @@ export function WorkHomePage() {
       setError(t("workhome.error.generic"));
     } finally {
       setBusy(false);
+      if (syncAction) setSyncing(false);
       void refresh();
     }
   }
@@ -146,7 +146,7 @@ export function WorkHomePage() {
         return;
       }
       setNote(`${t("workhome.revision", { revision: String(out.revision) })} · ${t("workhome.copied", { n: String(out.uploaded) })}`);
-    });
+    }, true);
   }
 
   async function handlePreview() {
@@ -158,7 +158,7 @@ export function WorkHomePage() {
       }
       setPlan(res.plan);
       setPullChoices({});
-    });
+    }, true);
   }
 
   async function handleApply() {
@@ -172,7 +172,7 @@ export function WorkHomePage() {
       setNote(dir ? t("workhome.backup", { dir }) : t("workhome.nothing"));
       setPlan(null);
       setPullChoices({});
-    });
+    }, true);
   }
 
   async function handleResolve() {
@@ -191,7 +191,7 @@ export function WorkHomePage() {
       }
       setPushConflicts(null);
       setNote(t("workhome.revision", { revision: String(out.kind === "pushed" ? out.revision : 0) }));
-    });
+    }, true);
   }
 
   function toggleTool(tool: WorkHomeTool, on: boolean) {
@@ -204,12 +204,26 @@ export function WorkHomePage() {
   const loggedIn = status?.loggedIn ?? false;
   const items = plan?.items ?? [];
   const changeCount = items.filter((i) => i.action === "add" || i.action === "update").length;
-  const syncedText =
-    status?.lastRevision != null ? t("workhome.status.synced", { revision: String(status.lastRevision), when: whenLabel(status.lastSyncAt) }) : t("workhome.status.ready");
+  const syncStatus = status?.syncStatus ?? (status?.lastSyncAt !== null && status?.lastSyncAt !== undefined
+    ? { kind: "synced" as const, at: status.lastSyncAt }
+    : { kind: "never" as const });
+  const syncedText = syncStatus.kind === "synced"
+    ? t("workhome.status.synced", { revision: String(status?.lastRevision ?? 0), when: whenLabel(syncStatus.at) })
+    : syncStatus.kind === "error"
+      ? t("workhome.status.error", { reason: syncStatus.reason })
+      : syncStatus.kind === "offline"
+        ? t("workhome.status.offline")
+        : syncStatus.kind === "pending"
+          ? t("workhome.status.pending")
+          : syncStatus.kind === "syncing"
+            ? t("workhome.status.syncing")
+            : t("workhome.status.never");
   const syncStatusText = !loggedIn
     ? t("workhome.notLoggedIn")
+    : syncing
+      ? t("workhome.status.syncing")
     : syncAccess.kind === "granted"
-      ? `${syncedText} · ${t("plan.sync.via", { source: t(syncAccess.source === "team" ? "plan.origin.team" : "plan.origin.account") })}`
+      ? syncedText
       : syncAccess.kind === "upgrade"
         ? t("workhome.plan.free")
         : syncAccess.kind === "expired"

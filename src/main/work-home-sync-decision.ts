@@ -31,6 +31,57 @@ import {
   type WorkHomeManifestEntry,
 } from "./work-home-manifest";
 
+export type WorkHomeSyncOrigin = "manual" | "auto";
+export type WorkHomeSyncDecision = { allowed: true } | { allowed: false; reason: "auto-sync-disabled" };
+export type WorkHomeSyncStatus =
+  | { kind: "never" }
+  | { kind: "synced"; at: number }
+  | { kind: "pending" }
+  | { kind: "syncing" }
+  | { kind: "error"; reason: string }
+  | { kind: "offline" };
+
+export function createWorkHomePendingCache(ttlMs = 30_000) {
+  const cache = new Map<string, { pending: boolean; checkedAt: number; lastSyncAt: number }>();
+  return {
+    get(profileId: string, now: number, lastSyncAt: number | null, compute: () => boolean): boolean {
+      if (lastSyncAt === null) return false;
+      const cached = cache.get(profileId);
+      if (cached && cached.lastSyncAt === lastSyncAt && now - cached.checkedAt < ttlMs) return cached.pending;
+      const pending = compute();
+      cache.set(profileId, { pending, checkedAt: now, lastSyncAt });
+      return pending;
+    },
+    set(profileId: string, now: number, lastSyncAt: number | null, pending: boolean): void {
+      if (lastSyncAt !== null) cache.set(profileId, { pending, checkedAt: now, lastSyncAt });
+    },
+    invalidate(profileId: string): void {
+      cache.delete(profileId);
+    },
+  };
+}
+
+/** Central gate for every automatic or user-invoked work-home network operation. */
+export function decideWorkHomeSync(origin: WorkHomeSyncOrigin, autoSync: boolean): WorkHomeSyncDecision {
+  return origin === "manual" || autoSync ? { allowed: true } : { allowed: false, reason: "auto-sync-disabled" };
+}
+
+export function deriveWorkHomeSyncStatus(input: {
+  lastSyncAt: number | null;
+  lastError: string | null;
+  syncing: boolean;
+  pending: boolean;
+}): WorkHomeSyncStatus {
+  if (input.syncing) return { kind: "syncing" };
+  if (input.pending) return { kind: "pending" };
+  if (input.lastError) {
+    return /offline|network|connection|timeout|fetch failed|econn/i.test(input.lastError)
+      ? { kind: "offline" }
+      : { kind: "error", reason: input.lastError.slice(0, 120) };
+  }
+  return input.lastSyncAt === null ? { kind: "never" } : { kind: "synced", at: input.lastSyncAt };
+}
+
 export type PushConflict = {
   path: string;
   baseSha: string | null;

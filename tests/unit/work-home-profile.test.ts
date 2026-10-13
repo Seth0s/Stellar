@@ -25,6 +25,8 @@ afterEach(() => {
 describe("prefs", () => {
   it("lê default quando ausente/corrompido e descarta ferramenta desconhecida", () => {
     expect(readWorkHomePrefs(dir)).toEqual(defaultWorkHomePrefs());
+    expect(readWorkHomePrefs(dir, { defaultEnabledTools: [] }).autoSync).toBe(false);
+    expect(readWorkHomePrefs(dir, { defaultEnabledTools: [] }).enabledTools).toEqual([]);
     writeFileSync(workHomePrefsPath(dir), "{ nao json");
     expect(readWorkHomePrefs(dir)).toEqual(defaultWorkHomePrefs());
     writeFileSync(workHomePrefsPath(dir), JSON.stringify({ enabledTools: ["claude", "nope"], workFolders: ["/a", "", 7] }));
@@ -33,8 +35,13 @@ describe("prefs", () => {
     expect(prefs.workFolders).toEqual(["/a"]);
   });
 
+  it("does not restore tool selections when the saved profile has no selection", () => {
+    writeFileSync(workHomePrefsPath(dir), JSON.stringify({ workFolders: ["/w"] }));
+    expect(readWorkHomePrefs(dir, { defaultEnabledTools: [] }).enabledTools).toEqual([]);
+  });
+
   it("round-trip da escrita atômica", () => {
-    const prefs = { ...defaultWorkHomePrefs(), workFolders: ["/w"], lastRevision: 3, lastSyncAt: 42 };
+    const prefs = { ...defaultWorkHomePrefs(), autoSync: true, workFolders: ["/w"], lastRevision: 3, lastSyncAt: 42 };
     writeWorkHomePrefs(dir, prefs);
     expect(readWorkHomePrefs(dir)).toEqual(prefs);
   });

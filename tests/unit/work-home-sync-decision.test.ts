@@ -2,7 +2,7 @@
  * work-home-sync-decision.ts + adaptadores de manifesto — merge de três vias,
  * conflito e conversão para a forma do backend (A3b, §5.2/§5.4). Puro.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildManifest,
   fromRemoteEntries,
@@ -11,7 +11,7 @@ import {
   toRemoteEntries,
   type WorkHomeManifestEntry,
 } from "../../src/main/work-home-manifest";
-import { planPush, resolvePushConflicts } from "../../src/main/work-home-sync-decision";
+import { createWorkHomePendingCache, decideWorkHomeSync, deriveWorkHomeSyncStatus, planPush, resolvePushConflicts } from "../../src/main/work-home-sync-decision";
 
 const sha = (n: number) => String(n).padStart(64, "0");
 const entry = (path: string, shaStr: string, tool: WorkHomeManifestEntry["tool"] = "claude"): WorkHomeManifestEntry => ({
@@ -51,6 +51,12 @@ describe("adaptadores de manifesto (backend B6)", () => {
 });
 
 describe("planPush — merge de três vias", () => {
+  it("requires explicit opt-in before any sync request", () => {
+    expect(decideWorkHomeSync("manual", false)).toEqual({ allowed: true });
+    expect(decideWorkHomeSync("auto", false)).toEqual({ allowed: false, reason: "auto-sync-disabled" });
+    expect(decideWorkHomeSync("auto", true)).toEqual({ allowed: true });
+  });
+
   it("arquivo só local entra; arquivo só remoto é preservado", () => {
     const local = man(entry("{claude}/novo.md", sha(1)));
     const remote = man(entry("{claude}/outro.md", sha(2)));
@@ -90,6 +96,27 @@ describe("planPush — merge de três vias", () => {
     const remoteChanged = man(entry("{claude}/a.md", sha(1)), entry("{claude}/b.md", sha(9)));
     const plan2 = planPush(local, remoteChanged, base);
     expect(plan2.conflicts.map((c) => c.path)).toEqual(["{claude}/b.md"]);
+  });
+});
+
+describe("work-home status", () => {
+  it("reports synced only after a successful backend response timestamp exists", () => {
+    expect(deriveWorkHomeSyncStatus({ lastSyncAt: null, lastError: null, syncing: false, pending: false })).toEqual({ kind: "never" });
+    expect(deriveWorkHomeSyncStatus({ lastSyncAt: null, lastError: null, syncing: false, pending: true })).toEqual({ kind: "pending" });
+    expect(deriveWorkHomeSyncStatus({ lastSyncAt: 123, lastError: null, syncing: false, pending: false })).toEqual({ kind: "synced", at: 123 });
+  });
+
+  it("skips pending collection before the first sync and memoizes per profile for the TTL", () => {
+    const cache = createWorkHomePendingCache(30_000);
+    const collect = vi.fn(() => true);
+    expect(cache.get("never", 10, null, collect)).toBe(false);
+    expect(collect).not.toHaveBeenCalled();
+
+    expect(cache.get("profile", 10, 1, collect)).toBe(true);
+    expect(cache.get("profile", 20, 1, () => false)).toBe(true);
+    expect(collect).toHaveBeenCalledTimes(1);
+    cache.invalidate("profile");
+    expect(cache.get("profile", 21, 1, () => false)).toBe(false);
   });
 });
 

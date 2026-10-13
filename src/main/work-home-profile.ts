@@ -19,6 +19,8 @@ import { providerHomeDir, workHomeToolForProvider, type ProviderHomeMode } from 
 export const WORK_HOME_PREFS_FILENAME = "work-home-prefs.json";
 
 export type WorkHomePrefs = {
+  /** Automatic work-home sync is opt-in and independent of tool selection. */
+  autoSync: boolean;
   enabledTools: WorkHomeTool[];
   /** Pastas onde procurar clones de projeto (memória do Claude por remote). */
   workFolders: string[];
@@ -28,8 +30,9 @@ export type WorkHomePrefs = {
   lastError: string | null;
 };
 
-export function defaultWorkHomePrefs(): WorkHomePrefs {
-  return { enabledTools: [...WORK_HOME_TOOLS], workFolders: [], lastRevision: null, lastSyncAt: null, lastError: null };
+/** The legacy default is retained for non-UI team publishing; the Work home IPC explicitly passes []. */
+export function defaultWorkHomePrefs(defaultEnabledTools: readonly WorkHomeTool[] = WORK_HOME_TOOLS): WorkHomePrefs {
+  return { autoSync: false, enabledTools: [...defaultEnabledTools], workFolders: [], lastRevision: null, lastSyncAt: null, lastError: null };
 }
 
 export function workHomePrefsPath(dataDir: string): string {
@@ -38,25 +41,26 @@ export function workHomePrefsPath(dataDir: string): string {
 
 /** Lê as preferências; ausência/corrupção cai no default (nada é inventado além
  *  do padrão declarado). Ferramenta desconhecida é descartada. */
-export function readWorkHomePrefs(dataDir: string): WorkHomePrefs {
+export function readWorkHomePrefs(dataDir: string, options: { defaultEnabledTools?: readonly WorkHomeTool[] } = {}): WorkHomePrefs {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(workHomePrefsPath(dataDir), "utf-8"));
   } catch {
-    return defaultWorkHomePrefs();
+    return defaultWorkHomePrefs(options.defaultEnabledTools);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return defaultWorkHomePrefs();
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return defaultWorkHomePrefs(options.defaultEnabledTools);
   const rec = parsed as Record<string, unknown>;
+  const autoSync = rec.autoSync === true;
   const enabledTools = Array.isArray(rec.enabledTools)
     ? rec.enabledTools.filter(isWorkHomeTool)
-    : [...WORK_HOME_TOOLS];
+    : [...(options.defaultEnabledTools ?? WORK_HOME_TOOLS)];
   const workFolders = Array.isArray(rec.workFolders)
     ? rec.workFolders.filter((f): f is string => typeof f === "string" && f.trim() !== "").map((f) => f.trim())
     : [];
   const lastRevision = typeof rec.lastRevision === "number" ? rec.lastRevision : null;
   const lastSyncAt = typeof rec.lastSyncAt === "number" ? rec.lastSyncAt : null;
   const lastError = typeof rec.lastError === "string" ? rec.lastError : null;
-  return { enabledTools, workFolders, lastRevision, lastSyncAt, lastError };
+  return { autoSync, enabledTools, workFolders, lastRevision, lastSyncAt, lastError };
 }
 
 export function writeWorkHomePrefs(dataDir: string, prefs: WorkHomePrefs): void {

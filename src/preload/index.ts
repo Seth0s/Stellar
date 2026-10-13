@@ -2531,12 +2531,20 @@ export type WorkHomeTool = "claude" | "codex" | "cursor" | "gemini" | "stellar";
 export type WorkHomeStatusInfo = {
   loggedIn: boolean;
   profileId: string | null;
+  autoSync: boolean;
   enabledTools: WorkHomeTool[];
   toolRoots: Partial<Record<WorkHomeTool, string>>;
   workFolders: string[];
   lastRevision: number | null;
   lastSyncAt: number | null;
   lastError: string | null;
+  syncStatus:
+    | { kind: "never" }
+    | { kind: "synced"; at: number }
+    | { kind: "pending" }
+    | { kind: "syncing" }
+    | { kind: "error"; reason: string }
+    | { kind: "offline" };
 };
 export type WorkHomeAction = "add" | "update" | "unchanged" | "keep-local" | "conflict" | "pending" | "remove";
 export type WorkHomePlanInfo = {
@@ -2572,6 +2580,7 @@ export type WorkHomeApi = {
   status: () => Promise<WorkHomeStatusInfo>;
   toolSummary: () => Promise<WorkHomeToolSummaryResult>;
   setTools: (tools: WorkHomeTool[]) => Promise<WorkHomeStatusInfo>;
+  setAutoSync: (enabled: boolean) => Promise<WorkHomeStatusInfo>;
   setWorkFolders: (folders: string[]) => Promise<WorkHomeStatusInfo>;
   preview: () => Promise<WorkHomePreviewResult>;
   apply: (choices: Record<string, WorkHomeConflictChoice>) => Promise<WorkHomeApplyOutcome>;
@@ -2596,6 +2605,7 @@ const workhome: WorkHomeApi = {
   status: () => ipcRenderer.invoke("workhome:status"),
   toolSummary: () => ipcRenderer.invoke("workhome:tool-summary"),
   setTools: (tools) => ipcRenderer.invoke("workhome:set-tools", tools),
+  setAutoSync: (enabled) => ipcRenderer.invoke("workhome:set-auto-sync", enabled),
   setWorkFolders: (folders) => ipcRenderer.invoke("workhome:set-work-folders", folders),
   preview: () => ipcRenderer.invoke("workhome:preview"),
   apply: (choices) => ipcRenderer.invoke("workhome:apply", choices),

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createCloudApi, type CloudApi } from "./cloud-api";
 import {
   applyPulledWorkHome,
+  collectLocalWorkHome,
   pullWorkHome,
   pushResolvedConflicts,
   pushWorkHome,
@@ -26,9 +27,20 @@ import { ensureCloudProfileId } from "./profiles-cloud";
 import { applyCopyFromSystem, previewCopyFromSystem } from "./profile-home-copy";
 import { collectWorkHome } from "./work-home-collect";
 import { discoverProjectClones } from "./work-home-remap";
-import { projectIdOf, relPathOf, WORK_HOME_TOOLS, isWorkHomeTool, type WorkHomeTool } from "./work-home-manifest";
+import {
+  buildManifest,
+  manifestByPath,
+  projectIdOf,
+  relPathOf,
+  WORK_HOME_TOOLS,
+  isWorkHomeTool,
+  type WorkHomeManifest,
+  type WorkHomeManifestEntry,
+  type WorkHomeTool,
+} from "./work-home-manifest";
 import type { ProviderHomeMode } from "./config-home-decision";
 import type { WorkHomeConflictChoice } from "./work-home-apply-decision";
+import { createWorkHomePendingCache, decideWorkHomeSync, deriveWorkHomeSyncStatus } from "./work-home-sync-decision";
 
 export type ActiveProfileInfo = {
   id: string;
@@ -54,22 +66,35 @@ export type WorkHomeIpcDeps = {
 type Status = {
   loggedIn: boolean;
   profileId: string | null;
+  autoSync: boolean;
   enabledTools: WorkHomeTool[];
   toolRoots: Partial<Record<WorkHomeTool, string>>;
   workFolders: string[];
   lastRevision: number | null;
   lastSyncAt: number | null;
   lastError: string | null;
+  syncStatus: ReturnType<typeof deriveWorkHomeSyncStatus>;
 };
 
 export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
   let api: CloudApi | null = null;
+  const syncingProfiles = new Set<string>();
+  const pendingCache = createWorkHomePendingCache();
+  async function trackSync<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
+    syncingProfiles.add(profileId);
+    try {
+      return await operation();
+    } finally {
+      syncingProfiles.delete(profileId);
+      pendingCache.invalidate(profileId);
+    }
+  }
   function cloudApi(): CloudApi {
     return (api ??= createCloudApi({ baseUrl: deps.apiBaseUrl() }));
   }
 
   function prefsOf(profile: ActiveProfileInfo): WorkHomePrefs {
-    return readWorkHomePrefs(profile.dir);
+    return readWorkHomePrefs(profile.dir, { defaultEnabledTools: [] });
   }
 
   function toolRootsOf(profile: ActiveProfileInfo): Partial<Record<WorkHomeTool, string>> {
@@ -81,39 +106,80 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
     });
   }
 
+  function pendingForManifest(profile: ActiveProfileInfo, local: WorkHomeManifest): boolean {
+    const localByPath = manifestByPath(local);
+    const baseByPath = manifestByPath(baseOf(profile));
+    if (localByPath.size !== baseByPath.size) return true;
+    for (const [path, entry] of localByPath) {
+      const synced = baseByPath.get(path);
+      if (synced?.sha256 !== entry.sha256 || synced.mode !== entry.mode) return true;
+    }
+    return false;
+  }
+
+  function hasPendingLocalChanges(profile: ActiveProfileInfo): boolean {
+    const prefs = prefsOf(profile);
+    return pendingCache.get(profile.id, deps.now(), prefs.lastSyncAt, () => {
+      if (prefs.enabledTools.length === 0) return false;
+      try {
+        const local = collectLocalWorkHome({
+          homeDir: deps.homeDir(),
+          toolRoots: toolRootsOf(profile),
+          enabledTools: prefs.enabledTools,
+          projectClones: discoverProjectClones(prefs.workFolders),
+        }).package.manifest;
+        return pendingForManifest(profile, local);
+      } catch {
+        return false;
+      }
+    });
+  }
+
   function status(): Status {
     const profile = deps.activeProfile();
     if (!profile) {
       return {
         loggedIn: false,
         profileId: null,
-        enabledTools: [...WORK_HOME_TOOLS],
+        autoSync: false,
+        enabledTools: [],
         toolRoots: {},
         workFolders: [],
         lastRevision: null,
         lastSyncAt: null,
         lastError: null,
+        syncStatus: { kind: "never" },
       };
     }
     const prefs = prefsOf(profile);
     return {
       loggedIn: true,
       profileId: profile.id,
+      autoSync: prefs.autoSync,
       enabledTools: prefs.enabledTools,
       toolRoots: toolRootsOf(profile),
       workFolders: prefs.workFolders,
       lastRevision: prefs.lastRevision,
       lastSyncAt: prefs.lastSyncAt,
       lastError: prefs.lastError,
+      syncStatus: deriveWorkHomeSyncStatus({
+        lastSyncAt: prefs.lastSyncAt,
+        lastError: prefs.lastError,
+        syncing: syncingProfiles.has(profile.id),
+        pending: hasPendingLocalChanges(profile),
+      }),
     };
   }
 
   /** Builds the sync context for the active profile; `null`/error become an
    *  honest result (never an invented profile). The id used for the house is
    *  the SERVER id: the link is resolved (or created) here, once per profile. */
-  async function buildContext(): Promise<{ ok: true; ctx: WorkHomeSyncContext; profile: ActiveProfileInfo } | { ok: false; error: string }> {
+  async function buildContext(origin: "manual" | "auto"): Promise<{ ok: true; ctx: WorkHomeSyncContext; profile: ActiveProfileInfo } | { ok: false; error: string }> {
     const profile = deps.activeProfile();
     if (!profile) return { ok: false, error: "sem perfil ativo" };
+    if (!decideWorkHomeSync(origin, prefsOf(profile).autoSync).allowed) {
+      return { ok: false, error: "sincronização automática da casa desativada neste perfil" };
+    }
     const token = await deps.ensureToken();
     if (!token) return { ok: false, error: "não logado na conta Stellar" };
     const linked = await ensureCloudProfileId({
@@ -138,7 +204,7 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
   }
 
   function remember(profile: ActiveProfileInfo, patch: Partial<WorkHomePrefs>): void {
-    writeWorkHomePrefs(profile.dir, { ...readWorkHomePrefs(profile.dir), ...patch });
+    writeWorkHomePrefs(profile.dir, { ...prefsOf(profile), ...patch });
   }
 
   ipcMain.handle("workhome:status", () => status());
@@ -155,11 +221,13 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
     const prefs = prefsOf(profile);
     const projectClones = discoverProjectClones(prefs.workFolders);
     const tools: Partial<Record<WorkHomeTool, { skills: number; agents: number; memories: number; rules: number; files: number }>> = {};
+    const selectedEntries: WorkHomeManifestEntry[] = [];
     for (const tool of WORK_HOME_TOOLS) {
       const root = roots[tool];
       if (!root) continue;
       try {
         const { package: pkg } = collectWorkHome({ tool, rootDir: root, homeDir: deps.homeDir(), projectClones });
+        if (prefs.enabledTools.includes(tool)) selectedEntries.push(...pkg.manifest.entries);
         let skills = 0;
         let agents = 0;
         let rules = 0;
@@ -177,14 +245,25 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
         /* a root that cannot be read contributes no counts — never invented */
       }
     }
+    if (prefs.lastSyncAt !== null) {
+      pendingCache.set(profile.id, deps.now(), prefs.lastSyncAt, pendingForManifest(profile, buildManifest(selectedEntries)));
+    }
     return { ok: true as const, tools };
   });
 
   ipcMain.handle("workhome:set-tools", (_e, tools: unknown) => {
     const profile = deps.activeProfile();
     if (!profile) return status();
-    const enabled = Array.isArray(tools) ? tools.filter(isWorkHomeTool) : [...WORK_HOME_TOOLS];
+    const enabled = Array.isArray(tools) ? tools.filter(isWorkHomeTool) : [];
     remember(profile, { enabledTools: enabled });
+    pendingCache.invalidate(profile.id);
+    return status();
+  });
+
+  ipcMain.handle("workhome:set-auto-sync", (_e, enabled: unknown) => {
+    const profile = deps.activeProfile();
+    if (!profile) return status();
+    remember(profile, { autoSync: enabled === true });
     return status();
   });
 
@@ -195,6 +274,7 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
       ? folders.filter((f): f is string => typeof f === "string" && f.trim() !== "").map((f) => f.trim())
       : [];
     remember(profile, { workFolders: next });
+    pendingCache.invalidate(profile.id);
     return status();
   });
 
@@ -204,20 +284,24 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
   }
 
   ipcMain.handle("workhome:preview", async () => {
-    const built = await buildContext();
+    const built = await buildContext("manual");
     if (!built.ok) return { ok: false as const, error: built.error };
-    const pulled = await pullWorkHome(built.ctx, baseOf(built.profile));
+    const pulled = await trackSync(built.profile.id, () => pullWorkHome(built.ctx, baseOf(built.profile)));
     if (!pulled.ok) {
+      remember(built.profile, { lastError: pulled.error });
       return { ok: false as const, error: pulled.error };
     }
     return { ok: true as const, revision: pulled.revision, plan: pulled.plan, warnings: pulled.warnings };
   });
 
   ipcMain.handle("workhome:apply", async (_e, choices: unknown) => {
-    const built = await buildContext();
+    const built = await buildContext("manual");
     if (!built.ok) return { ok: false as const, error: built.error };
-    const pulled = await pullWorkHome(built.ctx, baseOf(built.profile));
-    if (!pulled.ok) return { ok: false as const, error: pulled.error };
+    const pulled = await trackSync(built.profile.id, () => pullWorkHome(built.ctx, baseOf(built.profile)));
+    if (!pulled.ok) {
+      remember(built.profile, { lastError: pulled.error });
+      return { ok: false as const, error: pulled.error };
+    }
     const result = applyPulledWorkHome({
       incoming: pulled.incoming,
       plan: pulled.plan,
@@ -226,6 +310,7 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
       now: deps.now(),
       pathValues: { homeDir: built.ctx.homeDir, projectClones: built.ctx.projectClones },
     });
+    pendingCache.invalidate(built.profile.id);
     // A base só avança quando não sobrou conflito/pendência: nada é declarado
     // sincronizado enquanto houver trabalho por resolver.
     if (result.conflicts.length === 0 && result.pending.length === 0) {
@@ -240,9 +325,9 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
   });
 
   ipcMain.handle("workhome:sync-now", async () => {
-    const built = await buildContext();
+    const built = await buildContext("manual");
     if (!built.ok) return { ok: false as const, error: built.error };
-    const out = await pushWorkHome(built.ctx, { base: baseOf(built.profile) });
+    const out = await trackSync(built.profile.id, () => pushWorkHome(built.ctx, { base: baseOf(built.profile) }));
     if (out.ok && out.kind === "pushed") {
       writeBaseManifest(built.profile.dir, out.manifest);
       remember(built.profile, { lastRevision: out.revision, lastSyncAt: deps.now(), lastError: out.warnings[0] ?? null });
@@ -253,20 +338,21 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
   });
 
   ipcMain.handle("workhome:resolve-conflicts", async (_e, payload: unknown) => {
-    const built = await buildContext();
+    const built = await buildContext("manual");
     if (!built.ok) return { ok: false as const, error: built.error };
     const rec = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
     if (!rec.manifest || !Array.isArray(rec.conflicts) || !rec.remote || typeof rec.revision !== "number") {
       return { ok: false as const, error: "payload de conflito incompleto" };
     }
-    const out = await pushResolvedConflicts(built.ctx, {
+    const revision = rec.revision;
+    const out = await trackSync(built.profile.id, () => pushResolvedConflicts(built.ctx, {
       base: baseOf(built.profile),
       manifest: rec.manifest as never,
       conflicts: rec.conflicts as never,
       remote: rec.remote as never,
-      revision: rec.revision,
+      revision,
       choices: (rec.choices && typeof rec.choices === "object" ? rec.choices : {}) as Record<string, "local" | "remote" | "both">,
-    });
+    }));
     if (out.ok && out.kind === "pushed") {
       writeBaseManifest(built.profile.dir, out.manifest);
       remember(built.profile, { lastRevision: out.revision, lastSyncAt: deps.now(), lastError: out.warnings[0] ?? null });
@@ -290,6 +376,7 @@ export function registerWorkHomeIpc(deps: WorkHomeIpcDeps): void {
     const preview = previewCopyFromSystem({ providerId, profileDir: profile.dir, homeDir: deps.homeDir() });
     if (!preview.ok) return preview;
     const result = applyCopyFromSystem({ preview, backupRoot: join(profile.dir, "backups"), now: deps.now() });
+    pendingCache.invalidate(profile.id);
     return { ok: true as const, result };
   });
 }
