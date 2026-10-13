@@ -46,6 +46,7 @@ import { AgentAskModal } from "./AgentAskModal";
 import { SpawnQueuePanel } from "./SpawnQueuePanel";
 import { ConfirmModal } from "./ConfirmModal";
 import { SettingsModal, type SettingsPage } from "./SettingsModal";
+import { OPEN_SETTINGS_EVENT } from "./settings-nav-decision";
 import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID, type ShortcutCombo, type ShortcutOverrides } from "./shortcut-registry";
 import { loadShortcutOverrides, saveShortcutOverrides, setShortcutOverride, clearShortcutOverride } from "./shortcut-config";
 import { t, setLocale, getLocale, type Locale } from "../../shared/i18n";
@@ -806,6 +807,15 @@ export function App() {
   // is which door opened it (`?` → shortcuts, rail → general, QR → devices).
   const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null);
   const closeSettings = useCallback(() => setSettingsPage(null), []);
+  // Other surfaces ask for a Settings page by event (the profile menu's "Gerenciar perfis e contas").
+  useEffect(() => {
+    const open = (e: Event) => {
+      const page = (e as CustomEvent<{ page?: SettingsPage }>).detail?.page;
+      if (page) setSettingsPage(page);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, []);
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
   // kind of agent ask (open URL, spawn agent, spawn non-terminal card);
   // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below

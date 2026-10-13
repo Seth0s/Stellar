@@ -8,8 +8,14 @@
 
 export type SettingsScope = "app" | "board";
 
+/** Asks the app to open Settings on a page (e.g. the profile menu's "Gerenciar perfis e contas"). */
+export const OPEN_SETTINGS_EVENT = "stellar:open-settings";
+/** A profile was renamed: whoever shows profile names reads them again. */
+export const PROFILES_CHANGED_EVENT = "stellar:profiles-changed";
+
 export type SettingsPageId =
   | "account"
+  | "profiles"
   | "providers"
   | "shortcuts"
   | "keys"
@@ -51,6 +57,14 @@ export const SETTINGS_NAV: readonly SettingsNavEntry[] = [
     subtitleKey: "settings.subtitle.account",
     isNew: true,
     searchTokens: ["conta", "plano", "account", "plan", "casa", "work home", "sync"],
+  },
+  {
+    id: "profiles",
+    scope: "app",
+    labelKey: "settings.page.profiles",
+    subtitleKey: "settings.subtitle.profiles",
+    isNew: true,
+    searchTokens: ["perfis", "perfil", "profiles", "profile", "renomear", "rename", "pessoal"],
   },
   {
     id: "providers",

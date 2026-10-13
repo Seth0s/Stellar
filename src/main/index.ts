@@ -207,6 +207,7 @@ import {
 import { sanitizeUserDataPermissions } from "./user-data-permissions";
 import { isProviderHomeMode, planConfigHome, workHomeToolForProvider } from "./config-home-decision";
 import { buildRelaunchArgs, isProfileKind, isValidProfileName, parseProfileArg } from "./profiles-decision";
+import { appendRelaunchTrace, startedBySwitch } from "./profile-relaunch-trace";
 import { readLocalIdentityFile, setMachineIdentityDir } from "./local-identity";
 import { createCloudAuth, type CloudAuth, type CloudStatus } from "./cloud-auth";
 import { registerWorkHomeIpc } from "./work-home-ipc";
@@ -433,6 +434,16 @@ if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
   // síncrono, é o que garante que a linha exista no stderr de quem
   // lançou (agente ou humano).
   process.stderr.write(`${describeSingleInstanceRefusal(app.getPath("userData"))}\n`);
+  // A process started by a profile switch that loses the lock leaves a line saying so.
+  if (startedBySwitch(process.argv)) {
+    appendRelaunchTrace(app.getPath("userData"), {
+      step: "lock-lost",
+      pid: process.pid,
+      ppid: process.ppid,
+      profileId: parseProfileArg(process.argv),
+      nowMs: Date.now(),
+    });
+  }
   // `app.quit()` é assíncrono — não interrompe a execução síncrona deste
   // módulo. O guard dentro de `app.whenReady().then()` lá embaixo
   // (`if (!gotSingleInstanceLock) return;`) é o que garante de verdade que
@@ -538,6 +549,9 @@ if (!profileBootstrapAborted && !legacyMigrationDeferred) {
   } else {
     for (const notice of boot.notices) console.warn(notice);
     activeProfileId = boot.profileId;
+    if (startedBySwitch(process.argv)) {
+      appendRelaunchTrace(BASE_USER_DATA, { step: "booted", pid: process.pid, ppid: process.ppid, profileId: boot.profileId, nowMs: Date.now() });
+    }
     app.setPath("userData", boot.profileDir);
     // localStorage/cookies/caches do Chromium por perfil — isolamento do §3.
     app.setPath("sessionData", boot.profileDir);
@@ -4680,6 +4694,10 @@ function createWindow() {
     const set = setDefaultProfile(BASE_USER_DATA, id);
     if (!set.ok) return { ok: false as const, reason: set.reason ?? "unknown-profile" };
     // Grava o padrão e relança com a flag explícita (remove flags antigas).
+    appendRelaunchTrace(BASE_USER_DATA, { step: "switching", pid: process.pid, ppid: process.ppid, profileId: id, nowMs: Date.now() });
+    // Solta o lock de instância única ANTES de sair: o processo novo nasce enquanto este
+    // ainda morre, e um lock ainda preso o faria desistir sem abrir janela.
+    app.releaseSingleInstanceLock();
     app.relaunch({ args: buildRelaunchArgs(process.argv.slice(1), id) });
     app.exit(0);
     return { ok: true as const };
@@ -5741,6 +5759,9 @@ app.whenReady().then(async () => {
   app.once("will-quit", () => cloudAuth?.dispose());
 
   createWindow();
+  if (startedBySwitch(process.argv)) {
+    appendRelaunchTrace(BASE_USER_DATA, { step: "window", pid: process.pid, ppid: process.ppid, profileId: activeProfileId, nowMs: Date.now() });
+  }
 
   // Boot deep link (first instance): the invite link may have come on the
   // command line (`stellar://invite?...`). The token is kept and the UI fetches

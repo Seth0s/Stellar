@@ -2876,6 +2876,22 @@ export const ptBR = {
   "boardCanvasMenu.sub.open": "abre",
   "boardCanvasMenu.sub.pick": "escolhe",
   "boardCanvasMenu.sub.close": "fecha",
+  // Settings › Perfis (Configuracoes.dc.html #perfis).
+  "settings.page.profiles": "Perfis",
+  "settings.subtitle.profiles": "os perfis desta máquina e os da conta",
+  "settings.profiles.machine": "Perfis desta máquina",
+  "settings.profiles.account": "Perfis da conta · {identity}",
+  "settings.profiles.active": "ativo",
+  "settings.profiles.rename": "Renomear",
+  "settings.profiles.renameAria": "Renomear o perfil {name}",
+  "settings.profiles.nameAria": "Novo nome do perfil",
+  "settings.profiles.save": "Salvar",
+  "settings.profiles.cancel": "Cancelar",
+  "settings.profiles.onlyName": "Só o nome muda: pastas, sessões e a ligação com a conta ficam como estão.",
+  "settings.profiles.duplicate": "Já existe um perfil com esse nome nesta máquina.",
+  "settings.profiles.invalid": "O nome precisa ter de 1 a {max} caracteres.",
+  "settings.profiles.machineNote": "Trocar de perfil da máquina reabre o app; o nome aqui vale só nesta máquina.",
+  "settings.profiles.accountNote": "O nome de um perfil da conta vem do servidor; ainda não dá para mudá-lo por aqui.",
 } as const;
 
 export type MessageKey = keyof typeof ptBR;
@@ -5693,6 +5709,22 @@ export const en: Record<MessageKey, string> = {
   "boardCanvasMenu.sub.open": "open",
   "boardCanvasMenu.sub.pick": "choose",
   "boardCanvasMenu.sub.close": "close",
+  // Settings › Perfis (Configuracoes.dc.html #perfis).
+  "settings.page.profiles": "Profiles",
+  "settings.subtitle.profiles": "this machine's profiles and the account's",
+  "settings.profiles.machine": "Profiles on this machine",
+  "settings.profiles.account": "Account profiles · {identity}",
+  "settings.profiles.active": "active",
+  "settings.profiles.rename": "Rename",
+  "settings.profiles.renameAria": "Rename the profile {name}",
+  "settings.profiles.nameAria": "New profile name",
+  "settings.profiles.save": "Save",
+  "settings.profiles.cancel": "Cancel",
+  "settings.profiles.onlyName": "Only the name changes: folders, sessions and the account link stay as they are.",
+  "settings.profiles.duplicate": "A profile with that name already exists on this machine.",
+  "settings.profiles.invalid": "The name must be 1 to {max} characters.",
+  "settings.profiles.machineNote": "Switching the machine profile restarts the app; the name here only applies on this machine.",
+  "settings.profiles.accountNote": "An account profile's name comes from the server; it cannot be changed here yet.",
 };
 
 export const CATALOGS = {

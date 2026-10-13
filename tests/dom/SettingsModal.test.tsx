@@ -156,6 +156,7 @@ describe("SettingsModal V7", () => {
       Array.from(dialog.querySelectorAll("[data-settings-page]")).map((b) => b.getAttribute("data-settings-page")),
     ).toEqual([
       "account",
+      "profiles",
       "providers",
       "shortcuts",
       "keys",

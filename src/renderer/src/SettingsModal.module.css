@@ -560,3 +560,56 @@
     border-bottom: 1px solid #1d2230; /* sd:allow: Configuracoes.dc.html approved measure (SPEC-Configuracoes-V7.md) */;
   }
 }
+
+/* Perfis page — Configuracoes.dc.html #perfis (same row/field/button classes as the other pages). */
+.profileAvatar {
+  width: 34px; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  height: 34px; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  border-radius: 10px; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  background: #1a2040; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  color: #c3cbff; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  flex: none;
+}
+
+.profileAvatarTeam {
+  background: #123a35; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+  color: #8ee6d8; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}
+
+.profileEditRow {
+  align-items: flex-start;
+}
+
+.profileEditStack {
+  gap: 8px; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}
+
+.profileEditLine {
+  display: flex;
+  align-items: center;
+  gap: 8px; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}
+
+.profileInput {
+  flex: 1;
+  min-width: 0;
+  /* The prototype's field is content-box (36 px + the border = 38 px). */
+  box-sizing: content-box;
+  border-color: #4a5fe0; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}
+
+/* The border carries the state (accent while editing, red on error), as in the prototype. */
+.profileInput:focus-visible {
+  outline: none;
+}
+
+.profileInputError {
+  border-color: #e0626a; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}
+
+.hintError {
+  color: #ff9da3; /* sd:allow: Configuracoes.dc.html approved measure (Perfis) */
+}

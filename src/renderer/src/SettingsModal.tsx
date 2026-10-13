@@ -34,6 +34,7 @@ import {
   TeamSettingsPage,
   type SettingsBoard,
 } from "./SettingsPages";
+import { ProfilesPage } from "./SettingsProfilesPage";
 import styles from "./SettingsModal.module.css";
 
 export type SettingsPage = SettingsPageRef;
@@ -187,6 +188,7 @@ export function SettingsModal({
           </header>
           <div className={styles.pane} data-settings-pane={current}>
             {current === "account" && <AccountPage />}
+            {current === "profiles" && <ProfilesPage closeInterceptorRef={closeInterceptorRef} />}
             {current === "providers" && <ProvidersSettingsPage />}
             {current === "shortcuts" && (
               <ShortcutsPage

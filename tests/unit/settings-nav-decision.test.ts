@@ -9,6 +9,15 @@ import {
   settingsScopeLabel,
 } from "../../src/renderer/src/settings-nav-decision";
 
+import { PROFILE_NAME_MAX } from "../../src/renderer/src/SettingsProfilesPage";
+import { MAX_PROFILE_NAME_LENGTH } from "../../src/main/profiles-decision";
+
+describe("Perfis page", () => {
+  it("shows the same name limit the registry enforces", () => {
+    expect(PROFILE_NAME_MAX).toBe(MAX_PROFILE_NAME_LENGTH);
+  });
+});
+
 describe("settings-nav-decision", () => {
   it("maps legacy maestro/agents onto mode", () => {
     expect(normalizeSettingsPage("maestro")).toBe("mode");
@@ -19,6 +28,7 @@ describe("settings-nav-decision", () => {
   it("splits Aplicativo × Este board in prototype order", () => {
     expect(settingsNavForScope("app").map((e) => e.id)).toEqual([
       "account",
+      "profiles",
       "providers",
       "shortcuts",
       "keys",
@@ -32,7 +42,7 @@ describe("settings-nav-decision", () => {
 
   it("marks new pages from the prototype", () => {
     const news = SETTINGS_NAV.filter((e) => e.isNew).map((e) => e.id);
-    expect(news).toEqual(["account", "appearance", "performance", "rules", "team"]);
+    expect(news).toEqual(["account", "profiles", "appearance", "performance", "rules", "team"]);
   });
 
   it("filters by search token without moving scope", () => {
@@ -41,6 +51,12 @@ describe("settings-nav-decision", () => {
     expect(hit.map((e) => e.id)).toEqual(["providers"]);
     const miss = filterSettingsNav("zzzz-no-match", app, (e) => e.id);
     expect(miss).toEqual([]);
+  });
+
+  it("finds the Perfis page by its own words", () => {
+    const app = settingsNavForScope("app");
+    expect(filterSettingsNav("renomear", app, (e) => e.id).map((e) => e.id)).toEqual(["profiles"]);
+    expect(filterSettingsNav("perfil", app, (e) => e.id).map((e) => e.id)).toEqual(["profiles"]);
   });
 
   it("empty query keeps the full list", () => {

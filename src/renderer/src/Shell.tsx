@@ -249,10 +249,6 @@ export function Shell({
           loggedIn={loggedIn}
           sessionOffline={sessionOffline}
           offlineSinceMs={offlineAccount?.savedAtMs ?? null}
-          onManageAccount={() => {
-            onScopeChange("account");
-            setSection("account");
-          }}
           accountName={accountLabel}
           accountIdentity={identity}
           scope={scope}

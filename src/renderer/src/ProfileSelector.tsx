@@ -5,6 +5,7 @@ import type { ProfileHomeStatus, ProfileKind, ProfilesState, ProviderHomeMode } 
 import type { AccountProfileView, AccountScope } from "./account-scope-decision";
 import { formatStaleStamp } from "./account-display-decision";
 import type { AccountProfilesState } from "./account-scope";
+import { OPEN_SETTINGS_EVENT, PROFILES_CHANGED_EVENT } from "./settings-nav-decision";
 import styles from "./ProfileSelector.module.css";
 
 const REASON_KEYS: Record<string, MessageKey> = {
@@ -53,7 +54,6 @@ export function ProfileSelector({
   onPickAccountProfile,
   onSignIn,
   onSignOut,
-  onManageAccount,
 }: {
   onOpenSettings?: () => void;
   loggedIn?: boolean;
@@ -74,8 +74,6 @@ export function ProfileSelector({
   onPickAccountProfile?: (id: string) => void;
   onSignIn?: () => void;
   onSignOut?: () => void;
-  /** Opens the account page (the local profile's link to its server profile, and the account's machines). */
-  onManageAccount?: () => void;
 }) {
   const [state, setState] = useState<ProfilesState | null>(null);
   const [open, setOpen] = useState(false);
@@ -110,6 +108,12 @@ export function ProfileSelector({
     void refresh();
     void refreshHome();
   }, [refresh, refreshHome]);
+
+  // A rename made in Settings shows here right away.
+  useEffect(() => {
+    window.addEventListener(PROFILES_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(PROFILES_CHANGED_EVENT, refresh);
+  }, [refresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -426,9 +430,8 @@ export function ProfileSelector({
               data-role="manage-accounts"
               onClick={() => {
                 setOpen(false);
-                // With an account this is the account page; without one, the settings.
-                if (loggedIn && onManageAccount) onManageAccount();
-                else onOpenSettings();
+                // Settings opens on its Perfis page (rename the machine's profiles, see the account's).
+                window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { page: "profiles" } }));
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">

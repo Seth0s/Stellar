@@ -34,7 +34,8 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 .kbd{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:5px;border:1px solid #2f3546;border-bottom-width:2px;background:#12151d;font:500 11px 'JetBrains Mono',monospace;color:#e8eaf0}
 </style>
 </helmet>
-<div style="width: 1440px; height: 900px; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+<div style="position: relative; width: 1440px; height: 900px; background-color: #05060a; font-family: 'Space Grotesk', system-ui, sans-serif; color: #e8eaf0; display: flex; align-items: center; justify-content: center">
+  <sc-if value="{{pPerfis}}" hint-placeholder-val="{{ false }}"><span data-part="entry-note" style="position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 12px; color: #8d94a6">Aberta pela linha “Gerenciar perfis e contas” do menu do perfil, já nesta página</span></sc-if>
   <section role="dialog" aria-modal="true" aria-labelledby="cfg" style="width: 1280px; height: 820px; border-radius: 16px; background: #0b0d12; border: 1px solid #262b3a; display: flex; overflow: hidden">
 
     <nav aria-label="Seções" style="width: 260px; flex: none; border-right: 1px solid #1d2230; background: #0c0f15; padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto">
@@ -62,7 +63,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 
         <sc-if value="{{pConta}}" hint-placeholder-val="{{ true }}">
           <section class="sec">
-            <div class="row"><span style="width: 44px; height: 44px; border-radius: 12px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">LS</span><div class="lbl"><span>Lucas Sabino</span><span class="hint">lucas@… · GitHub e e-mail ligados</span></div><button type="button" class="btn">Sair</button></div>
+            <div class="row"><span style="width: 44px; height: 44px; border-radius: 12px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">LS</span><div class="lbl"><span>Lucas Sabino</span><span class="hint">ana@example.com · GitHub e e-mail ligados</span></div><button type="button" class="btn">Sair</button></div>
           </section>
           <section class="sec">
             <h3 class="sh">Plano</h3>
@@ -72,6 +73,45 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
           <section class="sec">
             <h3 class="sh">Casa de trabalho</h3>
             <div class="row"><div class="lbl"><span>Perfil ativo: Pessoal</span><span class="hint">skills, regras, agents e config das CLIs · última sincronização há 3 min</span></div><button type="button" class="btn">Sincronizar agora</button><button type="button" class="btn">Abrir a casa</button></div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{pPerfis}}" hint-placeholder-val="{{ false }}">
+          <section class="sec" data-part="profiles-machine">
+            <h3 class="sh">Perfis desta máquina</h3>
+            <sc-if value="{{profView}}" hint-placeholder-val="{{ true }}">
+              <div class="row" data-part="profile-row" data-profile="personal">
+                <span style="width: 34px; height: 34px; flex: none; border-radius: 10px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">P</span>
+                <div class="lbl"><span style="display: flex; align-items: center; gap: 8px"><span data-part="profile-name">Pessoal</span><span class="pill" style="background: #14302a; color: #8fdcc0">ativo</span></span><span class="hint">Pessoal · pastas do sistema</span></div>
+                <button type="button" class="btn" data-part="rename-btn" aria-label="Renomear o perfil Pessoal"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M12 3l3 3-8.5 8.5H3.5v-3z"></path></svg>Renomear</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{profEdit}}" hint-placeholder-val="{{ false }}">
+              <div class="row" data-part="profile-row" data-profile="personal" data-editing="true" style="align-items: flex-start">
+                <span style="width: 34px; height: 34px; flex: none; border-radius: 10px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600; margin-top: 1px">P</span>
+                <div class="lbl" style="gap: 8px">
+                  <div style="display: flex; align-items: center; gap: 8px">
+                    <input class="field" data-part="rename-input" aria-label="Novo nome do perfil" value="{{profInputValue}}" style="flex: 1; border-color: {{profInputBorder}}">
+                    <button type="button" class="btn primary" data-part="rename-save">Salvar</button>
+                    <button type="button" class="btn" data-part="rename-cancel">Cancelar</button>
+                  </div>
+                  <sc-if value="{{profErr}}" hint-placeholder-val="{{ false }}"><span data-part="rename-error" role="alert" class="hint" style="color: #ff9da3">Já existe um perfil com esse nome nesta máquina.</span></sc-if>
+                  <span class="hint">Só o nome muda: pastas, sessões e a ligação com a conta ficam como estão.</span>
+                </div>
+              </div>
+            </sc-if>
+            <div class="row" data-part="profile-row" data-profile="team">
+              <span style="width: 34px; height: 34px; flex: none; border-radius: 10px; background: #123a35; color: #8ee6d8; display: grid; place-items: center; font-weight: 600">I</span>
+              <div class="lbl"><span>Idy Platform</span><span class="hint">Empresa · pastas do perfil</span></div>
+              <button type="button" class="btn" data-part="rename-btn" aria-label="Renomear o perfil Idy Platform"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M12 3l3 3-8.5 8.5H3.5v-3z"></path></svg>Renomear</button>
+            </div>
+            <span class="hint">Trocar de perfil da máquina reabre o app; o nome aqui vale só nesta máquina.</span>
+          </section>
+          <section class="sec" data-part="profiles-account">
+            <h3 class="sh">Perfis da conta · ana@example.com</h3>
+            <div class="row" data-part="account-profile-row"><span style="width: 34px; height: 34px; flex: none; border-radius: 10px; background: #1a2040; color: #c3cbff; display: grid; place-items: center; font-weight: 600">P</span><div class="lbl"><span>Pessoal</span><span class="hint">Pessoal · sincronizada</span></div></div>
+            <div class="row" data-part="account-profile-row"><span style="width: 34px; height: 34px; flex: none; border-radius: 10px; background: #123a35; color: #8ee6d8; display: grid; place-items: center; font-weight: 600">I</span><div class="lbl"><span>Idy Platform</span><span class="hint">Time</span></div></div>
+            <span class="hint" data-part="account-name-note">O nome de um perfil da conta vem do servidor; ainda não dá para mudá-lo por aqui.</span>
           </section>
         </sc-if>
 
@@ -112,7 +152,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
         <sc-if value="{{pDisp}}" hint-placeholder-val="{{ false }}">
           <section class="sec">
             <h3 class="sh">Esta máquina</h3>
-            <div class="row"><div class="lbl"><span>lucas-fedora</span><span class="hint">Linux · conectada à conta desde 28/09</span></div><span class="pill" style="background: #14302a; color: #8fdcc0">esta</span></div>
+            <div class="row"><div class="lbl"><span>notebook-ana</span><span class="hint">Linux · conectada à conta desde 28/09</span></div><span class="pill" style="background: #14302a; color: #8fdcc0">esta</span></div>
             <div class="row"><div class="lbl"><span>MacBook do trabalho</span><span class="hint">macOS · visto há 2 dias</span></div><button type="button" class="btn">Desconectar</button></div>
           </section>
           <section class="sec">
@@ -178,7 +218,7 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
           <section class="sec">
             <h3 class="sh">Gates</h3>
             <div class="row"><div class="lbl"><span>Medir os gates numa cópia isolada</span><span class="hint">só os arquivos da task, sem o trabalho em andamento dos outros cards</span></div><button type="button" class="sw" aria-pressed="true" aria-label="Gates isolados" style="background: #4a5fe0"><span style="position: absolute; left: 19px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff"></span></button></div>
-            <div class="row"><div class="lbl"><span>Ferramentas fora do repo que os gates podem usar</span><span class="hint mono">/home/lucas/Workplace/Projects/ai/scripts</span></div><button type="button" class="btn">+ Pasta</button></div>
+            <div class="row"><div class="lbl"><span>Ferramentas fora do repo que os gates podem usar</span><span class="hint mono">~/projetos/ai/scripts</span></div><button type="button" class="btn">+ Pasta</button></div>
           </section>
           <section class="sec">
             <div class="row"><div class="lbl"><span>Orquestrador do board</span><span class="hint">só ele declara gates e escreve status de outros cards</span></div><select class="field"><option>Master</option><option>nenhum</option></select></div>
@@ -198,16 +238,32 @@ a{color:#a9b8ff;text-decoration:none}a:hover{color:#d3dbff}
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
-  constructor(props) { super(props); this.state = { p: 'conta' }; }
+  constructor(props) {
+    super(props);
+    // `#perfis`, `#perfis-editando`, `#perfis-erro` open Settings on the Perfis page
+    // (the profile menu's "Gerenciar perfis e contas" lands here); anything else is a page id.
+    const raw = (location.hash || '').replace(/^#/, '');
+    const stage = raw === 'perfis-editando' ? 'edit' : raw === 'perfis-erro' ? 'erro' : 'view';
+    const p = raw.startsWith('perfis') ? 'perfis' : (raw || 'conta');
+    this.state = { p, stage };
+  }
   renderVals() {
     const p = this.state.p;
-    const A = [['conta','Conta e plano',true,'quem você é, o plano e a casa de trabalho'],['providers','Providers',false,'os CLIs que rodam nos cards, com a cota de cada um'],['atalhos','Atalhos',false,'ver e trocar teclas'],['chaves','Chaves de API',false,'para chat e ações de IA'],['disp','Dispositivos',false,'máquinas da conta e celular'],['aparencia','Aparência',true,'idioma, texto e movimento'],['desempenho','Desempenho',true,'o que o app faz para economizar e o consumo agora'],['sobre','Sobre',false,'versão, atualização e documentos']];
+    const A = [['conta','Conta e plano',true,'quem você é, o plano e a casa de trabalho'],['perfis','Perfis',true,'os perfis desta máquina e os da conta'],['providers','Providers',false,'os CLIs que rodam nos cards, com a cota de cada um'],['atalhos','Atalhos',false,'ver e trocar teclas'],['chaves','Chaves de API',false,'para chat e ações de IA'],['disp','Dispositivos',false,'máquinas da conta e celular'],['aparencia','Aparência',true,'idioma, texto e movimento'],['desempenho','Desempenho',true,'o que o app faz para economizar e o consumo agora'],['sobre','Sobre',false,'versão, atualização e documentos']];
     const B = [['modo','Modo de trabalho',false,'preset e ajustes padrão das tasks'],['regras','Regras e gates',true,'o que todo agente recebe e como os gates rodam'],['time','Time',true,'ligação deste board com o time']];
     const mk = (list) => list.map(([id, label, isNew]) => ({ label, isNew, cls: p === id ? 'nav navOn' : 'nav', pick: () => this.setState({ p: id }) }));
     const cur = A.concat(B).find(x => x[0] === p) || A[0];
     const isBoard = B.some(x => x[0] === p);
     const v = {};
-    ['conta','providers','atalhos','chaves','disp','aparencia','desempenho','sobre','modo','regras','time'].forEach(id => { v['p' + id.charAt(0).toUpperCase() + id.slice(1)] = p === id; });
+    ['conta','perfis','providers','atalhos','chaves','disp','aparencia','desempenho','sobre','modo','regras','time'].forEach(id => { v['p' + id.charAt(0).toUpperCase() + id.slice(1)] = p === id; });
+    const stage = this.state.stage;
+    Object.assign(v, {
+      profView: stage === 'view',
+      profEdit: stage !== 'view',
+      profErr: stage === 'erro',
+      profInputBorder: stage === 'erro' ? '#e0626a' : '#4a5fe0',
+      profInputValue: stage === 'erro' ? 'Idy Platform' : 'Pessoal',
+    });
     return Object.assign(v, { appNav: mk(A), boardNav: mk(B), title: cur[1], subtitle: cur[3], scope: isBoard ? 'vale só para o board 64' : 'vale para o app inteiro' });
   }
 }
